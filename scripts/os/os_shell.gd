@@ -69,6 +69,10 @@ var _notes_active_note_id := ""
 var _notes_open_notes: Array[String] = []
 var _terminal_sessions: Dictionary = {}
 var _terminal_session_sequence := 0
+var _console_outputs: Array[TextEdit] = []
+var _console_history: Array[String] = ["Type 'help' for commands. Current user: user"]
+
+const CONSOLE_HISTORY_MAX_LINES := 400
 
 const TASKBAR_HEIGHT := 46.0
 const BG := Color("181a1f")
@@ -95,6 +99,7 @@ func _ready() -> void:
 	position = Vector2.ZERO
 	_fs = OSFileSystem.new()
 	_fs.load_or_create()
+	_console_history = ["Type 'help' for commands. Current user: " + _fs.current_user()]
 	_register_apps()
 	_build_ui()
 	_update_clock()
@@ -2584,20 +2589,24 @@ func _build_console_app() -> Control:
 	output.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	output.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	output.editable = false
-	output.text = "Type 'help' for commands. Current user: " + _fs.current_user()
 	_style_text_edit(output)
+	_register_console_output(output)
+	output.text = _console_history_text()
 	root.add_child(output)
+	root.tree_exited.connect(func() -> void:
+		_unregister_console_output(output)
+	)
 
 	var input := LineEdit.new()
 	input.placeholder_text = _console_prompt(state)
 	_style_line_edit(input)
 	input.text_submitted.connect(func(command: String) -> void:
-		_handle_console_command(command, output, input, state)
+		_handle_console_command(command, input, state)
 	)
 	root.add_child(input)
 	return root
 
-func _handle_console_command(command: String, output: TextEdit, input: LineEdit, state: Dictionary) -> void:
+func _handle_console_command(command: String, input: LineEdit, state: Dictionary) -> void:
 	var clean := command.strip_edges()
 	if clean == "":
 		return
@@ -2607,7 +2616,7 @@ func _handle_console_command(command: String, output: TextEdit, input: LineEdit,
 
 	match cmd:
 		"help":
-			result = "apps\nopen <app_id>\nclose <app_id>\nwindows\nnotify <title> | <body>\nnotifications\ndismiss_notifications\npwd\ncd [path]\nls [path]\nmkdir <path>\ntouch <path>\nread <path>\nwrite <path> <text>\ncp <source> <destination>\nmv <source> <destination>\nrm <path>\nstat <path>\nchmod <mode> <path>\nchown <user> <path>\nwhoami\nid [user]\nusers\nsu <user> [password]\nuseradd <user>\npasswd <new_password>\npasswd <user> <new_password>\nlock\nswitch\nlogout\ntime\nclear"
+			result = "apps\nopen <app_id>\nclose <app_id>\nwindows\nnotify <title> | <body>\nnotifications\ndismiss_notifications\npwd\ncd [path]\nls [path]\nmkdir <path>\ntouch <path>\nread <path>\nwrite <path> <text>\ncp <source> <destination>\nmv <source> <destination>\nrm <path>\nstat <path>\nchmod <mode> <path>\nchown <user> <path>\nwhoami\nid [user]\nusers\nsu <user> [password]\nuseradd <user>\npasswd <new_password>\npasswd <user> <new_password>\nlock\nswitch\nlogout\ntime\nstate\nhermes <prompt>\nclear"
 		"apps":
 			result = _apps_text()
 		"open":
@@ -2777,17 +2786,81 @@ func _handle_console_command(command: String, output: TextEdit, input: LineEdit,
 			result = "Logged out"
 		"time":
 			result = _time_text()
+		"state":
+			result = JSON.stringify(hermes_get_state({"include_apps": true, "include_windows": true, "include_filesystem": false}), "\t")
+		"hermes":
+			var prompt := clean.substr(cmd.length()).strip_edges()
+			if prompt == "":
+				result = "Usage: hermes <prompt>"
+			else:
+				var bridge_state := _kernel_bridge_state()
+				if not bool(bridge_state.get("connected", false)):
+					result = "Hermes bridge is disconnected. Open System app and connect first."
+				else:
+					_emit_hermes_event("terminal.chat_prompt", {
+						"prompt": prompt,
+						"cwd": str(state.get("cwd", _fs.home_path())),
+						"user": _fs.current_user(),
+						"timestamp": int(Time.get_unix_time_from_system())
+					})
+					result = "Sent to Hermes: " + prompt
 		"clear":
-			output.text = ""
+			_console_history.clear()
+			_refresh_console_outputs()
 			input.text = ""
 			input.placeholder_text = _console_prompt(state)
 			return
 		_:
 			result = "Unknown command: " + cmd
 
-	output.text += "\n" + _console_prompt(state) + " " + clean + "\n" + result
+	_append_console_entry(_console_prompt(state), clean, result)
 	input.text = ""
 	input.placeholder_text = _console_prompt(state)
+
+func _register_console_output(output: TextEdit) -> void:
+	if output == null:
+		return
+	if not _console_outputs.has(output):
+		_console_outputs.append(output)
+
+func _unregister_console_output(output: TextEdit) -> void:
+	if output == null:
+		return
+	_console_outputs.erase(output)
+
+func _console_history_text() -> String:
+	if _console_history.is_empty():
+		return ""
+	return "\n".join(_console_history)
+
+func _refresh_console_outputs() -> void:
+	var history_text := _console_history_text()
+	for i in range(_console_outputs.size() - 1, -1, -1):
+		var output := _console_outputs[i]
+		if output == null or not is_instance_valid(output):
+			_console_outputs.remove_at(i)
+			continue
+		output.text = history_text
+		output.scroll_vertical = max(output.get_line_count() - 1, 0)
+
+func _append_console_entry(prompt: String, command: String, result: String) -> void:
+	if _console_history.is_empty():
+		_console_history.append("Type 'help' for commands. Current user: " + _fs.current_user())
+	var command_line := prompt
+	if command.strip_edges() != "":
+		command_line += " " + command
+	_console_history.append(command_line)
+	_console_history.append(result)
+	if _console_history.size() > CONSOLE_HISTORY_MAX_LINES:
+		_console_history = _console_history.slice(_console_history.size() - CONSOLE_HISTORY_MAX_LINES, _console_history.size())
+	_refresh_console_outputs()
+
+func _append_hermes_terminal_output(text: String, source := "Hermes") -> void:
+	var clean_source := source.strip_edges()
+	if clean_source == "":
+		clean_source = "Hermes"
+	var message := text.strip_edges()
+	_append_console_entry("[" + clean_source + "]", "", message if message != "" else "(no output)")
 
 func _console_prompt(state: Dictionary) -> String:
 	var symbol := "#" if _fs.current_user() == OSFileSystem.ROOT_USER else "$"
@@ -2855,8 +2928,15 @@ func _build_system_app() -> Control:
 		var connected := bool(state.get("connected", false))
 		bridge_status_label.text = "Bridge: connected" if connected else "Bridge: disconnected"
 		bridge_status_label.add_theme_color_override("font_color", TEXT if connected else MUTED)
+		_update_system_info(info)
 
 	refresh_bridge_status.call()
+	var bridge_kernel := _hermes_kernel_node()
+	if bridge_kernel != null:
+		if bridge_kernel.has_signal("bridge_connected") and not bridge_kernel.bridge_connected.is_connected(refresh_bridge_status):
+			bridge_kernel.bridge_connected.connect(refresh_bridge_status)
+		if bridge_kernel.has_signal("bridge_disconnected") and not bridge_kernel.bridge_disconnected.is_connected(refresh_bridge_status):
+			bridge_kernel.bridge_disconnected.connect(refresh_bridge_status)
 	bridge_connect_button.pressed.connect(func() -> void:
 		var kernel := _hermes_kernel_node()
 		if kernel == null or not kernel.has_method("connect_bridge"):
@@ -3321,7 +3401,8 @@ func hermes_get_manifest_apps() -> Array[Dictionary]:
 			"description": "In-game terminal commands",
 			"actions": {
 				"terminal.open_session": {"description": "Open terminal session", "args_schema": {"cwd": "string"}},
-				"terminal.run_command": {"description": "Run command", "args_schema": {"session_id": "string", "command": "string"}}
+				"terminal.run_command": {"description": "Run command", "args_schema": {"session_id": "string", "command": "string"}},
+				"terminal.append_output": {"description": "Append text to in-game terminal transcript", "args_schema": {"text": "string", "source": "string"}}
 			}
 		}
 	]
@@ -3424,8 +3505,16 @@ func hermes_execute_operation(op: String, args: Dictionary) -> Dictionary:
 				"command": command,
 				"exit_code": int(terminal_result.get("exit_code", 1))
 			})
+			_append_console_entry("[Hermes:" + (terminal_session_id if terminal_session_id != "" else "session") + "]", command, str(terminal_result.get("stdout", "")).strip_edges() if str(terminal_result.get("stdout", "")).strip_edges() != "" else str(terminal_result.get("stderr", "")).strip_edges())
 			launch_app("console")
 			return {"ok": true, "result": terminal_result}
+		"terminal.append_output":
+			var text := str(args.get("text", "")).strip_edges()
+			if text == "":
+				return {"ok": false, "error": HermesProtocol.make_error("MISSING_ARG", "terminal.append_output requires text")}
+			_append_hermes_terminal_output(text, str(args.get("source", "Hermes")))
+			launch_app("console")
+			return {"ok": true, "result": {"appended": true}}
 		_:
 			return {"ok": false, "error": HermesProtocol.make_error("UNKNOWN_OPERATION", "No registered operation: " + op)}
 

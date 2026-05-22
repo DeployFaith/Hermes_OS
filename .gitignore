@@ -34,6 +34,12 @@ export_credentials.cfg
 *.orig
 *~
 
+# Node runtime artifacts
+node_modules/
+runtime/mock_backend/node_modules/
+runtime/live_bridge/node_modules/
+runtime/live_bridge/hermes-home/
+
 # Editor/OS noise
 .DS_Store
 .AppleDouble
