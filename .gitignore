@@ -31,6 +31,7 @@ export_credentials.cfg
 *.tmp
 *.temp
 *.bak
+*.bak.*
 *.orig
 *~
 
