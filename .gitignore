@@ -1,0 +1,50 @@
+# Godot generated/editor state
+.godot/
+.import/
+
+# Godot export credentials and local presets that can contain machine-specific data
+export_credentials.cfg
+
+# Build/export output
+/build/
+/builds/
+/export/
+/exports/
+/dist/
+/bin/
+*.pck
+*.zip
+*.apk
+*.aab
+*.exe
+*.dmg
+*.app/
+*.x86_64
+*.arm64
+*.wasm
+
+# Android export/generated project
+/android/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+*~
+
+# Editor/OS noise
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Nextcloud conflict artifacts
+*.sync-conflict-*
+*conflicted copy*
