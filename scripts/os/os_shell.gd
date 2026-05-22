@@ -71,17 +71,8 @@ var _terminal_sessions: Dictionary = {}
 var _terminal_session_sequence := 0
 var _console_outputs: Array[TextEdit] = []
 var _console_history: Array[String] = ["Type 'help' for commands. Current user: user"]
-var _pending_hermes_ops: Dictionary = {}
-var _pending_hermes_order: Array[String] = []
-var _pending_hermes_op_sequence := 0
 
 const CONSOLE_HISTORY_MAX_LINES := 400
-const APPROVAL_REQUIRED_OPS: Dictionary = {
-	"windows.open_app": true,
-	"terminal.run_command": true,
-	"files.write_file": true,
-	"notes.create_note": true
-}
 const HERMES_V1_ALIAS_OPS: Dictionary = {
 	"app.open": "windows.open_app"
 }
@@ -2628,7 +2619,7 @@ func _handle_console_command(command: String, input: LineEdit, state: Dictionary
 
 	match cmd:
 		"help":
-			result = "apps\nopen <app_id>\nclose <app_id>\nwindows\nnotify <title> | <body>\nnotifications\ndismiss_notifications\npwd\ncd [path]\nls [path]\nmkdir <path>\ntouch <path>\nread <path>\nwrite <path> <text>\ncp <source> <destination>\nmv <source> <destination>\nrm <path>\nstat <path>\nchmod <mode> <path>\nchown <user> <path>\nwhoami\nid [user]\nusers\nsu <user> [password]\nuseradd <user>\npasswd <new_password>\npasswd <user> <new_password>\nlock\nswitch\nlogout\ntime\nstate\nhermes <prompt>\nops\napprove <op_id>\nreject <op_id> [reason]\nclear"
+			result = "apps\nopen <app_id>\nclose <app_id>\nwindows\nnotify <title> | <body>\nnotifications\ndismiss_notifications\npwd\ncd [path]\nls [path]\nmkdir <path>\ntouch <path>\nread <path>\nwrite <path> <text>\ncp <source> <destination>\nmv <source> <destination>\nrm <path>\nstat <path>\nchmod <mode> <path>\nchown <user> <path>\nwhoami\nid [user]\nusers\nsu <user> [password]\nuseradd <user>\npasswd <new_password>\npasswd <user> <new_password>\nlock\nswitch\nlogout\ntime\nstate\nhermes <prompt>\nclear"
 		"apps":
 			result = _apps_text()
 		"open":
@@ -2816,21 +2807,6 @@ func _handle_console_command(command: String, input: LineEdit, state: Dictionary
 						"timestamp": int(Time.get_unix_time_from_system())
 					})
 					result = "Sent to Hermes: " + prompt
-		"ops":
-			result = _pending_hermes_ops_text()
-		"approve":
-			if parts.size() < 2:
-				result = "Usage: approve <op_id>"
-			else:
-				result = _approve_pending_hermes_op(parts[1])
-		"reject":
-			if parts.size() < 2:
-				result = "Usage: reject <op_id> [reason]"
-			else:
-				var reason := "Rejected by user"
-				if parts.size() > 2:
-					reason = clean.substr(clean.find(parts[1]) + parts[1].length()).strip_edges()
-				result = _reject_pending_hermes_op(parts[1], reason)
 		"clear":
 			_console_history.clear()
 			_refresh_console_outputs()
@@ -2894,78 +2870,6 @@ func _normalize_v1_operation(op: String, args: Dictionary) -> Dictionary:
 	if HERMES_V1_ALIAS_OPS.has(clean_op):
 		clean_op = str(HERMES_V1_ALIAS_OPS[clean_op])
 	return {"op": clean_op, "args": args.duplicate(true)}
-
-func _requires_approval(op: String) -> bool:
-	return APPROVAL_REQUIRED_OPS.has(op)
-
-func _summarize_operation(op: String, args: Dictionary) -> String:
-	match op:
-		"windows.open_app":
-			return "open app '%s'" % str(args.get("app_id", ""))
-		"terminal.run_command":
-			return "run terminal command '%s'" % str(args.get("command", "")).strip_edges()
-		"files.write_file":
-			var path := str(args.get("path", ""))
-			var content := str(args.get("content", ""))
-			return "write file '%s' (%d chars)" % [path, content.length()]
-		"notes.create_note":
-			return "create note '%s'" % str(args.get("title", "Untitled"))
-		_:
-			return "execute %s" % op
-
-func _queue_pending_hermes_operation(op: String, args: Dictionary, source := "Hermes") -> Dictionary:
-	_pending_hermes_op_sequence += 1
-	var op_id := "op_%d" % _pending_hermes_op_sequence
-	var normalized := _normalize_v1_operation(op, args)
-	var entry := {
-		"id": op_id,
-		"op": str(normalized.get("op", "")),
-		"args": normalized.get("args", {}).duplicate(true),
-		"source": source,
-		"created_at": int(Time.get_unix_time_from_system())
-	}
-	_pending_hermes_ops[op_id] = entry
-	_pending_hermes_order.append(op_id)
-	_append_hermes_terminal_output("Proposed operation %s: %s\nUse: approve %s | reject %s" % [op_id, _summarize_operation(entry["op"], entry["args"]), op_id, op_id], "Approval")
-	return entry
-
-func _pending_hermes_ops_text() -> String:
-	if _pending_hermes_order.is_empty():
-		return "No pending operations."
-	var lines: Array[String] = []
-	for op_id in _pending_hermes_order:
-		if not _pending_hermes_ops.has(op_id):
-			continue
-		var entry: Dictionary = _pending_hermes_ops[op_id]
-		lines.append("%s :: %s" % [op_id, _summarize_operation(str(entry.get("op", "")), entry.get("args", {}))])
-	if lines.is_empty():
-		return "No pending operations."
-	return "Pending operations:\n" + "\n".join(lines)
-
-func _pop_pending_hermes_op(op_id: String) -> Dictionary:
-	var clean_id := op_id.strip_edges()
-	if not _pending_hermes_ops.has(clean_id):
-		return {}
-	var entry: Dictionary = _pending_hermes_ops[clean_id]
-	_pending_hermes_ops.erase(clean_id)
-	_pending_hermes_order.erase(clean_id)
-	return entry
-
-func _approve_pending_hermes_op(op_id: String) -> String:
-	var entry := _pop_pending_hermes_op(op_id)
-	if entry.is_empty():
-		return "Pending op not found: " + op_id
-	var response := hermes_execute_operation(str(entry.get("op", "")), entry.get("args", {}))
-	if bool(response.get("ok", false)):
-		return "Approved %s: %s" % [str(entry.get("id", op_id)), _summarize_operation(str(entry.get("op", "")), entry.get("args", {}))]
-	var error_data: Dictionary = response.get("error", {})
-	return "Approved %s but execution failed: %s" % [str(entry.get("id", op_id)), str(error_data.get("message", "Operation failed"))]
-
-func _reject_pending_hermes_op(op_id: String, reason: String) -> String:
-	var entry := _pop_pending_hermes_op(op_id)
-	if entry.is_empty():
-		return "Pending op not found: " + op_id
-	return "Rejected %s: %s" % [str(entry.get("id", op_id)), reason.strip_edges() if reason.strip_edges() != "" else "Rejected by user"]
 
 func _console_prompt(state: Dictionary) -> String:
 	var symbol := "#" if _fs.current_user() == OSFileSystem.ROOT_USER else "$"
@@ -3508,7 +3412,7 @@ func hermes_get_manifest_apps() -> Array[Dictionary]:
 				"terminal.open_session": {"description": "Open terminal session", "args_schema": {"cwd": "string"}},
 				"terminal.run_command": {"description": "Run command", "args_schema": {"session_id": "string", "command": "string"}},
 				"terminal.append_output": {"description": "Append text to in-game terminal transcript", "args_schema": {"text": "string", "source": "string"}},
-				"hermes.propose_operation": {"description": "Queue Hermes operation proposal for user approval", "args_schema": {"op": "string", "args": "object", "source": "string"}}
+				"hermes.propose_operation": {"description": "Execute Hermes operation proposal immediately", "args_schema": {"op": "string", "args": "object", "source": "string"}}
 			}
 		}
 	]
@@ -3527,14 +3431,13 @@ func hermes_execute_operation(op: String, args: Dictionary) -> Dictionary:
 			proposed_args = (proposed_args_value as Dictionary).duplicate(true)
 		if proposed_op == "":
 			return {"ok": false, "error": HermesProtocol.make_error("MISSING_ARG", "hermes.propose_operation requires op")}
+		if proposed_op == "hermes.propose_operation":
+			return {"ok": false, "error": HermesProtocol.make_error("INVALID_PROPOSAL", "Nested hermes.propose_operation is not allowed")}
 		var normalized_proposal: Dictionary = _normalize_v1_operation(proposed_op, proposed_args)
 		proposed_op = str(normalized_proposal.get("op", "")).strip_edges()
 		proposed_args = (normalized_proposal.get("args", {}) as Dictionary).duplicate(true)
-		if not _requires_approval(proposed_op):
-			return {"ok": false, "error": HermesProtocol.make_error("UNSUPPORTED_PROPOSAL", "Operation is not in v1 approval allowlist: " + proposed_op)}
-		var pending_entry: Dictionary = _queue_pending_hermes_operation(proposed_op, proposed_args, str(args.get("source", "Hermes")))
-		launch_app("console")
-		return {"ok": true, "result": {"queued": true, "op_id": str(pending_entry.get("id", "")), "op": str(pending_entry.get("op", ""))}}
+		_append_hermes_terminal_output("Executing proposed operation: %s" % proposed_op, str(args.get("source", "Hermes")))
+		return hermes_execute_operation(proposed_op, proposed_args)
 	match op:
 		"desktop.show_notification":
 			var title := str(args.get("title", "Hermes"))
