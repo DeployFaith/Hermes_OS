@@ -244,6 +244,10 @@ func _gui_input(event: InputEvent) -> void:
 		focused.emit(self)
 
 func _calculate_minimum_window_size(content: Control) -> Vector2:
+	if content.has_meta("window_min_size"):
+		var override_value: Variant = content.get_meta("window_min_size")
+		if override_value is Vector2:
+			return override_value
 	var content_min := content.get_combined_minimum_size()
 	var margin_width := 64.0
 	var margin_height := 64.0

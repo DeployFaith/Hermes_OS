@@ -2820,10 +2820,65 @@ func _build_system_app() -> Control:
 
 	var info := Label.new()
 	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.autowrap_mode = TextServer.AUTOWRAP_OFF
+	info.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	info.add_theme_color_override("font_color", TEXT)
 	info_scroll.add_child(info)
 	_update_system_info(info)
+
+	var bridge_panel := VBoxContainer.new()
+	bridge_panel.add_theme_constant_override("separation", 6)
+	system_tab.add_child(bridge_panel)
+	bridge_panel.add_child(_label("Hermes bridge", 12, TEXT))
+
+	var bridge_row := HBoxContainer.new()
+	bridge_row.add_theme_constant_override("separation", 8)
+	bridge_panel.add_child(bridge_row)
+
+	var bridge_endpoint_input := LineEdit.new()
+	bridge_endpoint_input.placeholder_text = "ws://127.0.0.1:8787/hermesos/ws"
+	bridge_endpoint_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_line_edit(bridge_endpoint_input)
+	bridge_row.add_child(bridge_endpoint_input)
+
+	var bridge_connect_button := _button("Connect", Vector2(92, 30))
+	bridge_row.add_child(bridge_connect_button)
+	var bridge_disconnect_button := _button("Disconnect", Vector2(104, 30))
+	bridge_row.add_child(bridge_disconnect_button)
+
+	var bridge_status_label := _label("Bridge: unavailable", 11, MUTED)
+	bridge_panel.add_child(bridge_status_label)
+
+	var refresh_bridge_status := func() -> void:
+		var state := _kernel_bridge_state()
+		bridge_endpoint_input.text = str(state.get("endpoint", ""))
+		var connected := bool(state.get("connected", false))
+		bridge_status_label.text = "Bridge: connected" if connected else "Bridge: disconnected"
+		bridge_status_label.add_theme_color_override("font_color", TEXT if connected else MUTED)
+
+	refresh_bridge_status.call()
+	bridge_connect_button.pressed.connect(func() -> void:
+		var kernel := _hermes_kernel_node()
+		if kernel == null or not kernel.has_method("connect_bridge"):
+			_set_status(bridge_status_label, "Hermes kernel unavailable", true)
+			return
+		var endpoint := bridge_endpoint_input.text.strip_edges()
+		var message := str(kernel.call("connect_bridge", endpoint))
+		if message != "":
+			_set_status(bridge_status_label, message, true)
+		else:
+			_set_status(bridge_status_label, "Connecting...", false)
+		refresh_bridge_status.call()
+	)
+	bridge_disconnect_button.pressed.connect(func() -> void:
+		var kernel := _hermes_kernel_node()
+		if kernel == null or not kernel.has_method("disconnect_bridge"):
+			_set_status(bridge_status_label, "Hermes kernel unavailable", true)
+			return
+		kernel.call("disconnect_bridge")
+		_set_status(bridge_status_label, "Disconnected", false)
+		refresh_bridge_status.call()
+	)
 
 	var appearance_tab := VBoxContainer.new()
 	appearance_tab.name = "Appearance"
@@ -2947,7 +3002,9 @@ func _update_system_info(info: Label) -> void:
 	var viewport_size := get_viewport_rect().size
 	var window_size := DisplayServer.window_get_size()
 	var mode := DisplayServer.window_get_mode()
-	info.text = "Viewport: %s\nGame window: %s\nWindow mode: %s\nCurrent user: %s\nHome: %s\nUsers: %s\nFilesystem save: %s\nApps: %s\nOpen windows: %s" % [
+	var bridge := _kernel_bridge_state()
+	var bridge_status := "connected" if bool(bridge.get("connected", false)) else "disconnected"
+	info.text = "Viewport: %s\nGame window: %s\nWindow mode: %s\nCurrent user: %s\nHome: %s\nUsers: %s\nFilesystem save: %s\nApps: %s\nOpen windows: %s\nBridge: %s\nBridge endpoint: %s" % [
 		str(viewport_size),
 		str(window_size),
 		str(mode),
@@ -2956,7 +3013,9 @@ func _update_system_info(info: Label) -> void:
 		", ".join(_fs.get_users()),
 		OSFileSystem.SAVE_PATH,
 		_app_ids_text(),
-		_windows_text()
+		_windows_text(),
+		bridge_status,
+		str(bridge.get("endpoint", ""))
 	]
 
 func _apps_text() -> String:
@@ -3008,6 +3067,32 @@ func _time_text() -> String:
 
 func _emit_hermes_event(event_name: String, payload: Dictionary = {}) -> void:
 	hermes_event.emit(event_name, payload)
+
+func _hermes_kernel_node() -> Node:
+	return get_node_or_null("/root/HermesOSKernel")
+
+func _kernel_bridge_state() -> Dictionary:
+	var kernel := _hermes_kernel_node()
+	if kernel == null or not kernel.has_method("get_bridge_state"):
+		return {
+			"connected": false,
+			"endpoint": "",
+			"session_id": "",
+			"last_message_at": 0,
+			"last_error": {},
+			"metrics": {}
+		}
+	var state: Variant = kernel.call("get_bridge_state")
+	if state is Dictionary:
+		return state
+	return {
+		"connected": false,
+		"endpoint": "",
+		"session_id": "",
+		"last_message_at": 0,
+		"last_error": {},
+		"metrics": {}
+	}
 
 func _window_id(window: OSWindow) -> String:
 	return "win_%s" % str(window.get_instance_id())
@@ -3166,7 +3251,8 @@ func hermes_get_state(options := {}) -> Dictionary:
 			"session_active": _session_active,
 			"current_user": _fs.current_user()
 		},
-		"notifications": _notifications.duplicate(true)
+		"notifications": _notifications.duplicate(true),
+		"bridge": _kernel_bridge_state()
 	}
 	if include_windows:
 		snapshot["windows"] = _window_state_snapshot()

@@ -18,6 +18,12 @@ var _shell: Node
 var _bridge
 var _router
 var _game_actions: Dictionary = {}
+var _last_bridge_error: Dictionary = {}
+var _last_message_at := 0
+var _messages_received := 0
+var _events_sent := 0
+var _operation_results_sent := 0
+var _responses_sent := 0
 
 func _ready() -> void:
 	_bridge = HermesBridgeClientScript.new()
@@ -57,6 +63,8 @@ func connect_bridge(url := "") -> String:
 	var target := endpoint_url if url.strip_edges() == "" else url.strip_edges()
 	if target == "":
 		return "Missing endpoint URL"
+	endpoint_url = target
+	_last_bridge_error.clear()
 	return _bridge.connect_to_endpoint(target)
 
 func disconnect_bridge() -> void:
@@ -68,6 +76,44 @@ func is_bridge_connected() -> bool:
 
 func register_game_action(operation_name: String, metadata: Dictionary) -> void:
 	_game_actions[operation_name] = metadata.duplicate(true)
+
+func get_declared_operations() -> Dictionary:
+	var declared: Dictionary = {}
+	for key in _kernel_actions().keys():
+		declared[str(key)] = true
+	if _shell and _shell.has_method("hermes_get_manifest_apps"):
+		var apps: Variant = _shell.call("hermes_get_manifest_apps")
+		if apps is Array:
+			for app_value in apps:
+				if not (app_value is Dictionary):
+					continue
+				var app: Dictionary = app_value
+				var actions: Variant = app.get("actions", {})
+				if not (actions is Dictionary):
+					continue
+				for op_name in (actions as Dictionary).keys():
+					declared[str(op_name)] = true
+	for op_name in _game_actions.keys():
+		declared[str(op_name)] = true
+	return declared
+
+func is_operation_declared(op: String) -> bool:
+	return get_declared_operations().has(op)
+
+func get_bridge_state() -> Dictionary:
+	return {
+		"connected": is_bridge_connected(),
+		"endpoint": endpoint_url,
+		"session_id": session_id,
+		"last_message_at": _last_message_at,
+		"last_error": _last_bridge_error.duplicate(true),
+		"metrics": {
+			"messages_received": _messages_received,
+			"events_sent": _events_sent,
+			"operation_results_sent": _operation_results_sent,
+			"responses_sent": _responses_sent
+		}
+	}
 
 func get_manifest() -> Dictionary:
 	var apps: Array = []
@@ -113,14 +159,18 @@ func _kernel_actions() -> Dictionary:
 	}
 
 func get_state(options := {}) -> Dictionary:
-	if _shell and _shell.has_method("hermes_get_state"):
-		return _shell.call("hermes_get_state", options)
-	return {
+	var state := {
 		"desktop": {},
 		"windows": [],
 		"apps": {},
 		"notifications": []
 	}
+	if _shell and _shell.has_method("hermes_get_state"):
+		var shell_state: Variant = _shell.call("hermes_get_state", options)
+		if shell_state is Dictionary:
+			state = shell_state
+	state["bridge"] = get_bridge_state()
+	return state
 
 func execute_operation(op: String, args: Dictionary, request_id := "") -> Dictionary:
 	return _router.execute(op, args, request_id)
@@ -159,6 +209,7 @@ func route_shell_operation(op: String, args: Dictionary, _request_id := "") -> D
 func emit_os_event(event_name: String, payload: Dictionary = {}) -> void:
 	os_event.emit(event_name, payload)
 	if is_bridge_connected():
+		_events_sent += 1
 		_send_bridge_message(HermesProtocol.make_event(event_name, payload))
 
 func _on_bridge_connected() -> void:
@@ -173,9 +224,12 @@ func _on_bridge_disconnected() -> void:
 	emit_os_event("bridge.disconnected", {})
 
 func _on_bridge_protocol_error(error_data: Dictionary) -> void:
+	_last_bridge_error = error_data.duplicate(true)
 	emit_os_event("bridge.error", error_data)
 
 func _on_bridge_message_received(message: Dictionary) -> void:
+	_messages_received += 1
+	_last_message_at = int(Time.get_unix_time_from_system())
 	var message_type := str(message.get("type", ""))
 	match message_type:
 		"operation":
@@ -195,10 +249,12 @@ func _handle_operation_message(message: Dictionary) -> void:
 	var response := execute_operation(op, args, operation_id)
 	if bool(response.get("ok", false)):
 		emit_os_event("operation.completed", {"id": operation_id, "op": op})
+		_operation_results_sent += 1
 		_send_bridge_message(HermesProtocol.make_operation_result(operation_id, true, response.get("result", {}), {}))
 	else:
 		var error_data: Dictionary = response.get("error", HermesProtocol.make_error("OPERATION_FAILED", "Operation failed"))
 		emit_os_event("operation.failed", {"id": operation_id, "op": op, "error": error_data})
+		_operation_results_sent += 1
 		_send_bridge_message(HermesProtocol.make_operation_result(operation_id, false, {}, error_data))
 
 func _handle_request_message(message: Dictionary) -> void:
@@ -207,9 +263,11 @@ func _handle_request_message(message: Dictionary) -> void:
 	var args: Dictionary = message.get("args", {}) if message.get("args", {}) is Dictionary else {}
 	var response := execute_operation(op, args, request_id)
 	if bool(response.get("ok", false)):
+		_responses_sent += 1
 		_send_bridge_message(HermesProtocol.make_response(request_id, true, response.get("result", {}), {}))
 	else:
 		var error_data: Dictionary = response.get("error", HermesProtocol.make_error("REQUEST_FAILED", "Request failed"))
+		_responses_sent += 1
 		_send_bridge_message(HermesProtocol.make_response(request_id, false, {}, error_data))
 
 func _send_bridge_message(message: Dictionary) -> void:
@@ -217,7 +275,8 @@ func _send_bridge_message(message: Dictionary) -> void:
 		return
 	var send_error: String = _bridge.send_message(message)
 	if send_error != "":
-		emit_os_event("bridge.send_error", HermesProtocol.make_error("SEND_FAILED", send_error))
+		_last_bridge_error = HermesProtocol.make_error("SEND_FAILED", send_error)
+		emit_os_event("bridge.send_error", _last_bridge_error)
 
 func _on_shell_event(event_name: String, payload: Dictionary) -> void:
 	emit_os_event(event_name, payload)

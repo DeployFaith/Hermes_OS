@@ -14,6 +14,16 @@ func execute(op: String, args: Dictionary, request_id := "") -> Dictionary:
 			"ok": false,
 			"error": HermesProtocol.make_error("KERNEL_UNAVAILABLE", "Kernel is not attached to operation router")
 		}
+	if op.strip_edges() == "":
+		return {
+			"ok": false,
+			"error": HermesProtocol.make_error("MISSING_OPERATION", "Operation name is required")
+		}
+	if not _kernel.is_operation_declared(op):
+		return {
+			"ok": false,
+			"error": HermesProtocol.make_error("UNDECLARED_OPERATION", "Operation is not declared in manifest: " + op)
+		}
 	if op.begins_with("os."):
 		return _kernel.route_os_operation(op, args, request_id)
 	if op.begins_with("game."):
