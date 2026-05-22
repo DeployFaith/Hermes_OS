@@ -15,6 +15,10 @@ run/main_scene="res://scenes/os/os_shell.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
+[autoload]
+
+HermesOSKernel="*res://scripts/hermes/hermes_os_kernel.gd"
+
 [display]
 
 window/size/viewport_width=1920

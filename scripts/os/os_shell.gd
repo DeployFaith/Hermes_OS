@@ -1,9 +1,14 @@
 class_name OSShell
 extends Control
 
+const OSWindow = preload("res://scripts/os/os_window.gd")
+const OSFileSystem = preload("res://scripts/os/os_file_system.gd")
+const HermesProtocol = preload("res://scripts/hermes/hermes_protocol.gd")
+
 signal notification_created(notification_id: String)
 signal notification_clicked(notification_id: String)
 signal notification_dismissed(notification_id: String)
+signal hermes_event(event_name: String, payload: Dictionary)
 
 var _apps: Dictionary = {}
 var _app_order: Array[String] = []
@@ -57,6 +62,13 @@ var _text_app_path_label: Label
 var _text_app_status_label: Label
 var _text_app_current_path := ""
 var _files_shortcuts: Array[Dictionary] = []
+var _notes_list: ItemList
+var _notes_editor: TextEdit
+var _notes_status_label: Label
+var _notes_active_note_id := ""
+var _notes_open_notes: Array[String] = []
+var _terminal_sessions: Dictionary = {}
+var _terminal_session_sequence := 0
 
 const TASKBAR_HEIGHT := 46.0
 const BG := Color("181a1f")
@@ -87,6 +99,10 @@ func _ready() -> void:
 	_build_ui()
 	_update_clock()
 	_show_auth_screen("login")
+	if has_node("/root/HermesOSKernel"):
+		var kernel := get_node("/root/HermesOSKernel")
+		if kernel and kernel.has_method("register_shell"):
+			kernel.call("register_shell", self)
 
 	var clock_timer := Timer.new()
 	clock_timer.wait_time = 10.0
@@ -126,6 +142,12 @@ func launch_app(app_id: String) -> OSWindow:
 	_open_windows[app_id] = window
 	_create_task_button(app_id)
 	_focus_window(window)
+	_emit_hermes_event("window.opened", {
+		"window_id": _window_id(window),
+		"app_id": app_id,
+		"title": str(app.get("title", app_id))
+	})
+	_emit_hermes_event("app.opened", {"app_id": app_id})
 	return window
 
 func close_app(app_id: String) -> void:
@@ -229,11 +251,12 @@ func reset_state() -> void:
 	_show_auth_screen("login")
 
 func _register_apps() -> void:
-	_app_order = ["files", "text", "console", "system"]
+	_app_order = ["files", "notes", "text", "console", "system"]
 	_apps = {
 		"files": {"title": "Files", "builder": Callable(self, "_build_files_app")},
+		"notes": {"title": "Notes", "builder": Callable(self, "_build_notes_app")},
 		"text": {"title": "Text", "builder": Callable(self, "_build_text_app")},
-		"console": {"title": "Console", "builder": Callable(self, "_build_console_app")},
+		"console": {"title": "Terminal", "builder": Callable(self, "_build_console_app")},
 		"system": {"title": "System", "builder": Callable(self, "_build_system_app")}
 	}
 
@@ -496,6 +519,11 @@ func notify(data: Dictionary) -> String:
 	_refresh_notifications()
 	_show_notification_toast(notification)
 	notification_created.emit(notification_id)
+	_emit_hermes_event("notification.shown", {
+		"notification_id": notification_id,
+		"title": str(notification.get("title", "")),
+		"level": str(notification.get("level", "info"))
+	})
 	return notification_id
 
 func clear_notifications() -> void:
@@ -1296,9 +1324,14 @@ func _focus_window(window: OSWindow) -> void:
 	window.visible = true
 	window.move_to_front()
 	_update_task_button(window.app_id, true)
+	_emit_hermes_event("window.focused", {
+		"window_id": _window_id(window),
+		"app_id": window.app_id
+	})
 
 func _on_window_close_requested(window: OSWindow) -> void:
 	var app_id := window.app_id
+	var window_id := _window_id(window)
 	if _active_window == window:
 		_active_window = null
 	if _open_windows.has(app_id):
@@ -1309,12 +1342,15 @@ func _on_window_close_requested(window: OSWindow) -> void:
 			button.queue_free()
 		_task_buttons.erase(app_id)
 	window.queue_free()
+	_emit_hermes_event("window.closed", {"window_id": window_id, "app_id": app_id})
+	_emit_hermes_event("app.closed", {"app_id": app_id})
 
 func _on_window_minimize_requested(window: OSWindow) -> void:
 	if _active_window == window:
 		_active_window = null
 	window.visible = false
 	_update_task_button(window.app_id, false)
+	_emit_hermes_event("window.minimized", {"window_id": _window_id(window), "app_id": window.app_id})
 
 func _create_task_button(app_id: String) -> void:
 	if _task_buttons.has(app_id):
@@ -2467,6 +2503,15 @@ func _paste_destination_path(source_path: String, destination_dir: String) -> St
 		index += 1
 	return _fs.join_path(clean_destination_dir, candidate_name)
 
+func _build_notes_app() -> Control:
+	var root := _build_text_app()
+	if _text_app_path_label:
+		_text_app_path_label.text = "No note opened"
+		_text_app_path_label.tooltip_text = ""
+	if _text_app_status_label:
+		_set_status(_text_app_status_label, "Notes stored in " + _notes_directory_path())
+	return root
+
 func _build_text_app() -> Control:
 	var root := _app_root()
 
@@ -2506,12 +2551,12 @@ func _build_text_app() -> Control:
 	root.add_child(_text_app_status_label)
 	return root
 
-func _open_text_file(path: String) -> void:
+func _open_text_file(path: String, app_id := "text") -> void:
 	var target_path := _fs.normalize_path(path)
 	if not _fs.is_file(target_path):
 		_set_desktop_context_status("File not found: " + target_path, true)
 		return
-	var window := launch_app("text")
+	var window := launch_app(app_id)
 	if window == null:
 		return
 	if _text_app_editor == null:
@@ -2960,6 +3005,464 @@ func _command_requires_path(parts: PackedStringArray, command_name: String) -> S
 func _time_text() -> String:
 	var now := Time.get_datetime_dict_from_system()
 	return "%04d-%02d-%02d %02d:%02d:%02d" % [now.year, now.month, now.day, now.hour, now.minute, now.second]
+
+func _emit_hermes_event(event_name: String, payload: Dictionary = {}) -> void:
+	hermes_event.emit(event_name, payload)
+
+func _window_id(window: OSWindow) -> String:
+	return "win_%s" % str(window.get_instance_id())
+
+func _find_window_by_id(window_id: String) -> OSWindow:
+	for key in _open_windows.keys():
+		var window := _open_windows[key] as OSWindow
+		if is_instance_valid(window) and _window_id(window) == window_id:
+			return window
+	return null
+
+func _window_state_snapshot() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for key in _open_windows.keys():
+		var window := _open_windows[key] as OSWindow
+		if not is_instance_valid(window):
+			continue
+		result.append({
+			"id": _window_id(window),
+			"app_id": window.app_id,
+			"title": window.app_title,
+			"focused": _active_window == window,
+			"minimized": not window.visible,
+			"maximized": false,
+			"position": [window.position.x, window.position.y],
+			"size": [window.size.x, window.size.y],
+			"z_index": window.get_index()
+		})
+	return result
+
+func _notes_directory_path() -> String:
+	return _fs.join_path(_fs.home_path(), "notes")
+
+func _ensure_notes_directory() -> String:
+	var path := _notes_directory_path()
+	if _fs.is_dir(path):
+		return ""
+	var message := _fs.make_dir(path)
+	if message.begins_with("Path already exists"):
+		return ""
+	return message
+
+func _notes_slug(title: String) -> String:
+	var clean := title.strip_edges().to_lower()
+	if clean == "":
+		clean = "untitled"
+	clean = clean.replace("/", "-").replace("\\", "-").replace(":", "-").replace("*", "-").replace("?", "-").replace("\"", "-").replace("<", "-").replace(">", "-").replace("|", "-")
+	while clean.find("  ") != -1:
+		clean = clean.replace("  ", " ")
+	clean = clean.replace(" ", "-")
+	while clean.find("--") != -1:
+		clean = clean.replace("--", "-")
+	return clean.strip_edges()
+
+func _note_path_from_id(note_id: String) -> String:
+	if note_id.begins_with("/"):
+		return _fs.normalize_path(note_id)
+	var file_name := note_id.strip_edges()
+	if file_name == "":
+		file_name = "untitled"
+	if not file_name.ends_with(".txt"):
+		file_name += ".txt"
+	return _fs.join_path(_notes_directory_path(), file_name)
+
+func _create_unique_note_path(title: String) -> String:
+	var slug := _notes_slug(title)
+	if slug == "":
+		slug = "untitled"
+	var candidate := _note_path_from_id(slug)
+	var suffix := 2
+	while _fs.exists(candidate):
+		candidate = _note_path_from_id("%s-%d" % [slug, suffix])
+		suffix += 1
+	return candidate
+
+func _list_notes_state() -> Array[Dictionary]:
+	var output: Array[Dictionary] = []
+	var notes_path := _notes_directory_path()
+	if not _fs.is_dir(notes_path):
+		return output
+	var entries := _fs.list_dir(notes_path)
+	for entry in entries:
+		var item: Dictionary = entry
+		if str(item.get("type", "")) != "file":
+			continue
+		output.append({
+			"note_id": str(item.get("name", "")),
+			"path": str(item.get("path", "")),
+			"size": int(item.get("size", 0)),
+			"owner": str(item.get("owner", ""))
+		})
+	return output
+
+func _notes_create_note(title: String, content: String) -> Dictionary:
+	var dir_message := _ensure_notes_directory()
+	if dir_message != "":
+		return {"ok": false, "error": HermesProtocol.make_error("NOTES_DIR_FAILED", dir_message)}
+	var target_path := _create_unique_note_path(title)
+	var write_message := _fs.write_file(target_path, content)
+	if write_message != "":
+		return {"ok": false, "error": HermesProtocol.make_error("WRITE_FAILED", write_message)}
+	var note_id := target_path.get_file()
+	_notes_active_note_id = note_id
+	if not _notes_open_notes.has(note_id):
+		_notes_open_notes.append(note_id)
+	_emit_hermes_event("note.created", {"note_id": note_id, "path": target_path})
+	_emit_hermes_event("file.created", {"path": target_path})
+	return {"ok": true, "result": {"note_id": note_id, "path": target_path}}
+
+func _notes_open_note(note_id_or_path: String) -> Dictionary:
+	var dir_message := _ensure_notes_directory()
+	if dir_message != "":
+		return {"ok": false, "error": HermesProtocol.make_error("NOTES_DIR_FAILED", dir_message)}
+	var target_path := _note_path_from_id(note_id_or_path)
+	if not _fs.is_file(target_path):
+		return {"ok": false, "error": HermesProtocol.make_error("NOTE_NOT_FOUND", "Note not found: " + target_path)}
+	_open_text_file(target_path, "notes")
+	var note_id := target_path.get_file()
+	_notes_active_note_id = note_id
+	if not _notes_open_notes.has(note_id):
+		_notes_open_notes.append(note_id)
+	var read_result := _fs.read_file_result(target_path)
+	if not bool(read_result.get("ok", false)):
+		return {"ok": false, "error": HermesProtocol.make_error("READ_FAILED", str(read_result.get("error", "Could not read note")))}
+	return {
+		"ok": true,
+		"result": {
+			"note_id": note_id,
+			"path": target_path,
+			"content": str(read_result.get("content", ""))
+		}
+	}
+
+func _notes_update_note(note_id_or_path: String, content: String) -> Dictionary:
+	var target_path := _note_path_from_id(note_id_or_path)
+	var write_message := _fs.write_file(target_path, content)
+	if write_message != "":
+		return {"ok": false, "error": HermesProtocol.make_error("WRITE_FAILED", write_message)}
+	var note_id := target_path.get_file()
+	_notes_active_note_id = note_id
+	if _text_app_current_path == target_path and _text_app_editor:
+		_text_app_editor.text = content
+	if not _notes_open_notes.has(note_id):
+		_notes_open_notes.append(note_id)
+	_emit_hermes_event("note.updated", {"note_id": note_id, "path": target_path})
+	_emit_hermes_event("file.updated", {"path": target_path})
+	return {"ok": true, "result": {"note_id": note_id, "path": target_path}}
+
+func hermes_get_state(options := {}) -> Dictionary:
+	var include_apps := bool(options.get("include_apps", true)) if options is Dictionary else true
+	var include_windows := bool(options.get("include_windows", true)) if options is Dictionary else true
+	var include_filesystem := bool(options.get("include_filesystem", false)) if options is Dictionary else false
+	var snapshot := {
+		"desktop": {
+			"focused_window_id": _window_id(_active_window) if _active_window and is_instance_valid(_active_window) else "",
+			"session_active": _session_active,
+			"current_user": _fs.current_user()
+		},
+		"notifications": _notifications.duplicate(true)
+	}
+	if include_windows:
+		snapshot["windows"] = _window_state_snapshot()
+	if include_apps:
+		snapshot["apps"] = {
+			"notes": {
+				"active_note_id": _notes_active_note_id,
+				"open_notes": _notes_open_notes.duplicate(),
+				"notes": _list_notes_state()
+			},
+			"terminal": {
+				"sessions": _terminal_sessions.duplicate(true)
+			}
+		}
+	if include_filesystem:
+		snapshot["filesystem"] = _fs.export_state()
+	return snapshot
+
+func hermes_get_manifest_apps() -> Array[Dictionary]:
+	return [
+		{
+			"id": "desktop",
+			"name": "Desktop",
+			"description": "Desktop shell actions",
+			"actions": {
+				"desktop.show_notification": {
+					"description": "Display an in-OS notification",
+					"args_schema": {"title": "string", "body": "string", "level": "string"}
+				}
+			}
+		},
+		{
+			"id": "windows",
+			"name": "Window Manager",
+			"description": "Window operations",
+			"actions": {
+				"windows.open_app": {"description": "Open app window", "args_schema": {"app_id": "string"}},
+				"windows.focus_window": {"description": "Focus a window", "args_schema": {"window_id": "string", "app_id": "string"}},
+				"windows.close_window": {"description": "Close a window", "args_schema": {"window_id": "string", "app_id": "string"}}
+			}
+		},
+		{
+			"id": "files",
+			"name": "Files",
+			"description": "Virtual filesystem browser",
+			"actions": {
+				"files.list_dir": {"description": "List a directory", "args_schema": {"path": "string"}},
+				"files.read_file": {"description": "Read a file", "args_schema": {"path": "string"}},
+				"files.write_file": {"description": "Write a file", "args_schema": {"path": "string", "content": "string"}}
+			}
+		},
+		{
+			"id": "notes",
+			"name": "Notes",
+			"description": "Create and open notes",
+			"actions": {
+				"notes.create_note": {"description": "Create note", "args_schema": {"title": "string", "content": "string"}},
+				"notes.open_note": {"description": "Open note", "args_schema": {"note_id": "string"}},
+				"notes.update_note": {"description": "Update note", "args_schema": {"note_id": "string", "content": "string"}},
+				"notes.list_notes": {"description": "List notes", "args_schema": {}}
+			}
+		},
+		{
+			"id": "terminal",
+			"name": "Terminal",
+			"description": "In-game terminal commands",
+			"actions": {
+				"terminal.open_session": {"description": "Open terminal session", "args_schema": {"cwd": "string"}},
+				"terminal.run_command": {"description": "Run command", "args_schema": {"session_id": "string", "command": "string"}}
+			}
+		}
+	]
+
+func hermes_execute_operation(op: String, args: Dictionary) -> Dictionary:
+	match op:
+		"desktop.show_notification":
+			var title := str(args.get("title", "Hermes"))
+			var body := str(args.get("body", ""))
+			var level := str(args.get("level", "info"))
+			var notification_id := notify({"title": title, "body": body, "level": level, "app_id": "hermes"})
+			return {"ok": true, "result": {"displayed": true, "notification_id": notification_id}}
+		"windows.open_app":
+			var app_id := str(args.get("app_id", ""))
+			if app_id == "":
+				return {"ok": false, "error": HermesProtocol.make_error("MISSING_ARG", "windows.open_app requires app_id")}
+			var window := launch_app(app_id)
+			if window == null:
+				return {"ok": false, "error": HermesProtocol.make_error("OPEN_FAILED", "Could not open app: " + app_id)}
+			return {"ok": true, "result": {"window_id": _window_id(window), "app_id": app_id}}
+		"windows.focus_window":
+			var focus_window_id := str(args.get("window_id", ""))
+			var focus_app_id := str(args.get("app_id", ""))
+			var target_window: OSWindow = null
+			if focus_window_id != "":
+				target_window = _find_window_by_id(focus_window_id)
+			elif focus_app_id != "" and _open_windows.has(focus_app_id):
+				target_window = _open_windows[focus_app_id] as OSWindow
+			if target_window == null or not is_instance_valid(target_window):
+				return {"ok": false, "error": HermesProtocol.make_error("WINDOW_NOT_FOUND", "Window not found")}
+			_focus_window(target_window)
+			return {"ok": true, "result": {"window_id": _window_id(target_window), "app_id": target_window.app_id}}
+		"windows.close_window":
+			var close_window_id := str(args.get("window_id", ""))
+			var close_app_id := str(args.get("app_id", ""))
+			var close_window: OSWindow = null
+			if close_window_id != "":
+				close_window = _find_window_by_id(close_window_id)
+			elif close_app_id != "" and _open_windows.has(close_app_id):
+				close_window = _open_windows[close_app_id] as OSWindow
+			if close_window == null or not is_instance_valid(close_window):
+				return {"ok": false, "error": HermesProtocol.make_error("WINDOW_NOT_FOUND", "Window not found")}
+			_on_window_close_requested(close_window)
+			return {"ok": true, "result": {"closed": true}}
+		"files.list_dir":
+			var list_path := _fs.normalize_path(str(args.get("path", _fs.home_path())))
+			if not _fs.is_dir(list_path):
+				return {"ok": false, "error": HermesProtocol.make_error("DIR_NOT_FOUND", "Directory not found: " + list_path)}
+			return {"ok": true, "result": {"path": list_path, "entries": _fs.list_dir(list_path)}}
+		"files.read_file":
+			var read_path := _fs.normalize_path(str(args.get("path", "")))
+			if read_path == "":
+				return {"ok": false, "error": HermesProtocol.make_error("MISSING_ARG", "files.read_file requires path")}
+			var read_result := _fs.read_file_result(read_path)
+			if not bool(read_result.get("ok", false)):
+				return {"ok": false, "error": HermesProtocol.make_error("READ_FAILED", str(read_result.get("error", "Could not read file")))}
+			return {"ok": true, "result": {"path": read_path, "content": str(read_result.get("content", ""))}}
+		"files.write_file":
+			var write_path := _fs.normalize_path(str(args.get("path", "")))
+			if write_path == "":
+				return {"ok": false, "error": HermesProtocol.make_error("MISSING_ARG", "files.write_file requires path")}
+			var had_file := _fs.exists(write_path)
+			var write_message := _fs.write_file(write_path, str(args.get("content", "")))
+			if write_message != "":
+				return {"ok": false, "error": HermesProtocol.make_error("WRITE_FAILED", write_message)}
+			_emit_hermes_event("file.updated" if had_file else "file.created", {"path": write_path})
+			return {"ok": true, "result": {"path": write_path, "saved": true}}
+		"notes.create_note":
+			return _notes_create_note(str(args.get("title", "Untitled")), str(args.get("content", "")))
+		"notes.open_note":
+			return _notes_open_note(str(args.get("note_id", args.get("path", ""))))
+		"notes.update_note":
+			return _notes_update_note(str(args.get("note_id", args.get("path", ""))), str(args.get("content", "")))
+		"notes.list_notes":
+			return {"ok": true, "result": {"notes": _list_notes_state(), "path": _notes_directory_path()}}
+		"terminal.open_session":
+			var cwd := _fs.resolve_path(str(args.get("cwd", "~")), _fs.home_path())
+			if not _fs.is_dir(cwd):
+				cwd = _fs.home_path()
+			_terminal_session_sequence += 1
+			var session_id := str(args.get("session_id", "t_%d" % _terminal_session_sequence))
+			_terminal_sessions[session_id] = {"cwd": cwd, "opened_at": int(Time.get_unix_time_from_system())}
+			launch_app("console")
+			_emit_hermes_event("terminal.session_opened", {"session_id": session_id, "cwd": cwd})
+			return {"ok": true, "result": {"session_id": session_id, "cwd": cwd}}
+		"terminal.run_command":
+			var command := str(args.get("command", "")).strip_edges()
+			if command == "":
+				return {"ok": false, "error": HermesProtocol.make_error("MISSING_ARG", "terminal.run_command requires command")}
+			var terminal_session_id := str(args.get("session_id", ""))
+			var terminal_state := {"cwd": _fs.home_path()}
+			if terminal_session_id != "" and _terminal_sessions.has(terminal_session_id):
+				terminal_state = _terminal_sessions[terminal_session_id]
+			_emit_hermes_event("terminal.command_started", {"session_id": terminal_session_id, "command": command})
+			var terminal_result := _execute_terminal_command(command, terminal_state)
+			if terminal_session_id != "":
+				_terminal_sessions[terminal_session_id] = terminal_state
+			_emit_hermes_event("terminal.command_finished", {
+				"session_id": terminal_session_id,
+				"command": command,
+				"exit_code": int(terminal_result.get("exit_code", 1))
+			})
+			launch_app("console")
+			return {"ok": true, "result": terminal_result}
+		_:
+			return {"ok": false, "error": HermesProtocol.make_error("UNKNOWN_OPERATION", "No registered operation: " + op)}
+
+func _execute_terminal_command(command: String, state: Dictionary) -> Dictionary:
+	var clean := command.strip_edges()
+	var parts := clean.split(" ", false)
+	if parts.is_empty():
+		return {"stdout": "", "stderr": "", "exit_code": 0, "cwd": str(state.get("cwd", _fs.home_path()))}
+	var cmd := parts[0].to_lower()
+	var stdout := ""
+	var stderr := ""
+	var exit_code := 0
+	match cmd:
+		"help":
+			stdout = "help\nls [path]\ncat <path>\ntouch <path>\nwrite <path> <text>\nrm <path>\nclear\napps\nopen <app_id>\nstate\npwd\ncd [path]"
+		"pwd":
+			stdout = str(state.get("cwd", _fs.home_path()))
+		"cd":
+			var destination := _fs.home_path()
+			if parts.size() >= 2:
+				destination = _fs.resolve_path(parts[1], str(state.get("cwd", _fs.home_path())))
+			if not _fs.is_dir(destination):
+				exit_code = 1
+				stderr = "Folder not found: " + destination
+			elif not _fs.can_list_dir(destination):
+				exit_code = 1
+				stderr = "Permission denied: " + destination
+			else:
+				state["cwd"] = destination
+				stdout = destination
+		"ls":
+			var list_path := str(state.get("cwd", _fs.home_path()))
+			if parts.size() >= 2:
+				list_path = _fs.resolve_path(parts[1], str(state.get("cwd", _fs.home_path())))
+			if not _fs.is_dir(list_path):
+				exit_code = 1
+				stderr = "Folder not found: " + list_path
+			else:
+				var names: Array[String] = []
+				for entry in _fs.list_dir(list_path):
+					var item: Dictionary = entry
+					var name := str(item.get("name", ""))
+					if str(item.get("type", "")) == "dir":
+						name += "/"
+					names.append(name)
+				stdout = "\n".join(names)
+		"cat", "read":
+			if parts.size() < 2:
+				exit_code = 1
+				stderr = "Usage: cat <path>"
+			else:
+				var target := _fs.resolve_path(parts[1], str(state.get("cwd", _fs.home_path())))
+				var read_result := _fs.read_file_result(target)
+				if not bool(read_result.get("ok", false)):
+					exit_code = 1
+					stderr = str(read_result.get("error", "Could not read file"))
+				else:
+					stdout = str(read_result.get("content", ""))
+		"touch":
+			if parts.size() < 2:
+				exit_code = 1
+				stderr = "Usage: touch <path>"
+			else:
+				var target := _fs.resolve_path(parts[1], str(state.get("cwd", _fs.home_path())))
+				var message := _fs.write_file(target, "")
+				if message != "":
+					exit_code = 1
+					stderr = message
+				else:
+					stdout = "File created"
+		"write":
+			if parts.size() < 3:
+				exit_code = 1
+				stderr = "Usage: write <path> <text>"
+			else:
+				var target_path := parts[1]
+				var marker_position := clean.find(target_path) + target_path.length()
+				var text := clean.substr(marker_position).strip_edges()
+				var target := _fs.resolve_path(target_path, str(state.get("cwd", _fs.home_path())))
+				var message := _fs.write_file(target, text)
+				if message != "":
+					exit_code = 1
+					stderr = message
+				else:
+					stdout = "Saved"
+		"rm":
+			if parts.size() < 2:
+				exit_code = 1
+				stderr = "Usage: rm <path>"
+			else:
+				var target := _fs.resolve_path(parts[1], str(state.get("cwd", _fs.home_path())))
+				var message := _fs.delete_path(target)
+				if message != "":
+					exit_code = 1
+					stderr = message
+				else:
+					stdout = "Deleted"
+		"apps":
+			stdout = _apps_text()
+		"open":
+			if parts.size() < 2:
+				exit_code = 1
+				stderr = "Usage: open <app_id>"
+			else:
+				var app_id := parts[1]
+				if launch_app(app_id) == null:
+					exit_code = 1
+					stderr = "Unknown app: " + app_id
+				else:
+					stdout = "Opened " + app_id
+		"state":
+			stdout = JSON.stringify(hermes_get_state({"include_apps": true, "include_windows": true, "include_filesystem": false}), "\t")
+		"clear":
+			stdout = ""
+		_:
+			exit_code = 1
+			stderr = "Unknown command: " + cmd
+	return {
+		"stdout": stdout,
+		"stderr": stderr,
+		"exit_code": exit_code,
+		"cwd": str(state.get("cwd", _fs.home_path()))
+	}
 
 func _color_from_variant(value: Variant, fallback: Color) -> Color:
 	if value is Array:
