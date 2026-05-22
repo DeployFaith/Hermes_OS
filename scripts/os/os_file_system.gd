@@ -1,7 +1,7 @@
 class_name OSFileSystem
 extends RefCounted
 
-const SAVE_PATH := "user://godot_os_files.json"
+const SAVE_PATH := "user://hermes_os_files.json"
 const ROOT_USER := "root"
 const DEFAULT_USERNAME := "user"
 const DEFAULT_UID := 1000
@@ -61,7 +61,7 @@ func export_state() -> Dictionary:
 
 func import_state(state: Dictionary) -> String:
 	if not _is_valid_state(state):
-		return "Invalid Godot OS filesystem state"
+		return "Invalid HermesOS filesystem state"
 	_state = state.duplicate(true)
 	_tree = _state["tree"]
 	_ensure_system_layout()

@@ -174,7 +174,7 @@ func export_state() -> Dictionary:
 
 func import_state(state: Dictionary) -> String:
 	if not state.has("filesystem") or not (state["filesystem"] is Dictionary):
-		return "Invalid Godot OS state: missing filesystem"
+		return "Invalid HermesOS state: missing filesystem"
 	var message := _fs.import_state(state["filesystem"])
 	if message != "":
 		return message
