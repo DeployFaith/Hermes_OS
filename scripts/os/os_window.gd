@@ -67,6 +67,13 @@ func set_active(active: bool) -> void:
 	if _title_label:
 		_title_label.add_theme_color_override("font_color", TEXT if active else TEXT_MUTED)
 
+func set_app_title(title: String) -> void:
+	app_title = title.strip_edges()
+	if app_title == "":
+		app_title = "App"
+	if _title_label:
+		_title_label.text = app_title
+
 func toggle_maximize() -> void:
 	var parent_control := get_parent() as Control
 	if parent_control == null:

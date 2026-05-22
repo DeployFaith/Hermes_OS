@@ -3,13 +3,14 @@ extends Node
 const HermesProtocol = preload("res://scripts/hermes/hermes_protocol.gd")
 const HermesBridgeClientScript = preload("res://scripts/hermes/hermes_bridge_client.gd")
 const HermesOperationRouterScript = preload("res://scripts/hermes/hermes_operation_router.gd")
+const BRIDGE_SETTINGS_PATH := "user://hermes_bridge_settings.cfg"
 
 signal os_event(event_name: String, payload: Dictionary)
 signal bridge_connected
 signal bridge_disconnected
 
-@export var auto_connect := false
-@export var endpoint_url := "ws://127.0.0.1:8787/hermesos/ws"
+@export var auto_connect := true
+@export var endpoint_url := "ws://127.0.0.1:8788/hermesos/ws"
 @export var project_id := "hermesos_demo"
 
 var session_id := "game_session_%d" % int(Time.get_unix_time_from_system())
@@ -36,6 +37,7 @@ func _ready() -> void:
 
 	_router = HermesOperationRouterScript.new()
 	_router.setup(self)
+	_load_bridge_settings()
 
 	if auto_connect:
 		connect_bridge()
@@ -64,6 +66,7 @@ func connect_bridge(url := "") -> String:
 	if target == "":
 		return "Missing endpoint URL"
 	endpoint_url = target
+	_save_bridge_settings()
 	_last_bridge_error.clear()
 	return _bridge.connect_to_endpoint(target)
 
@@ -103,6 +106,7 @@ func is_operation_declared(op: String) -> bool:
 func get_bridge_state() -> Dictionary:
 	return {
 		"connected": is_bridge_connected(),
+		"auto_connect": auto_connect,
 		"endpoint": endpoint_url,
 		"session_id": session_id,
 		"last_message_at": _last_message_at,
@@ -114,6 +118,33 @@ func get_bridge_state() -> Dictionary:
 			"responses_sent": _responses_sent
 		}
 	}
+
+func set_bridge_settings(settings: Dictionary) -> void:
+	if settings.has("auto_connect"):
+		auto_connect = bool(settings.get("auto_connect", auto_connect))
+	if settings.has("endpoint"):
+		var maybe_endpoint := str(settings.get("endpoint", endpoint_url)).strip_edges()
+		if maybe_endpoint != "":
+			endpoint_url = maybe_endpoint
+	_save_bridge_settings()
+
+func _load_bridge_settings() -> void:
+	var config := ConfigFile.new()
+	var err := config.load(BRIDGE_SETTINGS_PATH)
+	if err != OK:
+		return
+	auto_connect = bool(config.get_value("bridge", "auto_connect", auto_connect))
+	var saved_endpoint := str(config.get_value("bridge", "endpoint_url", endpoint_url)).strip_edges()
+	if saved_endpoint != "":
+		endpoint_url = saved_endpoint
+
+func _save_bridge_settings() -> void:
+	var config := ConfigFile.new()
+	config.set_value("bridge", "auto_connect", auto_connect)
+	config.set_value("bridge", "endpoint_url", endpoint_url)
+	var err := config.save(BRIDGE_SETTINGS_PATH)
+	if err != OK:
+		push_warning("Failed to save Hermes bridge settings to %s (error %d)" % [BRIDGE_SETTINGS_PATH, err])
 
 func get_manifest() -> Dictionary:
 	var apps: Array = []

@@ -4,6 +4,7 @@ extends Control
 const OSWindow = preload("res://scripts/os/os_window.gd")
 const OSFileSystem = preload("res://scripts/os/os_file_system.gd")
 const HermesProtocol = preload("res://scripts/hermes/hermes_protocol.gd")
+const BrowserApp = preload("res://scripts/apps/browser_app.gd")
 
 signal notification_created(notification_id: String)
 signal notification_clicked(notification_id: String)
@@ -259,11 +260,12 @@ func reset_state() -> void:
 	_show_auth_screen("login")
 
 func _register_apps() -> void:
-	_app_order = ["files", "notes", "text", "console", "system"]
+	_app_order = ["files", "notes", "text", "browser", "console", "system"]
 	_apps = {
 		"files": {"title": "Files", "builder": Callable(self, "_build_files_app")},
 		"notes": {"title": "Notes", "builder": Callable(self, "_build_notes_app")},
 		"text": {"title": "Text", "builder": Callable(self, "_build_text_app")},
+		"browser": {"title": "Browser", "builder": Callable(self, "_build_browser_app")},
 		"console": {"title": "Terminal", "builder": Callable(self, "_build_console_app")},
 		"system": {"title": "System", "builder": Callable(self, "_build_system_app")}
 	}
@@ -1301,6 +1303,8 @@ func _default_window_size(app_id: String) -> Vector2:
 	match app_id:
 		"files":
 			return Vector2(820, 520)
+		"browser":
+			return Vector2(860, 560)
 		"console":
 			return Vector2(680, 430)
 		"system":
@@ -2609,6 +2613,61 @@ func _build_console_app() -> Control:
 	root.add_child(input)
 	return root
 
+func _build_browser_app() -> Control:
+	var browser := BrowserApp.new()
+	browser.name = "BrowserApp"
+	browser.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	browser.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	browser.set_meta("window_min_size", Vector2(720, 520))
+	return browser
+
+func _browser_instance() -> BrowserApp:
+	if not _open_windows.has("browser"):
+		return null
+	var window := _open_windows["browser"] as OSWindow
+	if window == null or not is_instance_valid(window):
+		return null
+	var node := window.find_child("BrowserApp", true, false)
+	if node != null and node is BrowserApp:
+		return node as BrowserApp
+	return null
+
+func _open_browser_url(url: String) -> Dictionary:
+	var clean_url := url.strip_edges()
+	if clean_url == "":
+		clean_url = "http://news.grid/"
+	var window := launch_app("browser")
+	if window == null:
+		return {"ok": false, "error": HermesProtocol.make_error("OPEN_FAILED", "Could not open browser")}
+	var browser := _browser_instance()
+	if browser == null:
+		return {"ok": false, "error": HermesProtocol.make_error("BROWSER_UNAVAILABLE", "Browser instance unavailable")}
+	browser.open_url(clean_url)
+	_focus_window(window)
+	_emit_hermes_event("browser.page_opened", {"url": browser.get_current_url(), "title": browser.get_current_title()})
+	return {"ok": true, "result": {"url": browser.get_current_url(), "title": browser.get_current_title(), "window_id": _window_id(window)}}
+
+func _browser_search(query: String) -> Dictionary:
+	var clean_query := query.strip_edges()
+	if clean_query == "":
+		return {"ok": false, "error": HermesProtocol.make_error("MISSING_ARG", "browser.search requires query")}
+	var window := launch_app("browser")
+	if window == null:
+		return {"ok": false, "error": HermesProtocol.make_error("OPEN_FAILED", "Could not open browser")}
+	var browser := _browser_instance()
+	if browser == null:
+		return {"ok": false, "error": HermesProtocol.make_error("BROWSER_UNAVAILABLE", "Browser instance unavailable")}
+	browser.search(clean_query)
+	_focus_window(window)
+	_emit_hermes_event("browser.search_submitted", {"query": clean_query, "url": browser.get_current_url()})
+	return {"ok": true, "result": {"query": clean_query, "url": browser.get_current_url(), "window_id": _window_id(window)}}
+
+func _browser_state_snapshot() -> Dictionary:
+	var browser := _browser_instance()
+	if browser == null:
+		return {"open": false, "current_url": "", "title": ""}
+	return {"open": true, "current_url": browser.get_current_url(), "title": browser.get_current_title()}
+
 func _handle_console_command(command: String, input: LineEdit, state: Dictionary) -> void:
 	var clean := command.strip_edges()
 	if clean == "":
@@ -2918,7 +2977,7 @@ func _build_system_app() -> Control:
 	bridge_panel.add_child(bridge_row)
 
 	var bridge_endpoint_input := LineEdit.new()
-	bridge_endpoint_input.placeholder_text = "ws://127.0.0.1:8787/hermesos/ws"
+	bridge_endpoint_input.placeholder_text = "ws://127.0.0.1:8788/hermesos/ws"
 	bridge_endpoint_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_line_edit(bridge_endpoint_input)
 	bridge_row.add_child(bridge_endpoint_input)
@@ -2930,10 +2989,15 @@ func _build_system_app() -> Control:
 
 	var bridge_status_label := _label("Bridge: unavailable", 11, MUTED)
 	bridge_panel.add_child(bridge_status_label)
+	var bridge_auto_connect := CheckBox.new()
+	bridge_auto_connect.text = "Auto-connect on boot"
+	bridge_auto_connect.add_theme_color_override("font_color", TEXT)
+	bridge_panel.add_child(bridge_auto_connect)
 
 	var refresh_bridge_status := func() -> void:
 		var state := _kernel_bridge_state()
 		bridge_endpoint_input.text = str(state.get("endpoint", ""))
+		bridge_auto_connect.button_pressed = bool(state.get("auto_connect", false))
 		var connected := bool(state.get("connected", false))
 		bridge_status_label.text = "Bridge: connected" if connected else "Bridge: disconnected"
 		bridge_status_label.add_theme_color_override("font_color", TEXT if connected else MUTED)
@@ -2952,11 +3016,33 @@ func _build_system_app() -> Control:
 			_set_status(bridge_status_label, "Hermes kernel unavailable", true)
 			return
 		var endpoint := bridge_endpoint_input.text.strip_edges()
+		if kernel.has_method("set_bridge_settings"):
+			kernel.call("set_bridge_settings", {
+				"endpoint": endpoint,
+				"auto_connect": bridge_auto_connect.button_pressed
+			})
 		var message := str(kernel.call("connect_bridge", endpoint))
 		if message != "":
 			_set_status(bridge_status_label, message, true)
 		else:
 			_set_status(bridge_status_label, "Connecting...", false)
+		refresh_bridge_status.call()
+	)
+	bridge_auto_connect.toggled.connect(func(enabled: bool) -> void:
+		var kernel := _hermes_kernel_node()
+		if kernel == null or not kernel.has_method("set_bridge_settings"):
+			_set_status(bridge_status_label, "Hermes kernel unavailable", true)
+			return
+		kernel.call("set_bridge_settings", {
+			"endpoint": bridge_endpoint_input.text.strip_edges(),
+			"auto_connect": enabled
+		})
+		if enabled and kernel.has_method("is_bridge_connected") and not bool(kernel.call("is_bridge_connected")) and kernel.has_method("connect_bridge"):
+			var message := str(kernel.call("connect_bridge", bridge_endpoint_input.text.strip_edges()))
+			if message != "":
+				_set_status(bridge_status_label, message, true)
+			else:
+				_set_status(bridge_status_label, "Connecting...", false)
 		refresh_bridge_status.call()
 	)
 	bridge_disconnect_button.pressed.connect(func() -> void:
@@ -3352,6 +3438,7 @@ func hermes_get_state(options := {}) -> Dictionary:
 				"open_notes": _notes_open_notes.duplicate(),
 				"notes": _list_notes_state()
 			},
+			"browser": _browser_state_snapshot(),
 			"terminal": {
 				"sessions": _terminal_sessions.duplicate(true)
 			}
@@ -3402,6 +3489,15 @@ func hermes_get_manifest_apps() -> Array[Dictionary]:
 				"notes.open_note": {"description": "Open note", "args_schema": {"note_id": "string"}},
 				"notes.update_note": {"description": "Update note", "args_schema": {"note_id": "string", "content": "string"}},
 				"notes.list_notes": {"description": "List notes", "args_schema": {}}
+			}
+		},
+		{
+			"id": "browser",
+			"name": "Browser",
+			"description": "Fake intranet browser",
+			"actions": {
+				"browser.open_url": {"description": "Open a URL in the browser", "args_schema": {"url": "string"}},
+				"browser.search": {"description": "Search the fake intranet", "args_schema": {"query": "string"}}
 			}
 		},
 		{
@@ -3508,6 +3604,10 @@ func hermes_execute_operation(op: String, args: Dictionary) -> Dictionary:
 			return _notes_update_note(str(args.get("note_id", args.get("path", ""))), str(args.get("content", "")))
 		"notes.list_notes":
 			return {"ok": true, "result": {"notes": _list_notes_state(), "path": _notes_directory_path()}}
+		"browser.open_url":
+			return _open_browser_url(str(args.get("url", args.get("href", ""))))
+		"browser.search":
+			return _browser_search(str(args.get("query", "")))
 		"terminal.open_session":
 			var cwd := _fs.resolve_path(str(args.get("cwd", "~")), _fs.home_path())
 			if not _fs.is_dir(cwd):
