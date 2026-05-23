@@ -1355,12 +1355,19 @@ func _on_window_close_requested(window: OSWindow) -> void:
 			button.queue_free()
 		_task_buttons.erase(app_id)
 	window.visible = false
-	var close_delay := 0.6 if app_id == "browser" else 0.12
+	var close_delay := 0.9 if app_id == "browser" else 0.12
 	var close_timer := get_tree().create_timer(close_delay)
 	close_timer.timeout.connect(func() -> void:
 		if is_instance_valid(window):
 			_prepare_window_content_for_close(window)
-			window.queue_free()
+			if app_id == "browser":
+				var finalize_timer := get_tree().create_timer(0.35)
+				finalize_timer.timeout.connect(func() -> void:
+					if is_instance_valid(window):
+						window.queue_free()
+				)
+			else:
+				window.queue_free()
 	)
 	_emit_hermes_event("window.closed", {"window_id": window_id, "app_id": app_id})
 	_emit_hermes_event("app.closed", {"app_id": app_id})
