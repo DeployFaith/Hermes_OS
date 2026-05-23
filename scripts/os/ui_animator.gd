@@ -26,7 +26,7 @@ func fade_in(node: CanvasItem, duration: float = Tokens.TIME["normal"]) -> void:
 		return
 	_kill_existing(node)
 	node.modulate.a = 0.0
-	var tween := node.create_tween()
+	var tween: Tween = node.create_tween()
 	tween.set_trans(Tween.TRANS_QUAD)
 	tween.set_ease(Tween.EASE_OUT)
 	tween.tween_property(node, "modulate:a", 1.0, duration)
@@ -36,7 +36,7 @@ func fade_out(node: CanvasItem, duration: float = Tokens.TIME["fast"], then_free
 	if node == null or not is_instance_valid(node):
 		return
 	_kill_existing(node)
-	var tween := node.create_tween()
+	var tween: Tween = node.create_tween()
 	tween.set_trans(Tween.TRANS_QUAD)
 	tween.set_ease(Tween.EASE_IN)
 	tween.tween_property(node, "modulate:a", 0.0, duration)
@@ -53,7 +53,7 @@ func scale_pop(node: CanvasItem, duration: float = Tokens.TIME["normal"]) -> voi
 		return
 	_kill_existing(node)
 	node.scale = Vector2(0.94, 0.94)
-	var tween := node.create_tween()
+	var tween: Tween = node.create_tween()
 	tween.set_trans(Tween.TRANS_BACK)
 	tween.set_ease(Tween.EASE_OUT)
 	tween.tween_property(node, "scale", Vector2(1.0, 1.0), duration)
@@ -67,7 +67,7 @@ func slide_from_bottom(node: Control, distance: float = 24.0, duration: float = 
 	var base_y := node.position.y
 	node.position.y = base_y + distance
 	node.modulate.a = 0.0
-	var tween := node.create_tween()
+	var tween: Tween = node.create_tween()
 	tween.set_trans(Tween.TRANS_QUAD)
 	tween.set_ease(Tween.EASE_OUT)
 	tween.set_parallel()
@@ -80,7 +80,7 @@ func tint_hover(node: CanvasItem, from_color: Color, to_color: Color, duration: 
 	if node == null or not is_instance_valid(node):
 		return null
 	_kill_existing(node)
-	var tween := node.create_tween()
+	var tween: Tween = node.create_tween()
 	tween.set_trans(Tween.TRANS_QUAD)
 	tween.set_ease(Tween.EASE_OUT)
 	tween.tween_property(node, "modulate", to_color, duration).from(from_color)
@@ -91,7 +91,7 @@ func tint_hover(node: CanvasItem, from_color: Color, to_color: Color, duration: 
 func shadow_lift(stylebox: StyleBoxFlat, from_shadow: Dictionary, to_shadow: Dictionary, duration: float = Tokens.TIME["fast"]) -> void:
 	if stylebox == null:
 		return
-	var tween := Engine.get_main_loop().root.create_tween()
+	var tween: Tween = Engine.get_main_loop().root.create_tween()
 	# StyleBoxFlat properties are not directly tweenable objects in all Godot versions.
 	# Use a callback approach.
 	var elapsed := 0.0
@@ -119,7 +119,7 @@ func scale_in(node: CanvasItem, duration: float = Tokens.TIME["normal"]) -> void
 	_kill_existing(node)
 	node.scale = Vector2(0.92, 0.92)
 	node.modulate.a = 0.0
-	var tween := node.create_tween()
+	var tween: Tween = node.create_tween()
 	tween.set_trans(Tween.TRANS_BACK)
 	tween.set_ease(Tween.EASE_OUT)
 	tween.set_parallel()
@@ -131,7 +131,7 @@ func scale_out(node: CanvasItem, duration: float = Tokens.TIME["fast"], then_fre
 	if node == null or not is_instance_valid(node):
 		return
 	_kill_existing(node)
-	var tween := node.create_tween()
+	var tween: Tween = node.create_tween()
 	tween.set_trans(Tween.TRANS_QUAD)
 	tween.set_ease(Tween.EASE_IN)
 	tween.set_parallel()
@@ -150,7 +150,7 @@ func pulse(node: CanvasItem, intensity: float = 0.05, duration: float = 0.6) -> 
 		return null
 	_kill_existing(node)
 	var base_scale := node.scale
-	var tween := node.create_tween()
+	var tween: Tween = node.create_tween()
 	tween.set_trans(Tween.TRANS_SINE)
 	tween.set_ease(Tween.EASE_IN_OUT)
 	tween.tween_property(node, "scale", base_scale * (1.0 + intensity), duration * 0.5)

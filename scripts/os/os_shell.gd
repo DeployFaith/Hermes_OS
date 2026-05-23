@@ -1120,13 +1120,13 @@ func _desktop_icon_button(entry: Dictionary) -> Button:
 	button.gui_input.connect(_on_desktop_icon_gui_input.bind(button, bool(str(entry.get("type", "file")) == "dir")))
 	if DisplayServer.get_name() != "headless":
 		button.mouse_entered.connect(func() -> void:
-			var tw := button.create_tween()
+			var tw: Tween = button.create_tween()
 			tw.set_trans(Tween.TRANS_QUAD)
 			tw.set_ease(Tween.EASE_OUT)
 			tw.tween_property(button, "scale", Vector2(1.05, 1.05), Tokens.TIME["fast"])
 		)
 		button.mouse_exited.connect(func() -> void:
-			var tw := button.create_tween()
+			var tw: Tween = button.create_tween()
 			tw.set_trans(Tween.TRANS_QUAD)
 			tw.set_ease(Tween.EASE_OUT)
 			tw.tween_property(button, "scale", Vector2(1.0, 1.0), Tokens.TIME["fast"])
@@ -4503,13 +4503,13 @@ func _button(text_value: String, min_size: Vector2) -> Button:
 	# Smooth hover scale (disabled in headless)
 	if DisplayServer.get_name() != "headless":
 		button.mouse_entered.connect(func() -> void:
-			var tw := button.create_tween()
+			var tw: Tween = button.create_tween()
 			tw.set_trans(Tween.TRANS_QUAD)
 			tw.set_ease(Tween.EASE_OUT)
 			tw.tween_property(button, "scale", Vector2(1.02, 1.02), Tokens.TIME["fast"])
 		)
 		button.mouse_exited.connect(func() -> void:
-			var tw := button.create_tween()
+			var tw: Tween = button.create_tween()
 			tw.set_trans(Tween.TRANS_QUAD)
 			tw.set_ease(Tween.EASE_OUT)
 			tw.tween_property(button, "scale", Vector2(1.0, 1.0), Tokens.TIME["fast"])
@@ -4539,13 +4539,13 @@ func _icon_button(icon_name: String, min_size: Vector2) -> Button:
 	# Smooth hover scale (disabled in headless)
 	if DisplayServer.get_name() != "headless":
 		button.mouse_entered.connect(func() -> void:
-			var tw := button.create_tween()
+			var tw: Tween = button.create_tween()
 			tw.set_trans(Tween.TRANS_QUAD)
 			tw.set_ease(Tween.EASE_OUT)
 			tw.tween_property(button, "scale", Vector2(1.06, 1.06), Tokens.TIME["fast"])
 		)
 		button.mouse_exited.connect(func() -> void:
-			var tw := button.create_tween()
+			var tw: Tween = button.create_tween()
 			tw.set_trans(Tween.TRANS_QUAD)
 			tw.set_ease(Tween.EASE_OUT)
 			tw.tween_property(button, "scale", Vector2(1.0, 1.0), Tokens.TIME["fast"])
