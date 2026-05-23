@@ -1,228 +1,96 @@
 class_name IconAtlas
 extends RefCounted
 
-const Tokens := preload("res://scripts/os/design_tokens.gd")
+const BASE_SVG_SIZE: float = 24.0
+
+const ICON_PATHS: Dictionary = {
+	"folder": "res://assets/icons/folder.svg",
+	"files": "res://assets/icons/folder.svg",
+	"file": "res://assets/icons/file-text.svg",
+	"text": "res://assets/icons/file-text.svg",
+	"notes": "res://assets/icons/sticky-note.svg",
+	"browser": "res://assets/icons/globe.svg",
+	"web": "res://assets/icons/globe.svg",
+	"network": "res://assets/icons/globe.svg",
+	"terminal": "res://assets/icons/terminal.svg",
+	"console": "res://assets/icons/terminal.svg",
+	"code": "res://assets/icons/code-2.svg",
+	"programming": "res://assets/icons/code-2.svg",
+	"settings": "res://assets/icons/settings.svg",
+	"system": "res://assets/icons/settings.svg",
+	"start": "res://assets/icons/grid-2x2.svg",
+	"home": "res://assets/icons/home.svg",
+	"wifi": "res://assets/icons/wifi.svg",
+	"volume": "res://assets/icons/volume-2.svg",
+	"bluetooth": "res://assets/icons/bluetooth.svg",
+	"battery": "res://assets/icons/battery.svg",
+	"notification": "res://assets/icons/bell.svg",
+	"bell": "res://assets/icons/bell.svg",
+	"session": "res://assets/icons/power.svg",
+	"power": "res://assets/icons/power.svg",
+	"lock": "res://assets/icons/lock.svg",
+	"user": "res://assets/icons/user.svg",
+	"account": "res://assets/icons/user.svg",
+	"placeholder": "res://assets/icons/circle-help.svg",
+}
 
 var _cache: Dictionary = {}
+var _missing_warnings: Dictionary = {}
 
 func get_icon(name: String, size: int = 20) -> Texture2D:
+	var clean_name: String = name.strip_edges().to_lower()
 	var clean_size: int = maxi(size, 12)
-	var key: String = "%s_%d" % [name.to_lower(), clean_size]
+	var key: String = "%s_%d" % [clean_name, clean_size]
 	if _cache.has(key):
 		return _cache[key]
-	var tex: Texture2D = _make_icon(name.to_lower(), clean_size)
+
+	var tex: Texture2D = _load_asset_icon(clean_name, clean_size)
+	if tex == null:
+		_warn_missing(clean_name)
+		tex = _make_fallback_icon(clean_size)
 	_cache[key] = tex
 	return tex
 
-func _make_icon(name: String, size: int) -> Texture2D:
-	var image: Image = Image.create(size, size, false, Image.FORMAT_RGBA8)
-	image.fill(Color(0.0, 0.0, 0.0, 0.0))
+func has_asset(name: String) -> bool:
+	var clean_name: String = name.strip_edges().to_lower()
+	var path: String = str(ICON_PATHS.get(clean_name, ""))
+	return path != "" and FileAccess.file_exists(path)
 
-	var primary: Color = _icon_color(name)
-	var accent: Color = Tokens.alpha(Tokens.WHITE, 0.92)
-	var pad: int = maxi(1, int(size * 0.10))
-	var body: Rect2i = Rect2i(pad, pad, size - pad * 2, size - pad * 2)
-	if body.size.x < 4 or body.size.y < 4:
-		body = Rect2i(1, 1, maxi(size - 2, 2), maxi(size - 2, 2))
-
-	_draw_glyph(image, name, body, primary, accent)
+func _load_asset_icon(name: String, size: int) -> Texture2D:
+	var path: String = str(ICON_PATHS.get(name, ""))
+	if path == "" or not FileAccess.file_exists(path):
+		return null
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return null
+	var svg_text: String = file.get_as_text()
+	var image: Image = Image.new()
+	var scale: float = float(size) / BASE_SVG_SIZE
+	var err: Error = image.load_svg_from_string(svg_text, scale)
+	if err != OK or image.is_empty():
+		return null
 	return ImageTexture.create_from_image(image)
 
-func _draw_glyph(image: Image, name: String, rect: Rect2i, primary: Color, accent: Color) -> void:
-	match name:
-		"folder", "files":
-			_draw_folder_glyph(image, rect, primary, accent)
-		"file", "text":
-			_draw_file_glyph(image, rect, primary, accent)
-		"notes":
-			_draw_notes_glyph(image, rect, primary, accent)
-		"browser", "web", "wifi", "network":
-			_draw_browser_glyph(image, rect, primary, accent)
-		"terminal", "console":
-			_draw_terminal_glyph(image, rect, primary, accent)
-		"code", "programming":
-			_draw_code_glyph(image, rect, primary, accent)
-		"settings", "system":
-			_draw_settings_glyph(image, rect, primary, accent)
-		"start", "home":
-			_draw_home_glyph(image, rect, primary, accent)
-		"notification":
-			_draw_notification_glyph(image, rect, primary, accent)
-		"battery", "power":
-			_draw_battery_glyph(image, rect, primary, accent)
-		_:
-			_draw_file_glyph(image, rect, primary, accent)
-
-func _draw_folder_glyph(image: Image, rect: Rect2i, primary: Color, accent: Color) -> void:
-	var tab_w: int = maxi(4, int(rect.size.x * 0.40))
-	var tab_h: int = maxi(3, int(rect.size.y * 0.22))
-	var tab_x: int = rect.position.x + maxi(1, int(rect.size.x * 0.08))
-	var tab_y: int = rect.position.y + maxi(1, int(rect.size.y * 0.12))
-	image.fill_rect(Rect2i(tab_x, tab_y, tab_w, tab_h), Tokens.alpha(primary, 0.85))
-	var body_y: int = tab_y + tab_h - 1
-	var body_h: int = rect.position.y + rect.size.y - body_y
-	image.fill_rect(Rect2i(rect.position.x, body_y, rect.size.x, body_h), primary)
-	image.fill_rect(Rect2i(rect.position.x, body_y, rect.size.x, 1), accent)
-
-func _draw_file_glyph(image: Image, rect: Rect2i, primary: Color, accent: Color) -> void:
-	var x: int = rect.position.x + maxi(2, int(rect.size.x * 0.18))
-	var y: int = rect.position.y + maxi(2, int(rect.size.y * 0.12))
-	var w: int = rect.size.x - maxi(4, int(rect.size.x * 0.30))
-	var h: int = rect.size.y - maxi(4, int(rect.size.y * 0.20))
-	if w < 5 or h < 5:
+func _warn_missing(name: String) -> void:
+	if _missing_warnings.has(name):
 		return
-	image.fill_rect(Rect2i(x, y, w, h), primary)
-	var fold: int = maxi(2, int(mini(w, h) * 0.28))
-	image.fill_rect(Rect2i(x + w - fold, y, fold, fold), Tokens.alpha(accent, 0.95))
-	image.fill_rect(Rect2i(x + 1, y + 2, maxi(w - fold - 2, 1), 1), accent)
+	_missing_warnings[name] = true
+	push_warning("Missing HermesOS icon asset for key: " + name)
 
-func _draw_notes_glyph(image: Image, rect: Rect2i, primary: Color, accent: Color) -> void:
-	_draw_file_glyph(image, rect, primary, accent)
-	var left: int = rect.position.x + maxi(3, int(rect.size.x * 0.24))
-	var right: int = rect.position.x + rect.size.x - maxi(3, int(rect.size.x * 0.22))
-	var y: int = rect.position.y + maxi(4, int(rect.size.y * 0.40))
-	var step: int = maxi(2, int(rect.size.y * 0.14))
-	for i in range(3):
-		var yy: int = y + i * step
-		image.fill_rect(Rect2i(left, yy, maxi(right - left, 2), 1), accent)
-
-func _draw_browser_glyph(image: Image, rect: Rect2i, primary: Color, accent: Color) -> void:
-	var x: int = rect.position.x + maxi(2, int(rect.size.x * 0.14))
-	var y: int = rect.position.y + maxi(2, int(rect.size.y * 0.18))
-	var w: int = rect.size.x - maxi(4, int(rect.size.x * 0.28))
-	var h: int = rect.size.y - maxi(4, int(rect.size.y * 0.30))
-	if w < 5 or h < 5:
-		return
-	image.fill_rect(Rect2i(x, y, w, h), primary)
-	var bar_h: int = maxi(2, int(h * 0.24))
-	image.fill_rect(Rect2i(x + 1, y + 1, w - 2, bar_h), accent)
-	var dot_y: int = y + 1 + bar_h / 2
-	image.fill_rect(Rect2i(x + 3, dot_y, 1, 1), primary)
-	image.fill_rect(Rect2i(x + 6, dot_y, 1, 1), primary)
-
-func _draw_terminal_glyph(image: Image, rect: Rect2i, primary: Color, accent: Color) -> void:
-	# Draw a compact, readable "</>" style glyph for small category icons (16px)
-	var x: int = rect.position.x + maxi(1, int(rect.size.x * 0.14))
-	var y: int = rect.position.y + maxi(1, int(rect.size.y * 0.18))
-	var w: int = rect.size.x - maxi(2, int(rect.size.x * 0.28))
-	var h: int = rect.size.y - maxi(2, int(rect.size.y * 0.30))
-	if w < 6 or h < 6:
-		return
-
-	# frame
-	image.fill_rect(Rect2i(x, y, w, h), primary)
-
-	# left chevron <
-	var cy: int = y + h / 2
-	var lx: int = x + maxi(1, int(w * 0.20))
-	image.fill_rect(Rect2i(lx + 1, cy - 2, 1, 1), accent)
-	image.fill_rect(Rect2i(lx, cy - 1, 1, 1), accent)
-	image.fill_rect(Rect2i(lx + 1, cy, 1, 1), accent)
-
-	# slash /
-	var sx: int = x + w / 2
-	image.fill_rect(Rect2i(sx - 1, cy + 1, 1, 1), accent)
-	image.fill_rect(Rect2i(sx, cy, 1, 1), accent)
-	image.fill_rect(Rect2i(sx + 1, cy - 1, 1, 1), accent)
-
-	# right chevron >
-	var rx: int = x + w - maxi(2, int(w * 0.22))
-	image.fill_rect(Rect2i(rx - 1, cy - 2, 1, 1), accent)
-	image.fill_rect(Rect2i(rx, cy - 1, 1, 1), accent)
-	image.fill_rect(Rect2i(rx - 1, cy, 1, 1), accent)
-
-
-func _draw_code_glyph(image: Image, rect: Rect2i, primary: Color, accent: Color) -> void:
-	var cy: int = rect.position.y + rect.size.y / 2
-	var lx: int = rect.position.x + maxi(1, int(rect.size.x * 0.22))
-	var rx: int = rect.position.x + rect.size.x - maxi(2, int(rect.size.x * 0.24))
-	# <
-	image.fill_rect(Rect2i(lx + 1, cy - 2, 1, 1), primary)
-	image.fill_rect(Rect2i(lx, cy - 1, 1, 1), primary)
-	image.fill_rect(Rect2i(lx + 1, cy, 1, 1), primary)
-	# /
-	var sx: int = rect.position.x + rect.size.x / 2
-	image.fill_rect(Rect2i(sx - 1, cy + 1, 1, 1), accent)
-	image.fill_rect(Rect2i(sx, cy, 1, 1), accent)
-	image.fill_rect(Rect2i(sx + 1, cy - 1, 1, 1), accent)
-	# >
-	image.fill_rect(Rect2i(rx - 1, cy - 2, 1, 1), primary)
-	image.fill_rect(Rect2i(rx, cy - 1, 1, 1), primary)
-	image.fill_rect(Rect2i(rx - 1, cy, 1, 1), primary)
-
-func _draw_settings_glyph(image: Image, rect: Rect2i, primary: Color, accent: Color) -> void:
-	var cx: int = rect.position.x + rect.size.x / 2
-	var cy: int = rect.position.y + rect.size.y / 2
-	image.fill_rect(Rect2i(cx - 1, cy - 4, 2, 8), primary)
-	image.fill_rect(Rect2i(cx - 4, cy - 1, 8, 2), primary)
-	image.fill_rect(Rect2i(cx - 3, cy - 3, 6, 6), Tokens.alpha(primary, 0.65))
-	image.fill_rect(Rect2i(cx - 1, cy - 1, 2, 2), accent)
-
-func _draw_home_glyph(image: Image, rect: Rect2i, primary: Color, accent: Color) -> void:
-	var x: int = rect.position.x + maxi(2, int(rect.size.x * 0.18))
-	var y: int = rect.position.y + maxi(2, int(rect.size.y * 0.28))
-	var w: int = rect.size.x - maxi(4, int(rect.size.x * 0.36))
-	var h: int = rect.size.y - maxi(4, int(rect.size.y * 0.34))
-	if w < 5 or h < 5:
-		return
-	image.fill_rect(Rect2i(x, y + 2, w, h - 2), primary)
-	image.fill_rect(Rect2i(x + 1, y + 1, w - 2, 1), accent)
-	image.fill_rect(Rect2i(x + w / 2 - 1, y + h - 4, 2, 3), accent)
-
-func _draw_notification_glyph(image: Image, rect: Rect2i, primary: Color, accent: Color) -> void:
-	var x: int = rect.position.x + maxi(2, int(rect.size.x * 0.28))
-	var y: int = rect.position.y + maxi(2, int(rect.size.y * 0.20))
-	var w: int = rect.size.x - maxi(4, int(rect.size.x * 0.56))
-	var h: int = rect.size.y - maxi(4, int(rect.size.y * 0.34))
-	if w < 4 or h < 5:
-		return
-	image.fill_rect(Rect2i(x, y, w, h), primary)
-	image.fill_rect(Rect2i(x + 1, y + 1, maxi(w - 2, 1), 1), accent)
-	image.fill_rect(Rect2i(x + w / 2, y + h, 1, 1), accent)
-
-func _draw_battery_glyph(image: Image, rect: Rect2i, primary: Color, accent: Color) -> void:
-	var x: int = rect.position.x + maxi(2, int(rect.size.x * 0.18))
-	var y: int = rect.position.y + maxi(2, int(rect.size.y * 0.34))
-	var w: int = rect.size.x - maxi(4, int(rect.size.x * 0.30))
-	var h: int = rect.size.y - maxi(4, int(rect.size.y * 0.56))
-	if w < 5 or h < 4:
-		return
-	image.fill_rect(Rect2i(x, y, w, h), primary)
-	image.fill_rect(Rect2i(x + w, y + h / 3, 1, maxi(1, h / 3)), primary)
-	image.fill_rect(Rect2i(x + 1, y + 1, maxi(1, w - 2), maxi(1, h - 2)), accent)
-
-func _icon_color(name: String) -> Color:
-	match name:
-		"folder", "files":
-			return Color("c7a45b")
-		"file", "text":
-			return Color("d7dee9")
-		"notes":
-			return Color("8cc2ff")
-		"start", "home":
-			return Color("a9b7ff")
-		"browser", "web", "wifi", "network":
-			return Tokens.ACCENT
-		"terminal", "console":
-			return Color("7ab88a")
-		"code", "programming":
-			return Color("8db0e8")
-		"notification":
-			return Color("a98fff")
-		"battery", "power":
-			return Color("7ab88a")
-		"user", "account":
-			return Color("8db0e8")
-		"settings", "system":
-			return Color("a4b0c8")
-		"placeholder":
-			return Color("c0c8d8")
-		"close":
-			return Tokens.ERROR
-		"minimize":
-			return Tokens.WARNING
-		"maximize":
-			return Tokens.SUCCESS
-		_:
-			return Color("c0c8d8")
-
+func _make_fallback_icon(size: int) -> Texture2D:
+	var image: Image = Image.create(size, size, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0, 0, 0, 0))
+	var pad: int = maxi(1, int(size * 0.16))
+	var rect: Rect2i = Rect2i(pad, pad, size - pad * 2, size - pad * 2)
+	var bg: Color = Color(0.85, 0.25, 0.35, 0.92)
+	var fg: Color = Color(1, 1, 1, 0.95)
+	image.fill_rect(rect, bg)
+	for i in range(rect.size.x):
+		var x1: int = rect.position.x + i
+		var y1: int = rect.position.y + i
+		var y2: int = rect.position.y + rect.size.y - 1 - i
+		if y1 >= rect.position.y and y1 < rect.position.y + rect.size.y:
+			image.set_pixel(x1, y1, fg)
+		if y2 >= rect.position.y and y2 < rect.position.y + rect.size.y:
+			image.set_pixel(x1, y2, fg)
+	return ImageTexture.create_from_image(image)
