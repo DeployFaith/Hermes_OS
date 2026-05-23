@@ -40,6 +40,8 @@ func _draw_glyph(image: Image, name: String, rect: Rect2i, primary: Color, accen
 			_draw_browser_glyph(image, rect, primary, accent)
 		"terminal", "console":
 			_draw_terminal_glyph(image, rect, primary, accent)
+		"code", "programming":
+			_draw_code_glyph(image, rect, primary, accent)
 		"settings", "system":
 			_draw_settings_glyph(image, rect, primary, accent)
 		"start", "home":
@@ -129,6 +131,25 @@ func _draw_terminal_glyph(image: Image, rect: Rect2i, primary: Color, accent: Co
 	image.fill_rect(Rect2i(rx, cy - 1, 1, 1), accent)
 	image.fill_rect(Rect2i(rx - 1, cy, 1, 1), accent)
 
+
+func _draw_code_glyph(image: Image, rect: Rect2i, primary: Color, accent: Color) -> void:
+	var cy: int = rect.position.y + rect.size.y / 2
+	var lx: int = rect.position.x + maxi(1, int(rect.size.x * 0.22))
+	var rx: int = rect.position.x + rect.size.x - maxi(2, int(rect.size.x * 0.24))
+	# <
+	image.fill_rect(Rect2i(lx + 1, cy - 2, 1, 1), primary)
+	image.fill_rect(Rect2i(lx, cy - 1, 1, 1), primary)
+	image.fill_rect(Rect2i(lx + 1, cy, 1, 1), primary)
+	# /
+	var sx: int = rect.position.x + rect.size.x / 2
+	image.fill_rect(Rect2i(sx - 1, cy + 1, 1, 1), accent)
+	image.fill_rect(Rect2i(sx, cy, 1, 1), accent)
+	image.fill_rect(Rect2i(sx + 1, cy - 1, 1, 1), accent)
+	# >
+	image.fill_rect(Rect2i(rx - 1, cy - 2, 1, 1), primary)
+	image.fill_rect(Rect2i(rx, cy - 1, 1, 1), primary)
+	image.fill_rect(Rect2i(rx - 1, cy, 1, 1), primary)
+
 func _draw_settings_glyph(image: Image, rect: Rect2i, primary: Color, accent: Color) -> void:
 	var cx: int = rect.position.x + rect.size.x / 2
 	var cy: int = rect.position.y + rect.size.y / 2
@@ -184,6 +205,8 @@ func _icon_color(name: String) -> Color:
 			return Tokens.ACCENT
 		"terminal", "console":
 			return Color("7ab88a")
+		"code", "programming":
+			return Color("8db0e8")
 		"notification":
 			return Color("a98fff")
 		"battery", "power":
@@ -202,3 +225,4 @@ func _icon_color(name: String) -> Color:
 			return Tokens.SUCCESS
 		_:
 			return Color("c0c8d8")
+

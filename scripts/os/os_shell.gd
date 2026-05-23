@@ -1631,7 +1631,7 @@ func _category_icon(category_name: String) -> Texture2D:
 		"office":
 			return _icon_atlas.get_icon("notes", 16)
 		"programming":
-			return _icon_atlas.get_icon("terminal", 16)
+			return _icon_atlas.get_icon("code", 16)
 		"system":
 			return _icon_atlas.get_icon("settings", 16)
 		"administration":
