@@ -591,7 +591,7 @@ func _build_launcher() -> void:
 
 	var categories: Array[String] = ["all", "Favorites", "Internet", "Office", "Programming", "System", "Administration"]
 	for category_name in categories:
-		var category_button := _button("  " + category_name.capitalize(), Vector2(0, 30))
+		var category_button := _button("  " + category_name.capitalize(), Vector2(0, 34))
 		category_button.icon = _category_icon(category_name)
 		category_button.expand_icon = true
 		category_button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -1606,39 +1606,39 @@ func _app_icon(app_id: String) -> Texture2D:
 	_ensure_icon_atlas()
 	match app_id:
 		"files":
-			return _icon_atlas.get_icon("folder", 20)
+			return _icon_atlas.get_icon("folder", 22)
 		"notes":
-			return _icon_atlas.get_icon("notes", 20)
+			return _icon_atlas.get_icon("notes", 22)
 		"text":
-			return _icon_atlas.get_icon("file", 20)
+			return _icon_atlas.get_icon("file", 22)
 		"browser":
-			return _icon_atlas.get_icon("browser", 20)
+			return _icon_atlas.get_icon("browser", 22)
 		"console":
-			return _icon_atlas.get_icon("terminal", 20)
+			return _icon_atlas.get_icon("terminal", 22)
 		"system":
-			return _icon_atlas.get_icon("settings", 20)
+			return _icon_atlas.get_icon("settings", 22)
 		_:
-			return _icon_atlas.get_icon("placeholder", 20)
+			return _icon_atlas.get_icon("placeholder", 22)
 
 func _category_icon(category_name: String) -> Texture2D:
 	_ensure_icon_atlas()
 	match category_name.to_lower():
 		"all":
-			return _icon_atlas.get_icon("start", 20)
+			return _icon_atlas.get_icon("start", 22)
 		"favorites":
-			return _icon_atlas.get_icon("home", 20)
+			return _icon_atlas.get_icon("home", 22)
 		"internet":
-			return _icon_atlas.get_icon("browser", 20)
+			return _icon_atlas.get_icon("browser", 22)
 		"office":
-			return _icon_atlas.get_icon("notes", 20)
+			return _icon_atlas.get_icon("notes", 22)
 		"programming":
 			return _icon_atlas.get_icon("code", 22)
 		"system":
-			return _icon_atlas.get_icon("settings", 20)
+			return _icon_atlas.get_icon("settings", 22)
 		"administration":
-			return _icon_atlas.get_icon("settings", 20)
+			return _icon_atlas.get_icon("settings", 22)
 		_:
-			return _icon_atlas.get_icon("placeholder", 20)
+			return _icon_atlas.get_icon("placeholder", 22)
 
 func _open_account_settings() -> void:
 	_hide_launcher()
