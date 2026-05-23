@@ -6,20 +6,20 @@ const Tokens := preload("res://scripts/os/design_tokens.gd")
 var _cache: Dictionary = {}
 
 func get_icon(name: String, size: int = 20) -> Texture2D:
-	var key := "%s_%d" % [name, size]
+	var key: String = "%s_%d" % [name, size]
 	if _cache.has(key):
 		return _cache[key]
-	var tex := _make_icon(name, size)
+	var tex: Texture2D = _make_icon(name, size)
 	_cache[key] = tex
 	return tex
 
 func _make_icon(name: String, size: int) -> Texture2D:
-	var image := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	var image: Image = Image.create(size, size, false, Image.FORMAT_RGBA8)
 	image.fill(Color(0, 0, 0, 0))
 
-	var color := _icon_color(name)
-	var pad := max(2, int(size * 0.18))
-	var rect := Rect2i(pad, pad, size - pad * 2, size - pad * 2)
+	var color: Color = _icon_color(name)
+	var pad: int = maxi(2, int(size * 0.18))
+	var rect: Rect2i = Rect2i(pad, pad, size - pad * 2, size - pad * 2)
 	image.fill_rect(rect, color)
 
 	# subtle top highlight
