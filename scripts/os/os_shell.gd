@@ -16,7 +16,7 @@ var _app_order: Array[String] = []
 var _open_windows: Dictionary = {}
 var _task_buttons: Dictionary = {}
 var _active_window: OSWindow
-var _window_cascade := 0
+var _window_cascade: int = 0
 var _fs: OSFileSystem
 
 var _desktop_bg: TextureRect
@@ -28,19 +28,19 @@ var _desktop_actions_separator: HSeparator
 var _desktop_rename_input: LineEdit
 var _desktop_rename_button: Button
 var _desktop_delete_button: Button
-var _desktop_selected_path := ""
+var _desktop_selected_path: String = ""
 var _desktop_selected_paths: Dictionary = {}
 var _desktop_icon_positions: Dictionary = {}
 var _desktop_file_icon: Texture2D
 var _desktop_folder_icon: Texture2D
 var _desktop_drag_rect: ColorRect
-var _desktop_drag_selecting := false
-var _desktop_drag_start := Vector2.ZERO
-var _desktop_drag_current := Vector2.ZERO
+var _desktop_drag_selecting: bool = false
+var _desktop_drag_start: Vector2 = Vector2.ZERO
+var _desktop_drag_current: Vector2 = Vector2.ZERO
 var _desktop_dragging_icon: Button
-var _desktop_drag_icon_offset := Vector2.ZERO
-var _desktop_drag_icon_moved := false
-var _desktop_highlight_color := Tokens.alpha(Tokens.ACCENT, 0.25)
+var _desktop_drag_icon_offset: Vector2 = Vector2.ZERO
+var _desktop_drag_icon_moved: bool = false
+var _desktop_highlight_color: Color = Tokens.alpha(Tokens.ACCENT, 0.25)
 var _window_layer: Control
 var _taskbar_windows: HBoxContainer
 var _top_panel: Panel
@@ -56,10 +56,10 @@ var _launcher_scroll: ScrollContainer
 var _launcher_list: VBoxContainer
 var _launcher_category_list: VBoxContainer
 var _launcher_footer: HBoxContainer
-var _launcher_filter_text := ""
-var _launcher_category_filter := "all"
+var _launcher_filter_text: String = ""
+var _launcher_category_filter: String = "all"
 var _launcher_buttons: Dictionary = {}
-var _launcher_selected_app_id := ""
+var _launcher_selected_app_id: String = ""
 var _session_menu: Panel
 var _auth_overlay: Control
 var _alt_tab_overlay: Panel
@@ -73,9 +73,9 @@ var _notification_layer: Control
 var _notification_history_panel: Panel
 var _notification_list: VBoxContainer
 var _notifications: Array[Dictionary] = []
-var _notification_sequence := 0
-var _session_active := false
-var _wallpaper_index := 0
+var _notification_sequence: int = 0
+var _session_active: bool = false
+var _wallpaper_index: int = 0
 var _gradient_textures: Array[GradientTexture2D] = []
 var _files_app_state: Dictionary = {}
 var _files_app_ui: Dictionary = {}
