@@ -12,6 +12,8 @@ static var BORDER := Color("2d3140")
 static var BORDER_ACTIVE := Color("3f4558")
 static var TEXT := Color("e8eaf0")
 static var TEXT_MUTED := Color("8b92a8")
+# Back-compat alias used in existing shell code
+static var MUTED := TEXT_MUTED
 static var TEXT_DISABLED := Color("5a6075")
 static var ACCENT := Color("7b9dd6")
 static var ACCENT_HOVER := Color("9ab8e8")

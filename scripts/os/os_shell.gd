@@ -602,7 +602,10 @@ func _build_launcher() -> void:
 
 	var categories: Array[String] = ["all", "Favorites", "Internet", "Office", "Programming", "System", "Administration"]
 	for category_name in categories:
-		var category_button := _button(_category_icon(category_name) + "  " + category_name.capitalize(), Vector2(0, 30))
+		var category_button := _button("  " + category_name.capitalize(), Vector2(0, 30))
+		category_button.icon = _category_icon(category_name)
+		category_button.expand_icon = true
+		category_button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
 		category_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		category_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		category_button.pressed.connect(func() -> void:
