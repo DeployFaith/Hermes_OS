@@ -126,6 +126,7 @@ const LAUNCHER_MIN_WIDTH := 340.0
 const LAUNCHER_MAX_WIDTH := 520.0
 const LAUNCHER_MIN_HEIGHT := 280.0
 const LAUNCHER_MARGIN := 8.0
+const START_MENU_ICON_SIZE := 22
 const DESKTOP_ICON_SIZE := Vector2(118, 86)
 const DESKTOP_ICON_GAP := Vector2(14, 10)
 const DESKTOP_ICON_MARGIN := Vector2(14, 14)
@@ -670,7 +671,8 @@ func _build_launcher() -> void:
 	for category_name in categories:
 		var category_button := _button("  " + category_name.capitalize(), Vector2(0, 34))
 		category_button.icon = _category_icon(category_name)
-		category_button.expand_icon = true
+		category_button.expand_icon = false
+		category_button.add_theme_constant_override("icon_max_width", START_MENU_ICON_SIZE)
 		category_button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
 		category_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		category_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -1667,7 +1669,8 @@ func _app_button(app_id: String, min_size: Vector2) -> Button:
 	var button_text := str(app["title"]) if subtitle == "" else "%s\n%s" % [str(app["title"]), subtitle]
 	var button := _button(button_text, min_size)
 	button.icon = _app_icon(app_id)
-	button.expand_icon = true
+	button.expand_icon = false
+	button.add_theme_constant_override("icon_max_width", START_MENU_ICON_SIZE)
 	button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	button.custom_minimum_size.y = maxf(button.custom_minimum_size.y, 48.0)
 	button.tooltip_text = "Open " + str(app["title"])
@@ -1680,42 +1683,44 @@ func _app_button(app_id: String, min_size: Vector2) -> Button:
 	return button
 
 func _app_icon(app_id: String) -> Texture2D:
-	_ensure_icon_atlas()
 	match app_id:
 		"files":
-			return _icon_atlas.get_icon("folder", 22)
+			return _start_menu_icon("folder")
 		"notes":
-			return _icon_atlas.get_icon("notes", 22)
+			return _start_menu_icon("notes")
 		"text":
-			return _icon_atlas.get_icon("file", 22)
+			return _start_menu_icon("file")
 		"browser":
-			return _icon_atlas.get_icon("browser", 22)
+			return _start_menu_icon("browser")
 		"console":
-			return _icon_atlas.get_icon("terminal", 22)
+			return _start_menu_icon("terminal")
 		"system":
-			return _icon_atlas.get_icon("settings", 22)
+			return _start_menu_icon("settings")
 		_:
-			return _icon_atlas.get_icon("placeholder", 22)
+			return _start_menu_icon("placeholder")
+
+func _start_menu_icon(icon_name: String) -> Texture2D:
+	_ensure_icon_atlas()
+	return _icon_atlas.get_icon(icon_name, START_MENU_ICON_SIZE)
 
 func _category_icon(category_name: String) -> Texture2D:
-	_ensure_icon_atlas()
 	match category_name.to_lower():
 		"all":
-			return _icon_atlas.get_icon("start", 22)
+			return _start_menu_icon("start")
 		"favorites":
-			return _icon_atlas.get_icon("home", 22)
+			return _start_menu_icon("home")
 		"internet":
-			return _icon_atlas.get_icon("browser", 22)
+			return _start_menu_icon("browser")
 		"office":
-			return _icon_atlas.get_icon("notes", 22)
+			return _start_menu_icon("notes")
 		"programming":
-			return _icon_atlas.get_icon("code", 22)
+			return _start_menu_icon("code")
 		"system":
-			return _icon_atlas.get_icon("settings", 22)
+			return _start_menu_icon("settings")
 		"administration":
-			return _icon_atlas.get_icon("settings", 22)
+			return _start_menu_icon("settings")
 		_:
-			return _icon_atlas.get_icon("placeholder", 22)
+			return _start_menu_icon("placeholder")
 
 func _open_account_settings() -> void:
 	_hide_launcher()
