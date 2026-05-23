@@ -376,11 +376,11 @@ func _build_gradient_textures() -> void:
 	if not _gradient_textures.is_empty():
 		return
 	var presets: Array[Dictionary] = [
-		{"c1": Color("0a0e1a"), "c2": Color("1a1030")},   # Deep space
-		{"c1": Color("0a1a14"), "c2": Color("103028")},   # Forest
-		{"c1": Color("1a1010"), "c2": Color("301820")},   # Sunset
-		{"c1": Color("0d0f14"), "c2": Color("181a24")},   # Clean charcoal
-		{"c1": Color("0c0e16"), "c2": Color("141822")},   # Acrylic dark
+		{"c1": Color("0d0f14"), "c2": Color("0d0f14")},   # Default solid charcoal
+		{"c1": Color("10141d"), "c2": Color("10141d")},   # Solid slate
+		{"c1": Color("12111a"), "c2": Color("12111a")},   # Solid dusk
+		{"c1": Color("0f1312"), "c2": Color("0f1312")},   # Solid deep green
+		{"c1": Color("14100f"), "c2": Color("14100f")},   # Solid warm dark
 	]
 	for preset in presets:
 		var grad := Gradient.new()
@@ -4301,7 +4301,6 @@ func hermes_execute_operation(op: String, args: Dictionary) -> Dictionary:
 			_terminal_session_sequence += 1
 			var session_id := str(args.get("session_id", "t_%d" % _terminal_session_sequence))
 			_terminal_sessions[session_id] = {"cwd": cwd, "opened_at": int(Time.get_unix_time_from_system())}
-			launch_app("console")
 			_emit_hermes_event("terminal.session_opened", {"session_id": session_id, "cwd": cwd})
 			return {"ok": true, "result": {"session_id": session_id, "cwd": cwd}}
 		"terminal.run_command":
@@ -4322,14 +4321,12 @@ func hermes_execute_operation(op: String, args: Dictionary) -> Dictionary:
 				"exit_code": int(terminal_result.get("exit_code", 1))
 			})
 			_append_console_entry("[Hermes:" + (terminal_session_id if terminal_session_id != "" else "session") + "]", command, str(terminal_result.get("stdout", "")).strip_edges() if str(terminal_result.get("stdout", "")).strip_edges() != "" else str(terminal_result.get("stderr", "")).strip_edges())
-			launch_app("console")
 			return {"ok": true, "result": terminal_result}
 		"terminal.append_output":
 			var text := str(args.get("text", "")).strip_edges()
 			if text == "":
 				return {"ok": false, "error": HermesProtocol.make_error("MISSING_ARG", "terminal.append_output requires text")}
 			_append_hermes_terminal_output(text, str(args.get("source", "Hermes")))
-			launch_app("console")
 			return {"ok": true, "result": {"appended": true}}
 		_:
 			return {"ok": false, "error": HermesProtocol.make_error("UNKNOWN_OPERATION", "No registered operation: " + op)}
