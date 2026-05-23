@@ -550,6 +550,11 @@ func _bind_webview_signals() -> void:
 					return
 				var display := _resolver.display_url_from_backend(maybe)
 				_set_active_tab_url(display, not _navigating_history)
+				var tab := _active_tab_data()
+				var pending := str(tab.get("pending_navigation", ""))
+				if pending != "" and _resolver.normalize_user_url(pending) == _resolver.normalize_user_url(display):
+					_set_tab_load_state(LOAD_DONE)
+					_set_status_text("ready")
 			)
 	for sig_name in ["load_started", "navigation_started", "page_load_started"]:
 		if _webview.has_signal(sig_name):
@@ -896,9 +901,11 @@ func _poll_page_load_state() -> void:
 		if _load_poll_timer:
 			_load_poll_timer.stop()
 		return
+	var elapsed := Time.get_ticks_msec() - int(tab.get("started_msec", 0))
 	if _loading_bar:
 		_loading_bar.value = minf(_loading_bar.value + 0.07, 0.97)
-	var elapsed := Time.get_ticks_msec() - int(tab.get("started_msec", 0))
+		if _loading_bar.value >= 0.97 and elapsed > 2500:
+			_loading_bar.value = 0.995
 	if elapsed > 9000:
 		_set_tab_load_state(LOAD_STOPPED, "load timeout", false)
 		_set_status_text("stopped: load timeout")
