@@ -211,7 +211,7 @@ func _draw_wifi(image: Image, size: int) -> void:
 		for x in range(size):
 			var dx := x - int(s * 0.5)
 			var dy := y - int(s * 0.72)
-			var dist := absf(sqrtf(dx * dx + dy * dy) - r)
+			var dist := absf(sqrt(dx * dx + dy * dy) - r)
 			if dist < 1.5 and dy < 0:
 				image.set_pixel(x, y, c)
 	# Dot at bottom
@@ -281,7 +281,7 @@ func _draw_session(image: Image, size: int) -> void:
 		for x in range(size):
 			var dx := x - cx
 			var dy := y - cy
-			var dist := sqrtf(dx * dx + dy * dy)
+			var dist := sqrt(dx * dx + dy * dy)
 			if absf(dist - r) < 1.5 and dy < r * 0.6:
 				image.set_pixel(x, y, c)
 	# Vertical line
@@ -297,7 +297,7 @@ func _draw_search(image: Image, size: int) -> void:
 		for x in range(size):
 			var dx := x - cx
 			var dy := y - cy
-			var dist := sqrtf(dx * dx + dy * dy)
+			var dist := sqrt(dx * dx + dy * dy)
 			if absf(dist - r) < 1.5:
 				image.set_pixel(x, y, c)
 	# Handle

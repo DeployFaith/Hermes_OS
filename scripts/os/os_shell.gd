@@ -19,7 +19,7 @@ var _active_window: OSWindow
 var _window_cascade := 0
 var _fs: OSFileSystem
 
-var _desktop_bg: ColorRect
+var _desktop_bg: TextureRect
 var _desktop_layer: Control
 var _desktop_icons: Control
 var _desktop_context_menu: Panel
