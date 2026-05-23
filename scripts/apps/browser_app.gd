@@ -89,6 +89,14 @@ func _exit_tree() -> void:
 		_save_session()
 
 func prepare_for_close() -> void:
+	if _settings_panel:
+		_settings_panel.visible = false
+	if _diagnostics_panel:
+		_diagnostics_panel.visible = false
+	if _new_tab_page:
+		_show_new_tab_page()
+	if _content_host:
+		_content_host.visible = true
 	_teardown_embedded_webview()
 
 func _teardown_embedded_webview() -> void:
