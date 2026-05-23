@@ -83,9 +83,32 @@ func _ready() -> void:
 	_sync_active_tab_to_ui()
 
 func _exit_tree() -> void:
+	_teardown_embedded_webview()
 	if _session_save_timer and not _session_save_timer.is_stopped():
 		_session_save_timer.stop()
 		_save_session()
+
+func prepare_for_close() -> void:
+	_teardown_embedded_webview()
+
+func _teardown_embedded_webview() -> void:
+	if _webview == null or not is_instance_valid(_webview):
+		return
+	_record_webview_signal("teardown", "window closing")
+	if _webview is CanvasItem:
+		(_webview as CanvasItem).visible = false
+	if _webview.has_method("set_visible"):
+		_webview.call("set_visible", false)
+	if _webview.has_method("close_devtools"):
+		_webview.call("close_devtools")
+	if _webview.has_method("load_html"):
+		_webview.call("load_html", "")
+	elif _webview.has_method("set_url"):
+		_webview.call("set_url", "about:blank")
+	if _webview.get_parent() != null:
+		_webview.get_parent().remove_child(_webview)
+	_webview.queue_free()
+	_webview = null
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:

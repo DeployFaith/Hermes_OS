@@ -1344,6 +1344,7 @@ func _focus_window(window: OSWindow) -> void:
 func _on_window_close_requested(window: OSWindow) -> void:
 	var app_id := window.app_id
 	var window_id := _window_id(window)
+	_prepare_window_content_for_close(window)
 	if _active_window == window:
 		_active_window = null
 	if _open_windows.has(app_id):
@@ -1356,6 +1357,14 @@ func _on_window_close_requested(window: OSWindow) -> void:
 	window.queue_free()
 	_emit_hermes_event("window.closed", {"window_id": window_id, "app_id": app_id})
 	_emit_hermes_event("app.closed", {"app_id": app_id})
+
+func _prepare_window_content_for_close(root: Node) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	if root.has_method("prepare_for_close"):
+		root.call("prepare_for_close")
+	for child in root.get_children():
+		_prepare_window_content_for_close(child)
 
 func _on_window_minimize_requested(window: OSWindow) -> void:
 	if _active_window == window:
