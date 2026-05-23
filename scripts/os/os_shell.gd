@@ -1355,22 +1355,39 @@ func _on_window_close_requested(window: OSWindow) -> void:
 			button.queue_free()
 		_task_buttons.erase(app_id)
 	window.visible = false
-	var close_delay := 0.9 if app_id == "browser" else 0.12
-	var close_timer := get_tree().create_timer(close_delay)
-	close_timer.timeout.connect(func() -> void:
-		if is_instance_valid(window):
-			_prepare_window_content_for_close(window)
-			if app_id == "browser":
-				var finalize_timer := get_tree().create_timer(0.35)
-				finalize_timer.timeout.connect(func() -> void:
-					if is_instance_valid(window):
-						window.queue_free()
-				)
-			else:
+	if app_id == "browser":
+		_queue_browser_close_poll(window, Time.get_ticks_msec() + 1800)
+	else:
+		var close_timer := get_tree().create_timer(0.12)
+		close_timer.timeout.connect(func() -> void:
+			if is_instance_valid(window):
+				_prepare_window_content_for_close(window)
 				window.queue_free()
-	)
+		)
 	_emit_hermes_event("window.closed", {"window_id": window_id, "app_id": app_id})
 	_emit_hermes_event("app.closed", {"app_id": app_id})
+
+func _queue_browser_close_poll(window: OSWindow, deadline_msec: int) -> void:
+	var poll := get_tree().create_timer(0.05)
+	poll.timeout.connect(func() -> void:
+		if not is_instance_valid(window):
+			return
+		_prepare_window_content_for_close(window)
+		if _window_content_ready_for_close(window) or Time.get_ticks_msec() >= deadline_msec:
+			window.queue_free()
+		else:
+			_queue_browser_close_poll(window, deadline_msec)
+	)
+
+func _window_content_ready_for_close(root: Node) -> bool:
+	if root == null or not is_instance_valid(root):
+		return true
+	var ready := true
+	if root.has_method("is_native_teardown_complete"):
+		ready = bool(root.call("is_native_teardown_complete"))
+	for child in root.get_children():
+		ready = ready and _window_content_ready_for_close(child)
+	return ready
 
 func _prepare_window_content_for_close(root: Node) -> void:
 	if root == null or not is_instance_valid(root):

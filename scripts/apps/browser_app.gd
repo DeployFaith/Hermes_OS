@@ -52,6 +52,9 @@ var _last_status_text := ""
 var _last_window_title := ""
 var _close_confirm_dialog: ConfirmationDialog
 var _pending_close_tab_index := -1
+var _native_teardown_started := false
+var _native_teardown_done := false
+var _native_teardown_started_msec := 0
 
 var _tabs: Array[Dictionary] = []
 var _closed_tabs: Array[Dictionary] = []
@@ -97,10 +100,28 @@ func prepare_for_close() -> void:
 		_show_new_tab_page()
 	if _content_host:
 		_content_host.visible = true
-	_teardown_embedded_webview()
+	_begin_native_teardown()
 
-func _teardown_embedded_webview() -> void:
+func is_native_teardown_complete() -> bool:
+	if not _native_teardown_started:
+		return true
+	if _native_teardown_done:
+		return true
+	if Time.get_ticks_msec() - _native_teardown_started_msec > 1400:
+		_record_webview_signal("teardown_timeout", "fallback finalize")
+		_finalize_webview_node()
+		_native_teardown_done = true
+		return true
+	return false
+
+func _begin_native_teardown() -> void:
+	if _native_teardown_started:
+		return
+	_native_teardown_started = true
+	_native_teardown_done = false
+	_native_teardown_started_msec = Time.get_ticks_msec()
 	if _webview == null or not is_instance_valid(_webview):
+		_native_teardown_done = true
 		return
 	_record_webview_signal("teardown", "window closing")
 	_call_first(["stop", "stop_loading"])
@@ -115,8 +136,27 @@ func _teardown_embedded_webview() -> void:
 	if _webview.has_method("load_html"):
 		_webview.call("load_html", "")
 	_call_first(["load_url", "navigate", "load_uri", "set_url"], ["about:blank"])
-	if _webview.has_method("close"):
+	if _webview.has_method("destroy_webview"):
+		_webview.call("destroy_webview")
+		if _webview.has_method("is_destroyed") and bool(_webview.call("is_destroyed")):
+			_on_native_teardown_completed()
+	elif _webview.has_method("close"):
 		_webview.call("close")
+		_on_native_teardown_completed()
+	else:
+		_on_native_teardown_completed()
+
+func _on_native_teardown_completed() -> void:
+	if _native_teardown_done:
+		return
+	_native_teardown_done = true
+	_record_webview_signal("teardown_completed", "ok")
+	_finalize_webview_node()
+
+func _finalize_webview_node() -> void:
+	if _webview == null or not is_instance_valid(_webview):
+		_webview = null
+		return
 	if _webview.get_parent() != null:
 		_webview.get_parent().remove_child(_webview)
 	if _webview.has_method("free"):
@@ -124,6 +164,11 @@ func _teardown_embedded_webview() -> void:
 	else:
 		_webview.queue_free()
 	_webview = null
+
+func _teardown_embedded_webview() -> void:
+	_begin_native_teardown()
+	if not _native_teardown_done:
+		_on_native_teardown_completed()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -586,6 +631,11 @@ func _bind_webview_signals() -> void:
 				_set_tab_load_state(LOAD_FAILED, "webview signal")
 				_set_status_text("load failed")
 			)
+	if _webview.has_signal("teardown_completed"):
+		_webview.connect("teardown_completed", func() -> void:
+			_record_webview_signal("teardown_completed", "signal")
+			_on_native_teardown_completed()
+		)
 
 func _new_tab(url: String, activate := true) -> void:
 	var normalized := _resolver.normalize_user_url(url)
@@ -1420,6 +1470,11 @@ func debug_get_state() -> Dictionary:
 		"settings_panel_visible": _settings_panel != null and _settings_panel.visible,
 		"new_tab_page_visible": _new_tab_page != null and _new_tab_page.visible,
 		"diagnostics_panel_visible": _diagnostics_panel != null and _diagnostics_panel.visible,
+		"native_teardown": {
+			"started": _native_teardown_started,
+			"done": _native_teardown_done,
+			"started_msec": _native_teardown_started_msec
+		},
 		"bridge": _bridge_state_snapshot(),
 		"settings": {
 			"home_url": _home_url,
