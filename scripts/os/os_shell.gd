@@ -387,17 +387,19 @@ func _build_gradient_textures() -> void:
 		grad.add_point(0.0, preset["c1"])
 		grad.add_point(1.0, preset["c2"])
 		var tex := GradientTexture2D.new()
+		tex.width = 2048
+		tex.height = 2048
 		tex.gradient = grad
-		tex.fill = GradientTexture2D.FILL_RADIAL
-		tex.fill_from = Vector2(0.5, 0.3)
-		tex.fill_to = Vector2(0.5, 1.2)
+		tex.fill = GradientTexture2D.FILL_LINEAR
+		tex.fill_from = Vector2(0.0, 0.0)
+		tex.fill_to = Vector2(1.0, 1.0)
 		_gradient_textures.append(tex)
 
 func _build_ui() -> void:
 	_desktop_bg = TextureRect.new()
 	_desktop_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_desktop_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_desktop_bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_desktop_bg.stretch_mode = TextureRect.STRETCH_SCALE
 	_build_gradient_textures()
 	_desktop_bg.texture = _gradient_textures[_wallpaper_index]
 	add_child(_desktop_bg)
