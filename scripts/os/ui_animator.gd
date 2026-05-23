@@ -32,7 +32,7 @@ func fade_in(node: CanvasItem, duration: float = Tokens.TIME["normal"]) -> void:
 	tween.tween_property(node, "modulate:a", 1.0, duration)
 	_store_tween(node, tween)
 
-func fade_out(node: CanvasItem, duration: float = Tokens.TIME["fast"], then_free := false) -> void:
+func fade_out(node: CanvasItem, duration: float = Tokens.TIME["fast"], then_free: bool = false) -> void:
 	if node == null or not is_instance_valid(node):
 		return
 	_kill_existing(node)
@@ -64,7 +64,7 @@ func slide_from_bottom(node: Control, distance: float = 24.0, duration: float = 
 	if node == null or not is_instance_valid(node):
 		return
 	_kill_existing(node)
-	var base_y := node.position.y
+	var base_y: float = node.position.y
 	node.position.y = base_y + distance
 	node.modulate.a = 0.0
 	var tween: Tween = node.create_tween()
@@ -94,15 +94,15 @@ func shadow_lift(stylebox: StyleBoxFlat, from_shadow: Dictionary, to_shadow: Dic
 	var tween: Tween = Engine.get_main_loop().root.create_tween()
 	# StyleBoxFlat properties are not directly tweenable objects in all Godot versions.
 	# Use a callback approach.
-	var elapsed := 0.0
-	var timer := Timer.new()
+	var elapsed: float = 0.0
+	var timer: Timer = Timer.new()
 	timer.wait_time = 0.016
 	timer.one_shot = false
 	Engine.get_main_loop().root.add_child(timer)
 	timer.timeout.connect(func() -> void:
 		elapsed += timer.wait_time
-		var t := clampf(elapsed / duration, 0.0, 1.0)
-		var ease_t := 1.0 - pow(1.0 - t, 2.0)
+		var t: float = clampf(elapsed / duration, 0.0, 1.0)
+		var ease_t: float = 1.0 - pow(1.0 - t, 2.0)
 		stylebox.shadow_size = int(lerpf(float(from_shadow["size"]), float(to_shadow["size"]), ease_t))
 		stylebox.shadow_color = from_shadow["color"].lerp(to_shadow["color"], ease_t)
 		stylebox.shadow_offset = from_shadow["offset"].lerp(to_shadow["offset"], ease_t)
@@ -127,7 +127,7 @@ func scale_in(node: CanvasItem, duration: float = Tokens.TIME["normal"]) -> void
 	tween.tween_property(node, "modulate:a", 1.0, duration)
 	_store_tween(node, tween)
 
-func scale_out(node: CanvasItem, duration: float = Tokens.TIME["fast"], then_free := false) -> void:
+func scale_out(node: CanvasItem, duration: float = Tokens.TIME["fast"], then_free: bool = false) -> void:
 	if node == null or not is_instance_valid(node):
 		return
 	_kill_existing(node)
