@@ -8,6 +8,12 @@ const WRY_CLASS_CANDIDATES := ["WebView", "GodotWebView", "GDExtensionWebView", 
 const SESSION_PATH := "user://browser_session.cfg"
 const DEFAULT_URL := "http://news.grid/"
 const SETTINGS_PATH := "user://browser_settings.cfg"
+const LOAD_IDLE := "idle"
+const LOAD_LOADING := "loading"
+const LOAD_TRANSFERRING := "transferring"
+const LOAD_DONE := "done"
+const LOAD_FAILED := "failed"
+const LOAD_STOPPED := "stopped"
 
 var _resolver := URLResolver.new()
 var _address: LineEdit
@@ -25,14 +31,18 @@ var _tab_bar: TabBar
 var _main_menu: PopupMenu
 var _tab_context_menu: PopupMenu
 var _settings_menu: PopupMenu
+var _session_save_timer: Timer
 
 var _tabs: Array[Dictionary] = []
 var _closed_tabs: Array[Dictionary] = []
 var _active_tab := -1
 var _navigating_history := false
+var _address_is_editing := false
+var _address_valid := true
 var _home_url := DEFAULT_URL
 var _restore_session_enabled := true
 var _search_template := "http://news.grid/search?q=%s"
+var _max_closed_tabs := 30
 
 func _ready() -> void:
 	set_meta("window_min_size", Vector2(760, 540))
@@ -40,6 +50,7 @@ func _ready() -> void:
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	add_theme_constant_override("separation", 6)
 	set_process_unhandled_input(true)
+	_setup_session_save_timer()
 	_load_settings()
 	_build_toolbar()
 	_build_surface()
@@ -49,37 +60,55 @@ func _ready() -> void:
 		_restore_session()
 	_sync_active_tab_to_ui()
 
+func _exit_tree() -> void:
+	if _session_save_timer and not _session_save_timer.is_stopped():
+		_session_save_timer.stop()
+		_save_session()
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.ctrl_pressed and event.keycode == KEY_L:
-			if _address:
-				_address.grab_focus()
-				_address.select_all()
+		if _handle_key_shortcut(event):
 			accept_event()
 			return
-		if event.ctrl_pressed and event.shift_pressed and event.keycode == KEY_T:
-			_reopen_closed_tab()
-			accept_event()
-			return
-		if event.ctrl_pressed and event.keycode == KEY_T:
-			_new_tab(_home_url, true)
-			accept_event()
-			return
-		if event.ctrl_pressed and event.keycode == KEY_W:
-			_close_tab(_active_tab)
-			accept_event()
-			return
-		if event.ctrl_pressed and event.keycode == KEY_TAB:
-			if not _tabs.is_empty():
-				var next := (_active_tab + 1) % _tabs.size()
-				_activate_tab(next, true)
-			accept_event()
-			return
-		if event.keycode == KEY_ESCAPE:
-			if _address and _address.has_focus():
-				_address.text = get_current_url()
-				_release_address_focus()
-			accept_event()
+
+func _handle_key_shortcut(event: InputEventKey) -> bool:
+	if event.ctrl_pressed and event.keycode == KEY_L:
+		_focus_address_bar()
+		return true
+	if event.ctrl_pressed and event.shift_pressed and event.keycode == KEY_T:
+		_reopen_closed_tab()
+		return true
+	if event.ctrl_pressed and event.keycode == KEY_T:
+		_new_tab(_home_url, true)
+		_set_status_text("new tab")
+		return true
+	if event.ctrl_pressed and event.keycode == KEY_W:
+		_close_tab(_active_tab)
+		return true
+	if event.ctrl_pressed and event.keycode == KEY_TAB:
+		if not _tabs.is_empty():
+			var delta := -1 if event.shift_pressed else 1
+			_activate_tab((_active_tab + delta + _tabs.size()) % _tabs.size(), true)
+		return true
+	if event.alt_pressed and event.keycode == KEY_LEFT:
+		go_back()
+		return true
+	if event.alt_pressed and event.keycode == KEY_RIGHT:
+		go_forward()
+		return true
+	if event.ctrl_pressed and event.keycode >= KEY_1 and event.keycode <= KEY_9:
+		if not _tabs.is_empty():
+			var desired := 8 if event.keycode == KEY_9 else int(event.keycode - KEY_1)
+			_activate_tab(mini(desired, _tabs.size() - 1), true)
+		return true
+	if event.keycode == KEY_ESCAPE:
+		if _address and (_address.has_focus() or _address_is_editing):
+			_address.text = get_current_url()
+			_address_is_editing = false
+			_validate_address_text()
+			_release_address_focus()
+		return true
+	return false
 
 func _build_toolbar() -> void:
 	var top_accent := ColorRect.new()
@@ -129,9 +158,29 @@ func _build_toolbar() -> void:
 	_address = LineEdit.new()
 	_address.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_address.placeholder_text = DEFAULT_URL
-	_address.text_submitted.connect(func(text: String) -> void: open_url(text))
+	_address.text_submitted.connect(func(text: String) -> void:
+		if _validate_address_text():
+			_address_is_editing = false
+			open_url(text)
+			_release_address_focus()
+		elif text.strip_edges().contains(" "):
+			_address_is_editing = false
+			search(text)
+			_release_address_focus()
+		else:
+			_set_status_text("invalid address")
+	)
+	_address.text_changed.connect(func(_text: String) -> void:
+		_address_is_editing = true
+		_validate_address_text()
+	)
 	_address.focus_entered.connect(func() -> void:
+		_address_is_editing = true
 		_address.select_all()
+	)
+	_address.focus_exited.connect(func() -> void:
+		_address_is_editing = false
+		_validate_address_text()
 	)
 	row.add_child(_address)
 
@@ -255,45 +304,79 @@ func _bind_webview_signals() -> void:
 	for sig_name in ["load_started", "navigation_started"]:
 		if _webview.has_signal(sig_name):
 			_webview.connect(sig_name, func(_v = null) -> void:
-				_set_loading_state(true)
+				_set_tab_load_state(LOAD_LOADING)
 			)
 	for sig_name in ["load_finished", "navigation_finished"]:
 		if _webview.has_signal(sig_name):
 			_webview.connect(sig_name, func(_v = null) -> void:
-				_set_loading_state(false)
+				_set_tab_load_state(LOAD_DONE)
 				_set_status_text("ready")
 			)
 	for sig_name in ["load_failed", "navigation_failed", "load_error"]:
 		if _webview.has_signal(sig_name):
 			_webview.connect(sig_name, func(_v = null) -> void:
-				_set_loading_state(false)
+				_set_tab_load_state(LOAD_FAILED, "webview signal")
 				_set_status_text("load failed")
 			)
 
 func _new_tab(url: String, activate := true) -> void:
 	var normalized := _resolver.normalize_user_url(url)
-	var tab := {
-		"title": "New tab",
+	_append_tab(_make_tab_state(normalized), activate)
+
+func _make_tab_state(url: String, title := "New tab") -> Dictionary:
+	var normalized := _resolver.normalize_user_url(url)
+	return {
+		"title": title,
 		"url": normalized,
 		"history": [normalized],
 		"history_index": 0,
 		"loading": false,
-		"started_msec": 0
+		"load_state": LOAD_IDLE,
+		"timeout_reason": "",
+		"started_msec": 0,
+		"last_active_msec": Time.get_ticks_msec(),
+		"security_state": _security_state_for_url(normalized),
+		"pending_navigation": "",
+		"icon_key": _icon_key_for_url(normalized)
 	}
-	_tabs.append(tab)
+
+func _append_tab(tab: Dictionary, activate := true, load_on_activate := true) -> void:
+	var safe_tab := _normalize_tab_state(tab)
+	_tabs.append(safe_tab)
 	var index := _tabs.size() - 1
-	_tab_bar.add_tab("New tab")
+	_tab_bar.add_tab(_tab_label_for(safe_tab))
 	if activate:
-		_activate_tab(index, true)
-	_save_session()
+		_activate_tab(index, load_on_activate)
+	_queue_session_save()
+
+func _normalize_tab_state(tab: Dictionary) -> Dictionary:
+	var url := _resolver.normalize_user_url(str(tab.get("url", DEFAULT_URL)))
+	var history: Array = tab.get("history", []) as Array
+	if history.is_empty():
+		history = [url]
+	for i in range(history.size()):
+		history[i] = _resolver.normalize_user_url(str(history[i]))
+	var idx := clampi(int(tab.get("history_index", history.size() - 1)), 0, history.size() - 1)
+	return {
+		"title": str(tab.get("title", "New tab")),
+		"url": url,
+		"history": history.duplicate(true),
+		"history_index": idx,
+		"loading": _is_loading_state(str(tab.get("load_state", LOAD_IDLE))),
+		"load_state": str(tab.get("load_state", LOAD_IDLE)),
+		"timeout_reason": str(tab.get("timeout_reason", "")),
+		"started_msec": int(tab.get("started_msec", 0)),
+		"last_active_msec": int(tab.get("last_active_msec", Time.get_ticks_msec())),
+		"security_state": str(tab.get("security_state", _security_state_for_url(url))),
+		"pending_navigation": str(tab.get("pending_navigation", "")),
+		"icon_key": str(tab.get("icon_key", _icon_key_for_url(url)))
+	}
 
 func _close_tab(index: int) -> void:
 	if index < 0 or index >= _tabs.size():
 		return
 	var closing: Dictionary = _tabs[index]
-	_closed_tabs.append(closing.duplicate(true))
-	if _closed_tabs.size() > 20:
-		_closed_tabs.remove_at(0)
+	_push_closed_tab(closing)
 	_tabs.remove_at(index)
 	_tab_bar.remove_tab(index)
 	if _tabs.is_empty():
@@ -304,12 +387,15 @@ func _close_tab(index: int) -> void:
 	elif _active_tab > index:
 		_active_tab -= 1
 	_activate_tab(_active_tab, true)
-	_save_session()
+	_queue_session_save()
 
 func _activate_tab(index: int, load := false) -> void:
 	if index < 0 or index >= _tabs.size():
 		return
 	_active_tab = index
+	var tab: Dictionary = _tabs[_active_tab]
+	tab["last_active_msec"] = Time.get_ticks_msec()
+	_tabs[_active_tab] = tab
 	if _tab_bar.current_tab != index:
 		_tab_bar.current_tab = index
 	_sync_active_tab_to_ui()
@@ -317,30 +403,32 @@ func _activate_tab(index: int, load := false) -> void:
 		_navigating_history = true
 		open_url(str(_tabs[index].get("url", DEFAULT_URL)))
 		_navigating_history = false
-	_save_session()
+	_queue_session_save()
 
 func _sync_active_tab_to_ui() -> void:
 	var tab := _active_tab_data()
 	if tab.is_empty():
 		return
 	var url := str(tab.get("url", DEFAULT_URL))
-	if _address:
+	if _address and not _address_is_editing and not _address.has_focus():
 		_address.text = url
+		_validate_address_text()
 	_current_title_from_tab(tab)
 	_refresh_nav_buttons()
-	_set_loading_state(bool(tab.get("loading", false)), false)
+	_set_tab_load_state(str(tab.get("load_state", LOAD_IDLE)), str(tab.get("timeout_reason", "")), false)
 
 func open_url(input_url: String) -> void:
 	var normalized := _resolver.normalize_user_url(input_url)
 	_set_active_tab_url(normalized, not _navigating_history)
+	_set_active_tab_pending_navigation(normalized)
 	var resolved := _resolver.resolve_to_backend(normalized)
 	if _webview == null:
-		_set_status_text("blocked")
+		_set_tab_load_state(LOAD_FAILED, "webview blocked")
 		return
 	if _call_first(["load_url", "navigate", "load_uri", "set_url"], [resolved]):
-		_set_loading_state(true)
+		_set_tab_load_state(LOAD_LOADING, "")
 	else:
-		_set_loading_state(false)
+		_set_tab_load_state(LOAD_FAILED, "plugin API mismatch")
 		_set_status_text("plugin API mismatch")
 
 func search(query: String) -> void:
@@ -385,12 +473,14 @@ func go_forward() -> void:
 
 func reload() -> void:
 	if _call_first(["reload", "refresh"]):
-		_set_loading_state(true)
+		_set_tab_load_state(LOAD_LOADING, "reload")
 
 func stop_loading() -> void:
 	if _call_first(["stop", "stop_loading"]):
-		_set_loading_state(false)
+		_set_tab_load_state(LOAD_STOPPED, "user stopped")
 		_set_status_text("stopped")
+	else:
+		_set_tab_load_state(LOAD_STOPPED, "stop unavailable")
 
 func get_current_url() -> String:
 	var tab := _active_tab_data()
@@ -405,6 +495,8 @@ func _set_active_tab_url(display_url: String, record_history: bool) -> void:
 		return
 	var tab := _tabs[_active_tab]
 	tab["url"] = display_url
+	tab["security_state"] = _security_state_for_url(display_url)
+	tab["icon_key"] = _icon_key_for_url(display_url)
 	if record_history:
 		var history := tab.get("history", []) as Array
 		var idx := int(tab.get("history_index", -1))
@@ -418,10 +510,11 @@ func _set_active_tab_url(display_url: String, record_history: bool) -> void:
 			tab["history"] = history
 			tab["history_index"] = idx
 	_tabs[_active_tab] = tab
-	if _address:
+	if _address and not _address_is_editing and not _address.has_focus():
 		_address.text = display_url
+		_validate_address_text()
 	_refresh_nav_buttons()
-	_save_session()
+	_queue_session_save()
 
 func _set_active_tab_title(title: String) -> void:
 	if _active_tab < 0 or _active_tab >= _tabs.size():
@@ -434,7 +527,7 @@ func _set_active_tab_title(title: String) -> void:
 	_tabs[_active_tab] = tab
 	_tab_bar.set_tab_title(_active_tab, _trim_tab_title(t))
 	_apply_window_title("Browser — %s" % t)
-	_save_session()
+	_queue_session_save()
 
 func _current_title_from_tab(tab: Dictionary) -> void:
 	var title := str(tab.get("title", "Browser"))
@@ -455,17 +548,43 @@ func _refresh_nav_buttons() -> void:
 	if _forward_button:
 		_forward_button.disabled = idx >= history.size() - 1
 	if _security_badge:
-		var url := str(tab.get("url", ""))
-		var is_secure := url.begins_with("https://")
-		_security_badge.text = "🔒" if is_secure else "⚠"
-		_security_badge.tooltip_text = "Secure connection" if is_secure else "Non-HTTPS page"
+		var security_state := str(tab.get("security_state", _security_state_for_url(str(tab.get("url", "")))))
+		match security_state:
+			"secure":
+				_security_badge.text = "🔒"
+				_security_badge.tooltip_text = "Secure HTTPS connection"
+			"local":
+				_security_badge.text = "⌂"
+				_security_badge.tooltip_text = "Local/internal HermesOS page"
+			"insecure":
+				_security_badge.text = "⚠"
+				_security_badge.tooltip_text = "Insecure HTTP page"
+			"error":
+				_security_badge.text = "!"
+				_security_badge.tooltip_text = "Page load failed"
+			_:
+				_security_badge.text = "?"
+				_security_badge.tooltip_text = "Unknown security state"
 
 func _set_loading_state(loading: bool, update_status := true) -> void:
+	_set_tab_load_state(LOAD_LOADING if loading else LOAD_DONE, "", update_status)
+
+func _set_tab_load_state(state: String, reason := "", update_status := true) -> void:
+	var normalized := state
+	if not [LOAD_IDLE, LOAD_LOADING, LOAD_TRANSFERRING, LOAD_DONE, LOAD_FAILED, LOAD_STOPPED].has(normalized):
+		normalized = LOAD_IDLE
+	var loading := _is_loading_state(normalized)
 	if _active_tab >= 0 and _active_tab < _tabs.size():
 		var tab := _tabs[_active_tab]
+		tab["load_state"] = normalized
 		tab["loading"] = loading
+		tab["timeout_reason"] = reason
 		if loading:
 			tab["started_msec"] = Time.get_ticks_msec()
+		else:
+			tab["pending_navigation"] = ""
+		if normalized == LOAD_FAILED:
+			tab["security_state"] = "error"
 		_tabs[_active_tab] = tab
 	if _reload_button:
 		_reload_button.visible = not loading
@@ -483,8 +602,14 @@ func _set_loading_state(loading: bool, update_status := true) -> void:
 		elif not loading:
 			_load_poll_timer.stop()
 	if update_status:
-		_set_status_text("loading" if loading else "ready")
-	_save_session()
+		_set_status_text(normalized if reason == "" else "%s: %s" % [normalized, reason])
+	if _tab_bar and _active_tab >= 0 and _active_tab < _tab_bar.tab_count and _active_tab < _tabs.size():
+		_tab_bar.set_tab_title(_active_tab, _tab_label_for(_tabs[_active_tab]))
+	_refresh_nav_buttons()
+	_queue_session_save()
+
+func _is_loading_state(state: String) -> bool:
+	return state == LOAD_LOADING or state == LOAD_TRANSFERRING
 
 func _poll_page_load_state() -> void:
 	var tab := _active_tab_data()
@@ -496,8 +621,8 @@ func _poll_page_load_state() -> void:
 		_loading_bar.value = minf(_loading_bar.value + 0.04, 0.92)
 	var elapsed := Time.get_ticks_msec() - int(tab.get("started_msec", 0))
 	if elapsed > 9000:
-		_set_loading_state(false, false)
-		_set_status_text("ready")
+		_set_tab_load_state(LOAD_STOPPED, "load timeout", false)
+		_set_status_text("stopped: load timeout")
 
 func _set_status_text(text: String) -> void:
 	if _status:
@@ -587,9 +712,7 @@ func _close_other_tabs(keep_index: int) -> void:
 	for i in range(_tabs.size()):
 		if i == keep_index:
 			continue
-		_closed_tabs.append((_tabs[i] as Dictionary).duplicate(true))
-	while _closed_tabs.size() > 20:
-		_closed_tabs.remove_at(0)
+		_push_closed_tab(_tabs[i] as Dictionary)
 	_tabs = [keep_tab]
 	while _tab_bar.tab_count > 0:
 		_tab_bar.remove_tab(_tab_bar.tab_count - 1)
@@ -599,10 +722,11 @@ func _close_other_tabs(keep_index: int) -> void:
 
 func _reopen_closed_tab() -> void:
 	if _closed_tabs.is_empty():
+		_set_status_text("no closed tab")
 		return
 	var tab := _closed_tabs.pop_back() as Dictionary
-	var url := str(tab.get("url", DEFAULT_URL))
-	_new_tab(url, true)
+	_append_tab(tab, true, true)
+	_set_status_text("reopened tab")
 
 func _show_settings_menu() -> void:
 	if _settings_menu == null:
@@ -633,6 +757,7 @@ func _load_settings() -> void:
 	_home_url = str(cfg.get_value("browser", "home_url", DEFAULT_URL))
 	_restore_session_enabled = bool(cfg.get_value("browser", "restore_session", true))
 	_search_template = str(cfg.get_value("browser", "search_template", "http://news.grid/search?q=%s"))
+	_max_closed_tabs = maxi(0, int(cfg.get_value("browser", "max_closed_tabs", 30)))
 	if not _search_template.contains("%s"):
 		_search_template = "http://news.grid/search?q=%s"
 
@@ -641,30 +766,211 @@ func _save_settings() -> void:
 	cfg.set_value("browser", "home_url", _home_url)
 	cfg.set_value("browser", "restore_session", _restore_session_enabled)
 	cfg.set_value("browser", "search_template", _search_template)
-	cfg.save(SETTINGS_PATH)
+	cfg.set_value("browser", "max_closed_tabs", _max_closed_tabs)
+	_save_config_atomic(cfg, SETTINGS_PATH)
 
 func _restore_session() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(SESSION_PATH) != OK:
 		return
-	var urls: Array = cfg.get_value("session", "tab_urls", []) as Array
+	var restored_tabs: Array = cfg.get_value("session", "tabs", []) as Array
+	if restored_tabs.is_empty():
+		var urls: Array = cfg.get_value("session", "tab_urls", []) as Array
+		for u in urls:
+			restored_tabs.append(_make_tab_state(str(u)))
 	var active := int(cfg.get_value("session", "active_tab", 0))
-	if urls is Array and not urls.is_empty():
+	if not restored_tabs.is_empty():
+		var valid_tabs: Array = []
+		for tab in restored_tabs:
+			if tab is Dictionary:
+				valid_tabs.append(tab)
+		if valid_tabs.is_empty():
+			return
 		_tabs.clear()
 		while _tab_bar.tab_count > 0:
 			_tab_bar.remove_tab(_tab_bar.tab_count - 1)
-		for u in urls:
-			_new_tab(str(u), false)
+		for tab in valid_tabs:
+			_append_tab(tab, false, false)
+		var closed: Array = cfg.get_value("session", "closed_tabs", []) as Array
+		_closed_tabs.clear()
+		for tab in closed:
+			if tab is Dictionary:
+				_push_closed_tab(tab as Dictionary)
 		_activate_tab(clampi(active, 0, _tabs.size() - 1), true)
 
 func _save_session() -> void:
 	var cfg := ConfigFile.new()
+	var tab_states: Array = []
 	var urls: Array = []
 	for t in _tabs:
-		urls.append(str((t as Dictionary).get("url", DEFAULT_URL)))
+		var tab: Dictionary = _normalize_tab_state(t as Dictionary)
+		tab_states.append(tab)
+		urls.append(str(tab.get("url", DEFAULT_URL)))
+	cfg.set_value("session", "tabs", tab_states)
 	cfg.set_value("session", "tab_urls", urls)
 	cfg.set_value("session", "active_tab", _active_tab)
-	cfg.save(SESSION_PATH)
+	cfg.set_value("session", "closed_tabs", _closed_tabs.duplicate(true))
+	_save_config_atomic(cfg, SESSION_PATH)
+
+func _setup_session_save_timer() -> void:
+	_session_save_timer = Timer.new()
+	_session_save_timer.wait_time = 0.25
+	_session_save_timer.one_shot = true
+	_session_save_timer.timeout.connect(_save_session)
+	add_child(_session_save_timer)
+
+func _queue_session_save() -> void:
+	if _session_save_timer == null:
+		_save_session()
+		return
+	_session_save_timer.start()
+
+func _save_config_atomic(cfg: ConfigFile, path: String) -> void:
+	var tmp_path := path + ".tmp"
+	var err := cfg.save(tmp_path)
+	if err != OK:
+		push_warning("Could not save temp config %s: %s" % [tmp_path, err])
+		return
+	var abs_tmp := ProjectSettings.globalize_path(tmp_path)
+	var abs_target := ProjectSettings.globalize_path(path)
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path + ".bak"))
+		DirAccess.copy_absolute(abs_target, ProjectSettings.globalize_path(path + ".bak"))
+	var rename_err := DirAccess.rename_absolute(abs_tmp, abs_target)
+	if rename_err == OK:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path + ".bak"))
+	else:
+		push_warning("Could not atomically replace config %s: %s" % [path, rename_err])
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(abs_target)
+		DirAccess.rename_absolute(abs_tmp, abs_target)
+
+func _push_closed_tab(tab: Dictionary) -> void:
+	if _max_closed_tabs <= 0:
+		return
+	_closed_tabs.append(_normalize_tab_state(tab).duplicate(true))
+	while _closed_tabs.size() > _max_closed_tabs:
+		_closed_tabs.remove_at(0)
+	_queue_session_save()
+
+func _set_active_tab_pending_navigation(url: String) -> void:
+	if _active_tab < 0 or _active_tab >= _tabs.size():
+		return
+	var tab: Dictionary = _tabs[_active_tab]
+	tab["pending_navigation"] = url
+	_tabs[_active_tab] = tab
+
+func _security_state_for_url(url: String) -> String:
+	var lower := url.to_lower()
+	if lower.begins_with("https://"):
+		return "secure"
+	var host := _host_for_url(lower)
+	if host == "news.grid" or lower.begins_with("file://") or lower.begins_with("about:"):
+		return "local"
+	if lower.begins_with("http://"):
+		return "insecure"
+	return "unknown"
+
+func _host_for_url(url: String) -> String:
+	var without_scheme := url
+	var scheme_pos := without_scheme.find("://")
+	if scheme_pos >= 0:
+		without_scheme = without_scheme.substr(scheme_pos + 3)
+	var slash := without_scheme.find("/")
+	if slash >= 0:
+		without_scheme = without_scheme.substr(0, slash)
+	var colon := without_scheme.find(":")
+	if colon >= 0:
+		without_scheme = without_scheme.substr(0, colon)
+	return without_scheme
+
+func _icon_key_for_url(url: String) -> String:
+	var normalized := _resolver.normalize_user_url(url)
+	var without_scheme := normalized.replace("https://", "").replace("http://", "")
+	var slash := without_scheme.find("/")
+	return without_scheme.substr(0, slash) if slash >= 0 else without_scheme
+
+func _tab_label_for(tab: Dictionary) -> String:
+	var load_prefix := "◌ " if _is_loading_state(str(tab.get("load_state", LOAD_IDLE))) else ""
+	return load_prefix + _trim_tab_title(str(tab.get("title", "New tab")))
+
+func _focus_address_bar() -> void:
+	if _address:
+		_address_is_editing = true
+		_address.grab_focus()
+		_address.select_all()
+
+func _validate_address_text() -> bool:
+	if _address == null:
+		_address_valid = true
+		return true
+	var text := _address.text.strip_edges()
+	_address_valid = text == "" or text.begins_with("http://") or text.begins_with("https://") or (not text.contains(" ") and text.contains(".")) or text == "news.grid"
+	_address.modulate = Color(1, 1, 1, 1) if _address_valid else Color(1, 0.72, 0.72, 1)
+	return _address_valid
+
+func debug_get_state() -> Dictionary:
+	var tab := _active_tab_data()
+	return {
+		"tab_count": _tabs.size(),
+		"active_tab": _active_tab,
+		"closed_tab_count": _closed_tabs.size(),
+		"url": get_current_url(),
+		"title": get_current_title(),
+		"load_state": str(tab.get("load_state", LOAD_IDLE)),
+		"loading": bool(tab.get("loading", false)),
+		"timeout_reason": str(tab.get("timeout_reason", "")),
+		"address_valid": _address_valid,
+		"active_tab_state": tab.duplicate(true),
+		"settings": {
+			"home_url": _home_url,
+			"restore_session": _restore_session_enabled,
+			"search_template": _search_template,
+			"max_closed_tabs": _max_closed_tabs
+		}
+	}
+
+func debug_apply_settings(values: Dictionary) -> void:
+	if values.has("home_url"):
+		_home_url = _resolver.normalize_user_url(str(values.get("home_url", DEFAULT_URL)))
+	if values.has("restore_session"):
+		_restore_session_enabled = bool(values.get("restore_session", true))
+	if values.has("search_template"):
+		var template := str(values.get("search_template", _search_template))
+		_search_template = template if template.contains("%s") else "http://news.grid/search?q=%s"
+	if values.has("max_closed_tabs"):
+		_max_closed_tabs = maxi(0, int(values.get("max_closed_tabs", 30)))
+		while _closed_tabs.size() > _max_closed_tabs:
+			_closed_tabs.remove_at(0)
+	_save_settings()
+
+func debug_trigger_shortcut(name: String) -> void:
+	var event := InputEventKey.new()
+	event.pressed = true
+	match name:
+		"ctrl+l":
+			event.ctrl_pressed = true; event.keycode = KEY_L
+		"ctrl+t":
+			event.ctrl_pressed = true; event.keycode = KEY_T
+		"ctrl+w":
+			event.ctrl_pressed = true; event.keycode = KEY_W
+		"ctrl+shift+t":
+			event.ctrl_pressed = true; event.shift_pressed = true; event.keycode = KEY_T
+		"ctrl+shift+tab":
+			event.ctrl_pressed = true; event.shift_pressed = true; event.keycode = KEY_TAB
+		"ctrl+tab":
+			event.ctrl_pressed = true; event.keycode = KEY_TAB
+		"alt+left":
+			event.alt_pressed = true; event.keycode = KEY_LEFT
+		"alt+right":
+			event.alt_pressed = true; event.keycode = KEY_RIGHT
+		"escape":
+			event.keycode = KEY_ESCAPE
+		_:
+			if name.begins_with("ctrl+"):
+				event.ctrl_pressed = true
+				event.keycode = KEY_0 + int(name.trim_prefix("ctrl+"))
+	_handle_key_shortcut(event)
 
 func _call_first(methods: Array[String], args: Array = []) -> bool:
 	if _webview == null:
