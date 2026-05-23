@@ -95,8 +95,11 @@ func _teardown_embedded_webview() -> void:
 	if _webview == null or not is_instance_valid(_webview):
 		return
 	_record_webview_signal("teardown", "window closing")
+	_call_first(["stop", "stop_loading"])
 	if _webview is CanvasItem:
 		(_webview as CanvasItem).visible = false
+	if _webview.has_method("update_visibility"):
+		_webview.call("update_visibility")
 	if _webview.has_method("set_visible"):
 		_webview.call("set_visible", false)
 	if _webview.has_method("close_devtools"):
@@ -105,6 +108,8 @@ func _teardown_embedded_webview() -> void:
 		_webview.call("load_html", "")
 	elif _webview.has_method("set_url"):
 		_webview.call("set_url", "about:blank")
+	if _webview.has_method("close"):
+		_webview.call("close")
 	if _webview.get_parent() != null:
 		_webview.get_parent().remove_child(_webview)
 	_webview.queue_free()
@@ -546,13 +551,13 @@ func _bind_webview_signals() -> void:
 				var display := _resolver.display_url_from_backend(maybe)
 				_set_active_tab_url(display, not _navigating_history)
 			)
-	for sig_name in ["load_started", "navigation_started"]:
+	for sig_name in ["load_started", "navigation_started", "page_load_started"]:
 		if _webview.has_signal(sig_name):
 			_webview.connect(sig_name, func(_v = null) -> void:
 				_record_webview_signal(sig_name, _v)
-				_set_tab_load_state(LOAD_LOADING)
+				_set_tab_load_state(LOAD_TRANSFERRING)
 			)
-	for sig_name in ["load_finished", "navigation_finished"]:
+	for sig_name in ["load_finished", "navigation_finished", "page_load_finished"]:
 		if _webview.has_signal(sig_name):
 			_webview.connect(sig_name, func(_v = null) -> void:
 				_record_webview_signal(sig_name, _v)
@@ -892,7 +897,7 @@ func _poll_page_load_state() -> void:
 			_load_poll_timer.stop()
 		return
 	if _loading_bar:
-		_loading_bar.value = minf(_loading_bar.value + 0.04, 0.92)
+		_loading_bar.value = minf(_loading_bar.value + 0.07, 0.97)
 	var elapsed := Time.get_ticks_msec() - int(tab.get("started_msec", 0))
 	if elapsed > 9000:
 		_set_tab_load_state(LOAD_STOPPED, "load timeout", false)

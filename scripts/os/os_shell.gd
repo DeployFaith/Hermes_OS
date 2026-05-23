@@ -1354,7 +1354,7 @@ func _on_window_close_requested(window: OSWindow) -> void:
 		if is_instance_valid(button):
 			button.queue_free()
 		_task_buttons.erase(app_id)
-	window.queue_free()
+	window.call_deferred("queue_free")
 	_emit_hermes_event("window.closed", {"window_id": window_id, "app_id": app_id})
 	_emit_hermes_event("app.closed", {"app_id": app_id})
 
