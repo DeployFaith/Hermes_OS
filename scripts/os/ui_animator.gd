@@ -149,7 +149,7 @@ func pulse(node: CanvasItem, intensity: float = 0.05, duration: float = 0.6) -> 
 	if node == null or not is_instance_valid(node):
 		return null
 	_kill_existing(node)
-	var base_scale := node.scale
+	var base_scale: Vector2 = node.scale
 	var tween: Tween = node.create_tween()
 	tween.set_trans(Tween.TRANS_SINE)
 	tween.set_ease(Tween.EASE_IN_OUT)
