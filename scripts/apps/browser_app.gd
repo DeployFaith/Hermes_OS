@@ -114,13 +114,15 @@ func _teardown_embedded_webview() -> void:
 		_webview.call("close_devtools")
 	if _webview.has_method("load_html"):
 		_webview.call("load_html", "")
-	elif _webview.has_method("set_url"):
-		_webview.call("set_url", "about:blank")
+	_call_first(["load_url", "navigate", "load_uri", "set_url"], ["about:blank"])
 	if _webview.has_method("close"):
 		_webview.call("close")
 	if _webview.get_parent() != null:
 		_webview.get_parent().remove_child(_webview)
-	_webview.queue_free()
+	if _webview.has_method("free"):
+		_webview.call_deferred("free")
+	else:
+		_webview.queue_free()
 	_webview = null
 
 func _unhandled_input(event: InputEvent) -> void:

@@ -1355,7 +1355,7 @@ func _on_window_close_requested(window: OSWindow) -> void:
 			button.queue_free()
 		_task_buttons.erase(app_id)
 	window.visible = false
-	var close_delay := 0.35 if app_id == "browser" else 0.12
+	var close_delay := 0.6 if app_id == "browser" else 0.12
 	var close_timer := get_tree().create_timer(close_delay)
 	close_timer.timeout.connect(func() -> void:
 		if is_instance_valid(window):
