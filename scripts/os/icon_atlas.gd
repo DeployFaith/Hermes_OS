@@ -99,18 +99,35 @@ func _draw_browser_glyph(image: Image, rect: Rect2i, primary: Color, accent: Col
 	image.fill_rect(Rect2i(x + 6, dot_y, 1, 1), primary)
 
 func _draw_terminal_glyph(image: Image, rect: Rect2i, primary: Color, accent: Color) -> void:
-	var x: int = rect.position.x + maxi(2, int(rect.size.x * 0.12))
-	var y: int = rect.position.y + maxi(2, int(rect.size.y * 0.18))
-	var w: int = rect.size.x - maxi(4, int(rect.size.x * 0.24))
-	var h: int = rect.size.y - maxi(4, int(rect.size.y * 0.36))
-	if w < 6 or h < 5:
+	# Draw a compact, readable "</>" style glyph for small category icons (16px)
+	var x: int = rect.position.x + maxi(1, int(rect.size.x * 0.14))
+	var y: int = rect.position.y + maxi(1, int(rect.size.y * 0.18))
+	var w: int = rect.size.x - maxi(2, int(rect.size.x * 0.28))
+	var h: int = rect.size.y - maxi(2, int(rect.size.y * 0.30))
+	if w < 6 or h < 6:
 		return
+
+	# frame
 	image.fill_rect(Rect2i(x, y, w, h), primary)
-	var gx: int = x + maxi(1, int(w * 0.18))
-	var gy: int = y + h / 2
-	image.fill_rect(Rect2i(gx, gy - 1, 2, 1), accent)
-	image.fill_rect(Rect2i(gx + 1, gy, 1, 1), accent)
-	image.fill_rect(Rect2i(gx + 4, gy, maxi(2, int(w * 0.34)), 1), accent)
+
+	# left chevron <
+	var cy: int = y + h / 2
+	var lx: int = x + maxi(1, int(w * 0.20))
+	image.fill_rect(Rect2i(lx + 1, cy - 2, 1, 1), accent)
+	image.fill_rect(Rect2i(lx, cy - 1, 1, 1), accent)
+	image.fill_rect(Rect2i(lx + 1, cy, 1, 1), accent)
+
+	# slash /
+	var sx: int = x + w / 2
+	image.fill_rect(Rect2i(sx - 1, cy + 1, 1, 1), accent)
+	image.fill_rect(Rect2i(sx, cy, 1, 1), accent)
+	image.fill_rect(Rect2i(sx + 1, cy - 1, 1, 1), accent)
+
+	# right chevron >
+	var rx: int = x + w - maxi(2, int(w * 0.22))
+	image.fill_rect(Rect2i(rx - 1, cy - 2, 1, 1), accent)
+	image.fill_rect(Rect2i(rx, cy - 1, 1, 1), accent)
+	image.fill_rect(Rect2i(rx - 1, cy, 1, 1), accent)
 
 func _draw_settings_glyph(image: Image, rect: Rect2i, primary: Color, accent: Color) -> void:
 	var cx: int = rect.position.x + rect.size.x / 2
