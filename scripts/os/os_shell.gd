@@ -75,13 +75,22 @@ var _notification_list: VBoxContainer
 var _notifications: Array[Dictionary] = []
 var _notification_sequence: int = 0
 var _session_active: bool = false
+var _theme_mode: String = "dark"
 var _wallpaper_index: int = 0
-var _wallpaper_colors: Array[Color] = [
+var _wallpaper_colors: Array[Color] = []
+var _dark_wallpaper_colors: Array[Color] = [
 	Color("1a1f2b"),
 	Color("1e2432"),
 	Color("22283a"),
 	Color("1b2422"),
 	Color("2a2320")
+]
+var _light_wallpaper_colors: Array[Color] = [
+	Color("e7edf7"),
+	Color("f1ede4"),
+	Color("e8f2ea"),
+	Color("f2e8ef"),
+	Color("edf0f6")
 ]
 var _files_app_state: Dictionary = {}
 var _files_app_ui: Dictionary = {}
@@ -135,6 +144,7 @@ func _ready() -> void:
 	position = Vector2.ZERO
 	_fs = OSFileSystem.new()
 	_fs.load_or_create()
+	_apply_theme_mode(_theme_mode, false)
 	_console_history = ["Type 'help' for commands. Current user: " + _fs.current_user()]
 	_register_apps()
 	_build_ui()
@@ -302,6 +312,7 @@ func export_state() -> Dictionary:
 		"notifications": _notifications.duplicate(true),
 		"session": {
 			"active": _session_active,
+			"theme_mode": _theme_mode,
 			"wallpaper_index": _wallpaper_index,
 			"desktop_icon_positions": _desktop_icon_positions.duplicate(true),
 			"desktop_highlight_color": [_desktop_highlight_color.r, _desktop_highlight_color.g, _desktop_highlight_color.b, _desktop_highlight_color.a],
@@ -326,6 +337,7 @@ func import_state(state: Dictionary) -> String:
 				_notification_sequence = maxi(_notification_sequence, int(str(notification.get("id", "0")).trim_prefix("n_")))
 	_refresh_notifications()
 	var session: Dictionary = state.get("session", {}) if state.get("session", {}) is Dictionary else {}
+	_apply_theme_mode(str(session.get("theme_mode", _theme_mode)), false)
 	_wallpaper_index = clampi(int(session.get("wallpaper_index", _wallpaper_index)), 0, _wallpaper_colors.size() - 1)
 	_session_active = bool(session.get("active", _session_active))
 	_desktop_icon_positions = session.get("desktop_icon_positions", {}).duplicate(true) if session.get("desktop_icon_positions", {}) is Dictionary else {}
@@ -352,6 +364,7 @@ func reset_state() -> void:
 	_notifications.clear()
 	_notification_sequence = 0
 	_refresh_notifications()
+	_apply_theme_mode("dark", false)
 	_wallpaper_index = 0
 	_desktop_icon_positions.clear()
 	_files_shortcuts.clear()
@@ -375,6 +388,70 @@ func _register_apps() -> void:
 		"console": {"title": "Terminal", "subtitle": "Command line shell", "keywords": "console terminal shell", "category": "Programming", "pinned": true, "builder": Callable(self, "_build_console_app")},
 		"system": {"title": "System", "subtitle": "System status and settings", "keywords": "settings diagnostics", "category": "Administration", "pinned": true, "builder": Callable(self, "_build_system_app")}
 	}
+
+func _apply_theme_mode(mode: String, refresh_ui: bool = true) -> void:
+	_theme_mode = "light" if mode.to_lower() == "light" else "dark"
+	if _theme_mode == "light":
+		_wallpaper_colors = _light_wallpaper_colors.duplicate()
+		Tokens.BG = Color("edf0f6")
+		Tokens.BG_ELEVATED = Color("f7f8fb")
+		Tokens.PANEL = Color("ffffff")
+		Tokens.SURFACE = Color("f4f6fa")
+		Tokens.SURFACE_HOVER = Color("e7ebf2")
+		Tokens.SURFACE_ACTIVE = Color("dce3ee")
+		Tokens.BORDER = Color("c7cfdd")
+		Tokens.BORDER_ACTIVE = Color("9aa9c0")
+		Tokens.TEXT = Color("1c2433")
+		Tokens.TEXT_MUTED = Color("5f6b7d")
+		Tokens.MUTED = Tokens.TEXT_MUTED
+		Tokens.TEXT_DISABLED = Color("9aa4b4")
+	else:
+		_wallpaper_colors = _dark_wallpaper_colors.duplicate()
+		Tokens.BG = Color("0d0f14")
+		Tokens.BG_ELEVATED = Color("13151c")
+		Tokens.PANEL = Color("181a22")
+		Tokens.SURFACE = Color("1e2029")
+		Tokens.SURFACE_HOVER = Color("272a36")
+		Tokens.SURFACE_ACTIVE = Color("2f3342")
+		Tokens.BORDER = Color("2d3140")
+		Tokens.BORDER_ACTIVE = Color("3f4558")
+		Tokens.TEXT = Color("e8eaf0")
+		Tokens.TEXT_MUTED = Color("8b92a8")
+		Tokens.MUTED = Tokens.TEXT_MUTED
+		Tokens.TEXT_DISABLED = Color("5a6075")
+	if _icon_atlas != null:
+		_icon_atlas.set_icon_color(Tokens.TEXT)
+	if refresh_ui:
+		_apply_wallpaper()
+		_refresh_shell_icons()
+		_refresh_desktop_icons()
+		_rebuild_launcher_list()
+		_queue_state_save()
+
+func _refresh_shell_icons() -> void:
+	_ensure_icon_atlas()
+	if _start_button:
+		_start_button.icon = _icon_atlas.get_icon("start", 22)
+	if _notification_button:
+		_notification_button.icon = _icon_atlas.get_icon("notification", 22)
+	if _user_button:
+		_user_button.icon = _icon_atlas.get_icon("user", 22)
+	if _status_icons_row:
+		var status_keys: Array[String] = ["wifi", "volume", "bluetooth", "battery", "session"]
+		var index: int = 0
+		for child in _status_icons_row.get_children():
+			var button: Button = child as Button
+			if button != null and index < status_keys.size():
+				button.icon = _icon_atlas.get_icon(status_keys[index], 18)
+			index += 1
+	if _launcher_category_list:
+		var categories: Array[String] = ["all", "Favorites", "Internet", "Office", "Programming", "System", "Administration"]
+		var category_index: int = 0
+		for child in _launcher_category_list.get_children():
+			var button: Button = child as Button
+			if button != null and category_index < categories.size():
+				button.icon = _category_icon(categories[category_index])
+			category_index += 1
 
 func _apply_wallpaper() -> void:
 	if not _desktop_bg:
@@ -3760,7 +3837,29 @@ func _build_system_app() -> Control:
 	appearance_shell.add_child(right_spacer)
 
 	appearance_card.add_child(_label("Desktop appearance", 13, Tokens.TEXT))
-	appearance_card.add_child(_label("Selection and drag highlight", 11, Tokens.MUTED))
+	appearance_card.add_child(_label("Theme, wallpaper, selection and drag highlight", 11, Tokens.MUTED))
+
+	var theme_row := HBoxContainer.new()
+	theme_row.add_theme_constant_override("separation", 8)
+	appearance_card.add_child(theme_row)
+	var theme_label := _label("Mode", 12, Tokens.TEXT)
+	theme_label.custom_minimum_size = Vector2(104, 0)
+	theme_row.add_child(theme_label)
+	var theme_option := OptionButton.new()
+	theme_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	theme_option.custom_minimum_size = Vector2(220, 30)
+	theme_option.add_item("Dark")
+	theme_option.add_item("Light")
+	theme_option.select(1 if _theme_mode == "light" else 0)
+	theme_option.add_theme_color_override("font_color", Tokens.TEXT)
+	theme_option.add_theme_stylebox_override("normal", _style(Tokens.SURFACE, Tokens.BORDER, 1, 6))
+	theme_option.add_theme_stylebox_override("hover", _style(Tokens.SURFACE_HOVER, Tokens.BORDER_ACTIVE, 1, 6))
+	theme_option.add_theme_stylebox_override("focus", _style(Tokens.SURFACE_HOVER, Tokens.FOCUS, 2, 6))
+	theme_option.item_selected.connect(func(index: int) -> void:
+		_apply_theme_mode("light" if index == 1 else "dark", true)
+		_set_desktop_context_status("Light mode enabled" if _theme_mode == "light" else "Dark mode enabled")
+	)
+	theme_row.add_child(theme_option)
 
 	var preset_row := HBoxContainer.new()
 	preset_row.add_theme_constant_override("separation", 8)
@@ -4512,6 +4611,7 @@ var _icon_atlas: IconAtlas
 func _ensure_icon_atlas() -> void:
 	if _icon_atlas == null:
 		_icon_atlas = IconAtlas.new()
+	_icon_atlas.set_icon_color(Tokens.TEXT)
 
 func _icon_button(icon_name: String, min_size: Vector2) -> Button:
 	_ensure_icon_atlas()

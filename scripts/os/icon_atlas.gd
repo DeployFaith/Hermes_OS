@@ -36,6 +36,13 @@ const ICON_PATHS: Dictionary = {
 
 var _cache: Dictionary = {}
 var _missing_warnings: Dictionary = {}
+var _icon_color: Color = Color("e8eaf0")
+
+func set_icon_color(color: Color) -> void:
+	if _icon_color.is_equal_approx(color):
+		return
+	_icon_color = color
+	_cache.clear()
 
 func get_icon(name: String, size: int = 20) -> Texture2D:
 	var clean_name: String = name.strip_edges().to_lower()
@@ -63,13 +70,26 @@ func _load_asset_icon(name: String, size: int) -> Texture2D:
 	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
 	if file == null:
 		return null
-	var svg_text: String = file.get_as_text()
+	var svg_text: String = _tint_svg(file.get_as_text())
 	var image: Image = Image.new()
 	var scale: float = float(size) / BASE_SVG_SIZE
 	var err: Error = image.load_svg_from_string(svg_text, scale)
 	if err != OK or image.is_empty():
 		return null
 	return ImageTexture.create_from_image(image)
+
+func _tint_svg(svg_text: String) -> String:
+	var hex_color: String = _color_to_hex(_icon_color)
+	var tinted: String = svg_text.replace("currentColor", hex_color)
+	tinted = tinted.replace("stroke=\"#000000\"", "stroke=\"" + hex_color + "\"")
+	tinted = tinted.replace("stroke=\"#000\"", "stroke=\"" + hex_color + "\"")
+	return tinted
+
+func _color_to_hex(color: Color) -> String:
+	var r: int = int(round(clampf(color.r, 0.0, 1.0) * 255.0))
+	var g: int = int(round(clampf(color.g, 0.0, 1.0) * 255.0))
+	var b: int = int(round(clampf(color.b, 0.0, 1.0) * 255.0))
+	return "#%02x%02x%02x" % [r, g, b]
 
 func _warn_missing(name: String) -> void:
 	if _missing_warnings.has(name):
