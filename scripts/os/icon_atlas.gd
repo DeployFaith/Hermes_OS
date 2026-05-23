@@ -33,6 +33,10 @@ func _icon_color(name: String) -> Color:
 			return Color("c7a45b")
 		"file", "text":
 			return Color("d7dee9")
+		"notes":
+			return Color("8cc2ff")
+		"start", "home":
+			return Color("a9b7ff")
 		"browser", "web", "wifi", "network":
 			return Tokens.ACCENT
 		"terminal", "console":
@@ -44,7 +48,9 @@ func _icon_color(name: String) -> Color:
 		"user", "account":
 			return Color("8db0e8")
 		"settings", "system":
-			return Tokens.TEXT_MUTED
+			return Color("a4b0c8")
+		"placeholder":
+			return Color("c0c8d8")
 		"close":
 			return Tokens.ERROR
 		"minimize":
@@ -52,4 +58,4 @@ func _icon_color(name: String) -> Color:
 		"maximize":
 			return Tokens.SUCCESS
 		_:
-			return Tokens.TEXT_MUTED
+			return Color("c0c8d8")

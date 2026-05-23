@@ -77,11 +77,11 @@ var _notification_sequence: int = 0
 var _session_active: bool = false
 var _wallpaper_index: int = 0
 var _wallpaper_colors: Array[Color] = [
-	Color("0d0f14"),
-	Color("10141d"),
-	Color("12111a"),
-	Color("0f1312"),
-	Color("14100f")
+	Color("1a1f2b"),
+	Color("1e2432"),
+	Color("22283a"),
+	Color("1b2422"),
+	Color("2a2320")
 ]
 var _files_app_state: Dictionary = {}
 var _files_app_ui: Dictionary = {}
