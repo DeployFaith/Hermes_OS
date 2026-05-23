@@ -40,7 +40,7 @@ var _desktop_drag_current := Vector2.ZERO
 var _desktop_dragging_icon: Button
 var _desktop_drag_icon_offset := Vector2.ZERO
 var _desktop_drag_icon_moved := false
-var _desktop_highlight_color := Color(0.34, 0.45, 0.62, 0.32)
+var _desktop_highlight_color := Tokens.alpha(Tokens.ACCENT, 0.25)
 var _window_layer: Control
 var _taskbar_windows: HBoxContainer
 var _top_panel: Panel
@@ -76,6 +76,7 @@ var _notifications: Array[Dictionary] = []
 var _notification_sequence := 0
 var _session_active := false
 var _wallpaper_index := 0
+var _gradient_textures: Array[GradientTexture2D] = []
 var _files_app_state: Dictionary = {}
 var _files_app_ui: Dictionary = {}
 var _text_app_editor: TextEdit
@@ -101,30 +102,23 @@ const HERMES_V1_ALIAS_OPS: Dictionary = {
 }
 
 const TASKBAR_HEIGHT := 46.0
-const TOP_PANEL_HEIGHT := 34.0
+const TOP_PANEL_HEIGHT := 32.0
 const DOCK_HEIGHT := 56.0
-const DOCK_BOTTOM_MARGIN := 10.0
-const WINDOW_TOP_MARGIN := TOP_PANEL_HEIGHT + 6.0
+const DOCK_BOTTOM_MARGIN := 14.0
+const WINDOW_TOP_MARGIN := TOP_PANEL_HEIGHT + 4.0
 const WINDOW_BOTTOM_MARGIN := DOCK_HEIGHT + DOCK_BOTTOM_MARGIN + 8.0
 const LAUNCHER_MIN_WIDTH := 340.0
 const LAUNCHER_MAX_WIDTH := 520.0
 const LAUNCHER_MIN_HEIGHT := 280.0
 const LAUNCHER_MARGIN := 8.0
-const BG := Color("181a1f")
-const PANEL := Color("22252b")
-const SURFACE := Color("2b2f38")
-const SURFACE_HOVER := Color("353a45")
-const BORDER := Color("3f4652")
-const BORDER_ACTIVE := Color("7b8494")
-const TEXT := Color("eceff4")
-const MUTED := Color("a9b0bd")
-const FOCUS := Color("8aa4d6")
-const ERROR := Color("e06c75")
 const DESKTOP_ICON_SIZE := Vector2(118, 86)
 const DESKTOP_ICON_GAP := Vector2(14, 10)
 const DESKTOP_ICON_MARGIN := Vector2(14, 14)
-const WALLPAPERS: Array[Color] = [Color("181a1f"), Color("20242b"), Color("1c2424"), Color("211f25"), Color("24221d")]
 const PERSISTED_STATE_PATH := "user://hermes_os_shell_state.cfg"
+
+const Tokens = preload("res://scripts/os/design_tokens.gd")
+const StyleFactory = preload("res://scripts/os/style_factory.gd")
+const UIAnimator = preload("res://scripts/os/ui_animator.gd")
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -231,6 +225,9 @@ func launch_app(app_id: String) -> OSWindow:
 
 	_open_windows[app_id] = window
 	_create_task_button(app_id)
+	if DisplayServer.get_name() != "headless":
+		var animator := UIAnimator.new()
+		animator.scale_in(window, Tokens.TIME["normal"])
 	_focus_window(window)
 	_update_taskbar_indicators()
 	_emit_hermes_event("window.opened", {
@@ -323,7 +320,7 @@ func import_state(state: Dictionary) -> String:
 				_notification_sequence = maxi(_notification_sequence, int(str(notification.get("id", "0")).trim_prefix("n_")))
 	_refresh_notifications()
 	var session: Dictionary = state.get("session", {}) if state.get("session", {}) is Dictionary else {}
-	_wallpaper_index = clampi(int(session.get("wallpaper_index", _wallpaper_index)), 0, WALLPAPERS.size() - 1)
+	_wallpaper_index = clampi(int(session.get("wallpaper_index", _wallpaper_index)), 0, _gradient_textures.size() - 1)
 	_session_active = bool(session.get("active", _session_active))
 	_desktop_icon_positions = session.get("desktop_icon_positions", {}).duplicate(true) if session.get("desktop_icon_positions", {}) is Dictionary else {}
 	_set_desktop_highlight_color(_color_from_variant(session.get("desktop_highlight_color", []), _desktop_highlight_color))
@@ -335,7 +332,7 @@ func import_state(state: Dictionary) -> String:
 	if _session_menu:
 		_session_menu.visible = false
 	if _desktop_bg:
-		_desktop_bg.color = WALLPAPERS[_wallpaper_index]
+		_desktop_bg.texture = _gradient_textures[_wallpaper_index]
 	_refresh_desktop_icons()
 	_update_clock()
 	if _session_active:
@@ -353,12 +350,12 @@ func reset_state() -> void:
 	_wallpaper_index = 0
 	_desktop_icon_positions.clear()
 	_files_shortcuts.clear()
-	_set_desktop_highlight_color(Color(0.34, 0.45, 0.62, 0.32))
+	_set_desktop_highlight_color(Tokens.alpha(Tokens.ACCENT, 0.25))
 	_session_active = false
 	_close_all_windows()
 	_hide_desktop_context_menu()
 	if _desktop_bg:
-		_desktop_bg.color = WALLPAPERS[_wallpaper_index]
+		_desktop_bg.texture = _gradient_textures[_wallpaper_index]
 	_refresh_desktop_icons()
 	_update_clock()
 	_show_auth_screen("login")
@@ -375,10 +372,34 @@ func _register_apps() -> void:
 		"system": {"title": "System", "subtitle": "System status and settings", "keywords": "settings diagnostics", "category": "Administration", "pinned": true, "builder": Callable(self, "_build_system_app")}
 	}
 
+func _build_gradient_textures() -> void:
+	if not _gradient_textures.is_empty():
+		return
+	var presets: Array[Dictionary] = [
+		{"c1": Color("0a0e1a"), "c2": Color("1a1030")},   # Deep space
+		{"c1": Color("0a1a14"), "c2": Color("103028")},   # Forest
+		{"c1": Color("1a1010"), "c2": Color("301820")},   # Sunset
+		{"c1": Color("0d0f14"), "c2": Color("181a24")},   # Clean charcoal
+		{"c1": Color("0c0e16"), "c2": Color("141822")},   # Acrylic dark
+	]
+	for preset in presets:
+		var grad := Gradient.new()
+		grad.add_point(0.0, preset["c1"])
+		grad.add_point(1.0, preset["c2"])
+		var tex := GradientTexture2D.new()
+		tex.gradient = grad
+		tex.fill = GradientTexture2D.FILL_RADIAL
+		tex.fill_from = Vector2(0.5, 0.3)
+		tex.fill_to = Vector2(0.5, 1.2)
+		_gradient_textures.append(tex)
+
 func _build_ui() -> void:
-	_desktop_bg = ColorRect.new()
-	_desktop_bg.color = WALLPAPERS[_wallpaper_index]
+	_desktop_bg = TextureRect.new()
 	_desktop_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_desktop_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_desktop_bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_build_gradient_textures()
+	_desktop_bg.texture = _gradient_textures[_wallpaper_index]
 	add_child(_desktop_bg)
 
 	_desktop_layer = Control.new()
@@ -416,15 +437,15 @@ func _build_taskbar() -> void:
 	_top_panel.anchor_top = 0.0
 	_top_panel.anchor_bottom = 0.0
 	_top_panel.offset_bottom = TOP_PANEL_HEIGHT
-	_top_panel.add_theme_stylebox_override("panel", _style(Color("121419ee"), Color("2d313b"), 1, 0))
+	_top_panel.add_theme_stylebox_override("panel", StyleFactory.top_panel())
 	add_child(_top_panel)
 
 	var top_row := HBoxContainer.new()
 	top_row.set_anchors_preset(Control.PRESET_FULL_RECT)
-	top_row.offset_left = 8
-	top_row.offset_right = -8
-	top_row.offset_top = 4
-	top_row.offset_bottom = -4
+	top_row.offset_left = 10
+	top_row.offset_right = -10
+	top_row.offset_top = 3
+	top_row.offset_bottom = -3
 	top_row.add_theme_constant_override("separation", 8)
 	_top_panel.add_child(top_row)
 
@@ -435,17 +456,20 @@ func _build_taskbar() -> void:
 
 	var workspaces_button := _button("Workspaces", Vector2(0, 24))
 	workspaces_button.flat = true
+	workspaces_button.add_theme_color_override("font_color", Tokens.TEXT)
 	left_row.add_child(workspaces_button)
 	var apps_button := _button("Applications", Vector2(0, 24))
 	apps_button.flat = true
 	apps_button.pressed.connect(_toggle_launcher)
+	apps_button.add_theme_color_override("font_color", Tokens.TEXT)
 	left_row.add_child(apps_button)
 
 	_clock_label = Label.new()
 	_clock_label.custom_minimum_size = Vector2(180, 0)
 	_clock_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_clock_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_clock_label.add_theme_color_override("font_color", TEXT)
+	_clock_label.add_theme_color_override("font_color", Tokens.TEXT)
+	_clock_label.add_theme_font_size_override("font_size", 14)
 	top_row.add_child(_clock_label)
 
 	_status_icons_row = HBoxContainer.new()
@@ -454,11 +478,10 @@ func _build_taskbar() -> void:
 	_status_icons_row.add_theme_constant_override("separation", 4)
 	top_row.add_child(_status_icons_row)
 
-	for pair in [["◎", "Network"], ["🔊", "Audio"], ["⌁", "Bluetooth"], ["🔋", "Power"], ["⏻", "Session"]]:
-		var icon_button := _button(str(pair[0]), Vector2(28, 24))
-		icon_button.tooltip_text = str(pair[1])
-		icon_button.add_theme_font_size_override("font_size", 12)
-		if str(pair[1]) == "Session":
+	for pair in [["Network", "wifi"], ["Audio", "volume"], ["Bluetooth", "bluetooth"], ["Power", "battery"], ["Session", "session"]]:
+		var icon_button := _icon_button(str(pair[1]), Vector2(28, 24))
+		icon_button.tooltip_text = str(pair[0])
+		if str(pair[0]) == "Session":
 			icon_button.pressed.connect(_toggle_session_menu)
 		_status_icons_row.add_child(icon_button)
 
@@ -468,11 +491,11 @@ func _build_taskbar() -> void:
 	_dock_panel.anchor_right = 0.5
 	_dock_panel.anchor_top = 1.0
 	_dock_panel.anchor_bottom = 1.0
-	_dock_panel.offset_left = -360
-	_dock_panel.offset_right = 360
+	_dock_panel.offset_left = -320
+	_dock_panel.offset_right = 320
 	_dock_panel.offset_top = -DOCK_HEIGHT - DOCK_BOTTOM_MARGIN
 	_dock_panel.offset_bottom = -DOCK_BOTTOM_MARGIN
-	_dock_panel.add_theme_stylebox_override("panel", _style(Color("10131acc"), Color("323845"), 1, 26))
+	_dock_panel.add_theme_stylebox_override("panel", StyleFactory.dock_pill(24))
 	add_child(_dock_panel)
 
 	var dock_row := HBoxContainer.new()
@@ -484,12 +507,13 @@ func _build_taskbar() -> void:
 	dock_row.add_theme_constant_override("separation", 8)
 	_dock_panel.add_child(dock_row)
 
-	_start_button = _button("◉", Vector2(40, 40))
+	_start_button = _icon_button("start", Vector2(40, 40))
 	_start_button.tooltip_text = "Start"
 	_start_button.pressed.connect(_toggle_launcher)
 	dock_row.add_child(_start_button)
 
 	var divider := VSeparator.new()
+	divider.add_theme_constant_override("separation", 8)
 	dock_row.add_child(divider)
 
 	_taskbar_windows = HBoxContainer.new()
@@ -498,12 +522,12 @@ func _build_taskbar() -> void:
 	_taskbar_windows.add_theme_constant_override("separation", 8)
 	dock_row.add_child(_taskbar_windows)
 
-	_notification_button = _button("🔔", Vector2(40, 40))
+	_notification_button = _icon_button("notification", Vector2(40, 40))
 	_notification_button.tooltip_text = "Notification history"
 	_notification_button.pressed.connect(_toggle_notification_history)
 	dock_row.add_child(_notification_button)
 
-	_user_button = _button("🙂", Vector2(40, 40))
+	_user_button = _icon_button("user", Vector2(40, 40))
 	_user_button.tooltip_text = "User menu"
 	_user_button.pressed.connect(_toggle_session_menu)
 	dock_row.add_child(_user_button)
@@ -514,7 +538,7 @@ func _build_launcher() -> void:
 	_launcher.visible = false
 	_launcher.clip_contents = true
 	_launcher.size = _compute_launcher_size(get_viewport_rect().size)
-	_launcher.add_theme_stylebox_override("panel", _style(PANEL, BORDER_ACTIVE, 1, 8))
+	_launcher.add_theme_stylebox_override("panel", StyleFactory.glass_panel(0.88, Tokens.alpha(Tokens.WHITE, 0.10), 1, 16))
 	add_child(_launcher)
 
 	_launcher_frame = VBoxContainer.new()
@@ -531,15 +555,20 @@ func _build_launcher() -> void:
 	header.add_theme_constant_override("separation", 2)
 	_launcher_frame.add_child(header)
 
-	_launcher_header_label = _label("Start", 16, TEXT)
+	_launcher_header_label = _label("Start", 22, Tokens.TEXT)
+	_launcher_header_label.add_theme_font_size_override("font_size", 22)
+	_launcher_header_label.add_theme_color_override("font_color", Tokens.TEXT)
 	header.add_child(_launcher_header_label)
-	_launcher_user_label = _label("", 12, MUTED)
+	_launcher_user_label = _label("", 11, Tokens.MUTED)
 	header.add_child(_launcher_user_label)
 
 	_launcher_search = LineEdit.new()
 	_launcher_search.placeholder_text = "Search apps"
 	_launcher_search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_launcher_search.custom_minimum_size = Vector2(0, 36)
 	_style_line_edit(_launcher_search)
+	_launcher_search.add_theme_stylebox_override("normal", StyleFactory.input_normal(10))
+	_launcher_search.add_theme_stylebox_override("focus", StyleFactory.input_focus(10))
 	_launcher_search.text_changed.connect(func(new_text: String) -> void:
 		_launcher_filter_text = new_text.strip_edges().to_lower()
 		_rebuild_launcher_list()
@@ -555,7 +584,7 @@ func _build_launcher() -> void:
 	var categories_panel := Panel.new()
 	categories_panel.custom_minimum_size = Vector2(156, 0)
 	categories_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	categories_panel.add_theme_stylebox_override("panel", _style(Color("1b1f27"), BORDER, 1, 8))
+	categories_panel.add_theme_stylebox_override("panel", StyleFactory.solid_panel(Tokens.alpha(Tokens.BG, 0.5), Tokens.alpha(Tokens.WHITE, 0.05), 1, 8))
 	content_row.add_child(categories_panel)
 
 	var categories_scroll := ScrollContainer.new()
@@ -630,7 +659,7 @@ func _build_session_menu() -> void:
 	_session_menu.name = "SessionMenu"
 	_session_menu.visible = false
 	_session_menu.size = Vector2(280, 264)
-	_session_menu.add_theme_stylebox_override("panel", _style(PANEL, BORDER_ACTIVE, 1, 10))
+	_session_menu.add_theme_stylebox_override("panel", StyleFactory.glass_panel(0.92, Tokens.alpha(Tokens.WHITE, 0.10), 1, 12))
 	add_child(_session_menu)
 
 	var column := VBoxContainer.new()
@@ -674,7 +703,7 @@ func _build_desktop_context_menu() -> void:
 	_desktop_context_menu.size = Vector2(272, 352)
 	_desktop_context_menu.clip_contents = true
 	_desktop_context_menu.mouse_filter = Control.MOUSE_FILTER_STOP
-	_desktop_context_menu.add_theme_stylebox_override("panel", _style(PANEL, BORDER_ACTIVE, 1, 8))
+	_desktop_context_menu.add_theme_stylebox_override("panel", StyleFactory.context_menu(12))
 	add_child(_desktop_context_menu)
 
 	var column := VBoxContainer.new()
@@ -686,7 +715,7 @@ func _build_desktop_context_menu() -> void:
 	column.add_theme_constant_override("separation", 5)
 	_desktop_context_menu.add_child(column)
 
-	column.add_child(_label("Desktop", 14, TEXT))
+	column.add_child(_label("Desktop", 14, Tokens.TEXT))
 
 	var new_file_button := _context_menu_button("New file")
 	new_file_button.pressed.connect(func() -> void:
@@ -746,7 +775,7 @@ func _build_desktop_context_menu() -> void:
 
 	_desktop_status_label = Label.new()
 	_desktop_status_label.add_theme_font_size_override("font_size", 12)
-	_desktop_status_label.add_theme_color_override("font_color", MUTED)
+	_desktop_status_label.add_theme_color_override("font_color", Tokens.MUTED)
 	_desktop_status_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_desktop_status_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_desktop_status_label.custom_minimum_size = Vector2(0, 18)
@@ -821,7 +850,7 @@ func _build_alt_tab_overlay() -> void:
 
 	var inner := Panel.new()
 	inner.custom_minimum_size = Vector2(420, 130)
-	inner.add_theme_stylebox_override("panel", _style(PANEL, BORDER_ACTIVE, 1, 12))
+	inner.add_theme_stylebox_override("panel", StyleFactory.glass_panel(0.88, Tokens.alpha(Tokens.WHITE, 0.10), 1, 14))
 	center.add_child(inner)
 
 	_alt_tab_content = HBoxContainer.new()
@@ -839,7 +868,7 @@ func _build_notification_history_panel() -> void:
 	_notification_history_panel.name = "NotificationHistory"
 	_notification_history_panel.visible = false
 	_notification_history_panel.size = Vector2(352, 320)
-	_notification_history_panel.add_theme_stylebox_override("panel", _style(PANEL, BORDER_ACTIVE, 1, 8))
+	_notification_history_panel.add_theme_stylebox_override("panel", StyleFactory.glass_panel(0.92, Tokens.alpha(Tokens.WHITE, 0.10), 1, 12))
 	add_child(_notification_history_panel)
 
 	var column := VBoxContainer.new()
@@ -862,7 +891,7 @@ func _build_notification_history_panel() -> void:
 	header_title.autowrap_mode = TextServer.AUTOWRAP_OFF
 	header_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	header_title.add_theme_font_size_override("font_size", 13)
-	header_title.add_theme_color_override("font_color", TEXT)
+	header_title.add_theme_color_override("font_color", Tokens.TEXT)
 	header.add_child(header_title)
 	var clear_button := _button("Clear", Vector2(60, 30))
 	clear_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -901,7 +930,7 @@ func _refresh_notifications() -> void:
 	for child in _notification_list.get_children():
 		child.queue_free()
 	if _notifications.is_empty():
-		_notification_list.add_child(_label("No notifications", 12, MUTED))
+		_notification_list.add_child(_label("No notifications", 12, Tokens.MUTED))
 		return
 	for notification in _notifications:
 		var item: Dictionary = notification
@@ -914,14 +943,14 @@ func _notification_row(notification: Dictionary) -> Control:
 	button.add_theme_font_size_override("font_size", 12)
 	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	button.tooltip_text = str(notification.get("body", ""))
-	var normal := _style(SURFACE, BORDER, 1, 6)
-	normal.content_margin_left = 6
-	normal.content_margin_right = 6
+	var normal := StyleFactory.button_normal(6)
+	normal.content_margin_left = 8
+	normal.content_margin_right = 8
 	normal.content_margin_top = 4
 	normal.content_margin_bottom = 4
-	var hover := _style(SURFACE_HOVER, BORDER_ACTIVE, 1, 6)
-	hover.content_margin_left = 6
-	hover.content_margin_right = 6
+	var hover := StyleFactory.button_hover(6)
+	hover.content_margin_left = 8
+	hover.content_margin_right = 8
 	hover.content_margin_top = 4
 	hover.content_margin_bottom = 4
 	button.add_theme_stylebox_override("normal", normal)
@@ -953,7 +982,7 @@ func _show_notification_toast(notification: Dictionary) -> void:
 	toast.size = Vector2(330, 92)
 	toast.position = Vector2(maxf(size.x - toast.size.x - 16.0, 16.0), 18.0 + minf(float(_notification_layer.get_child_count()) * 102.0, 306.0))
 	toast.mouse_filter = Control.MOUSE_FILTER_STOP
-	toast.add_theme_stylebox_override("panel", _style(SURFACE, _notification_level_color(str(notification.get("level", "info"))), 1, 8))
+	toast.add_theme_stylebox_override("panel", StyleFactory.toast(str(notification.get("level", "info")), 10))
 	_notification_layer.add_child(toast)
 	toast.move_to_front()
 
@@ -996,11 +1025,11 @@ func _notification_level_color(level: String) -> Color:
 		"warning":
 			return Color("d19a66")
 		"error":
-			return ERROR
+			return Tokens.ERROR
 		"message":
-			return FOCUS
+			return Tokens.FOCUS
 		_:
-			return BORDER_ACTIVE
+			return Tokens.BORDER_ACTIVE
 
 func _notifications_text() -> String:
 	if _notifications.is_empty():
@@ -1021,12 +1050,13 @@ func _build_desktop_icons() -> void:
 	_desktop_icons.offset_bottom = -DESKTOP_ICON_MARGIN.y
 	_desktop_icons.mouse_filter = Control.MOUSE_FILTER_PASS
 	_desktop_layer.add_child(_desktop_icons)
-	_desktop_folder_icon = _desktop_icon_texture(true)
-	_desktop_file_icon = _desktop_icon_texture(false)
+	_ensure_icon_atlas()
+	_desktop_folder_icon = _icon_atlas.get_icon("folder", 40)
+	_desktop_file_icon = _icon_atlas.get_icon("file", 40)
 	_desktop_drag_rect = ColorRect.new()
 	_desktop_drag_rect.visible = false
 	_desktop_drag_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_desktop_drag_rect.color = _desktop_highlight_color
+	_desktop_drag_rect.color = Tokens.alpha(Tokens.ACCENT, 0.15)
 	_desktop_layer.add_child(_desktop_drag_rect)
 
 func _refresh_desktop_icons() -> void:
@@ -1076,15 +1106,29 @@ func _desktop_icon_button(entry: Dictionary) -> Button:
 	button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	button.tooltip_text = str(entry.get("path", ""))
 	button.add_theme_font_size_override("font_size", 12)
-	button.add_theme_color_override("font_color", TEXT)
-	button.add_theme_color_override("font_hover_color", TEXT)
-	button.add_theme_color_override("font_pressed_color", TEXT)
-	button.add_theme_color_override("font_focus_color", TEXT)
+	button.add_theme_color_override("font_color", Tokens.TEXT)
+	button.add_theme_color_override("font_hover_color", Tokens.TEXT)
+	button.add_theme_color_override("font_pressed_color", Tokens.TEXT)
+	button.add_theme_color_override("font_focus_color", Tokens.TEXT)
 	button.add_theme_constant_override("icon_max_width", 34)
 	button.set_meta("desktop_path", str(entry.get("path", "")))
 	button.set_meta("desktop_is_dir", bool(str(entry.get("type", "file")) == "dir"))
 	button.pressed.connect(_on_desktop_icon_pressed.bind(button, false))
 	button.gui_input.connect(_on_desktop_icon_gui_input.bind(button, bool(str(entry.get("type", "file")) == "dir")))
+	if DisplayServer.get_name() != "headless":
+		button.mouse_entered.connect(func() -> void:
+			var tw := button.create_tween()
+			tw.set_trans(Tween.TRANS_QUAD)
+			tw.set_ease(Tween.EASE_OUT)
+			tw.tween_property(button, "scale", Vector2(1.05, 1.05), Tokens.TIME["fast"])
+		)
+		button.mouse_exited.connect(func() -> void:
+			var tw := button.create_tween()
+			tw.set_trans(Tween.TRANS_QUAD)
+			tw.set_ease(Tween.EASE_OUT)
+			tw.tween_property(button, "scale", Vector2(1.0, 1.0), Tokens.TIME["fast"])
+		)
+		button.pivot_offset = DESKTOP_ICON_SIZE / 2.0
 	_apply_desktop_icon_style(button, false)
 	return button
 
@@ -1123,10 +1167,10 @@ func _clamp_all_desktop_icon_positions() -> void:
 func _apply_desktop_icon_style(button: Button, selected: bool) -> void:
 	var border_color := _desktop_highlight_border_color()
 	var normal_color := _desktop_highlight_color if selected else Color(0, 0, 0, 0)
-	button.add_theme_stylebox_override("normal", _style(normal_color, border_color if selected else Color(0, 0, 0, 0), 1 if selected else 0, 6))
-	button.add_theme_stylebox_override("hover", _style(Color(1, 1, 1, 0.08), BORDER_ACTIVE, 1, 6))
-	button.add_theme_stylebox_override("pressed", _style(_desktop_highlight_color, border_color, 1, 6))
-	button.add_theme_stylebox_override("focus", _style(_desktop_highlight_color, border_color, 2, 6))
+	button.add_theme_stylebox_override("normal", StyleFactory.desktop_icon_selected(10) if selected else StyleFactory.desktop_icon_hover(10))
+	button.add_theme_stylebox_override("hover", StyleFactory.desktop_icon_hover(10))
+	button.add_theme_stylebox_override("pressed", StyleFactory.desktop_icon_selected(10))
+	button.add_theme_stylebox_override("focus", StyleFactory.desktop_icon_selected(10))
 
 func _desktop_highlight_border_color() -> Color:
 	return Color(minf(_desktop_highlight_color.r + 0.16, 1.0), minf(_desktop_highlight_color.g + 0.16, 1.0), minf(_desktop_highlight_color.b + 0.16, 1.0), 0.95)
@@ -1365,51 +1409,39 @@ func _update_desktop_context_actions() -> void:
 func _set_desktop_highlight_color(color: Color) -> void:
 	_desktop_highlight_color = Color(color.r, color.g, color.b, clampf(color.a, 0.14, 0.7))
 	if _desktop_drag_rect:
-		_desktop_drag_rect.color = _desktop_highlight_color
+		_desktop_drag_rect.color = Tokens.alpha(Tokens.ACCENT, 0.15)
 	_update_desktop_icon_selection()
 	_queue_state_save()
 
-func _desktop_icon_texture(is_folder: bool) -> Texture2D:
-	var image := Image.create(36, 36, false, Image.FORMAT_RGBA8)
-	image.fill(Color(0, 0, 0, 0))
-	if is_folder:
-		image.fill_rect(Rect2i(3, 10, 30, 20), Color("c7a45b"))
-		image.fill_rect(Rect2i(5, 8, 12, 4), Color("ddc074"))
-		image.fill_rect(Rect2i(5, 15, 26, 2), Color("edd7a0"))
-		image.fill_rect(Rect2i(3, 29, 30, 1), Color("9b7f46"))
-	else:
-		image.fill_rect(Rect2i(8, 4, 20, 28), Color("d7dee9"))
-		image.fill_rect(Rect2i(20, 4, 8, 8), Color("edf2f8"))
-		image.fill_rect(Rect2i(8, 4, 20, 1), Color("a7b3c6"))
-		image.fill_rect(Rect2i(11, 14, 14, 2), Color("a2afc2"))
-		image.fill_rect(Rect2i(11, 19, 14, 2), Color("a2afc2"))
-		image.fill_rect(Rect2i(11, 24, 12, 2), Color("a2afc2"))
-	return ImageTexture.create_from_image(image)
+func _desktop_icon_texture(_is_folder: bool) -> Texture2D:
+	# DEPRECATED: use IconAtlas instead
+	return ImageTexture.create_from_image(Image.create(1, 1, false, Image.FORMAT_RGBA8))
 
 func _context_menu_button(text_value: String) -> Button:
-	var button := _button(text_value, Vector2(0, 30))
+	var button := _button(text_value, Vector2(0, 36))
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	var normal := _style(SURFACE, BORDER, 1, 6)
-	normal.content_margin_left = 8
-	normal.content_margin_right = 8
-	normal.content_margin_top = 3
-	normal.content_margin_bottom = 3
-	var hover := _style(SURFACE_HOVER, BORDER_ACTIVE, 1, 6)
-	hover.content_margin_left = 8
-	hover.content_margin_right = 8
-	hover.content_margin_top = 3
-	hover.content_margin_bottom = 3
-	var pressed := _style(Color("3b414d"), FOCUS, 1, 6)
-	pressed.content_margin_left = 8
-	pressed.content_margin_right = 8
-	pressed.content_margin_top = 3
-	pressed.content_margin_bottom = 3
+	button.add_theme_font_size_override("font_size", 13)
+	var normal := StyleFactory.button_normal(6)
+	normal.content_margin_left = 10
+	normal.content_margin_right = 10
+	normal.content_margin_top = 4
+	normal.content_margin_bottom = 4
+	var hover := StyleFactory.button_hover(6)
+	hover.content_margin_left = 10
+	hover.content_margin_right = 10
+	hover.content_margin_top = 4
+	hover.content_margin_bottom = 4
+	var pressed := StyleFactory.button_pressed(6)
+	pressed.content_margin_left = 10
+	pressed.content_margin_right = 10
+	pressed.content_margin_top = 4
+	pressed.content_margin_bottom = 4
 	button.add_theme_stylebox_override("normal", normal)
 	button.add_theme_stylebox_override("hover", hover)
 	button.add_theme_stylebox_override("pressed", pressed)
-	button.add_theme_stylebox_override("focus", _style(Color(0, 0, 0, 0), FOCUS, 2, 6))
-	button.add_theme_stylebox_override("disabled", _style(Color("252830"), Color("333842"), 1, 6))
+	button.add_theme_stylebox_override("focus", StyleFactory.button_focus(6))
+	button.add_theme_stylebox_override("disabled", StyleFactory.button_disabled(6))
 	return button
 
 func _on_desktop_gui_input(event: InputEvent) -> void:
@@ -1533,9 +1565,9 @@ func _unique_child_path(parent_path: String, base_name: String) -> String:
 	return _fs.join_path(clean_parent, candidate_name)
 
 func _cycle_wallpaper() -> void:
-	_wallpaper_index = (_wallpaper_index + 1) % WALLPAPERS.size()
+	_wallpaper_index = (_wallpaper_index + 1) % _gradient_textures.size()
 	if _desktop_bg:
-		_desktop_bg.color = WALLPAPERS[_wallpaper_index]
+		_desktop_bg.texture = _gradient_textures[_wallpaper_index]
 	_set_desktop_context_status("Wallpaper changed")
 	_queue_state_save()
 
@@ -1554,14 +1586,16 @@ func _set_desktop_context_status(message: String, is_error := false) -> void:
 	_desktop_status_label.text = short_message
 	_desktop_status_label.tooltip_text = clean_message
 	_desktop_status_label.visible = true
-	_desktop_status_label.add_theme_color_override("font_color", ERROR if is_error else MUTED)
+	_desktop_status_label.add_theme_color_override("font_color", Tokens.ERROR if is_error else Tokens.MUTED)
 
 func _app_button(app_id: String, min_size: Vector2) -> Button:
 	var app: Dictionary = _apps[app_id]
 	var subtitle := str(app.get("subtitle", "")).strip_edges()
-	var title_line := "%s  %s" % [_app_icon(app_id), str(app["title"])]
-	var button_text := title_line if subtitle == "" else "%s\n%s" % [title_line, subtitle]
+	var button_text := str(app["title"]) if subtitle == "" else "%s\n%s" % [str(app["title"]), subtitle]
 	var button := _button(button_text, min_size)
+	button.icon = _app_icon(app_id)
+	button.expand_icon = true
+	button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	button.custom_minimum_size.y = maxf(button.custom_minimum_size.y, 48.0)
 	button.tooltip_text = "Open " + str(app["title"])
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -1572,41 +1606,43 @@ func _app_button(app_id: String, min_size: Vector2) -> Button:
 	)
 	return button
 
-func _app_icon(app_id: String) -> String:
+func _app_icon(app_id: String) -> Texture2D:
+	_ensure_icon_atlas()
 	match app_id:
 		"files":
-			return "📁"
+			return _icon_atlas.get_icon("folder", 20)
 		"notes":
-			return "📝"
+			return _icon_atlas.get_icon("notes", 20)
 		"text":
-			return "📄"
+			return _icon_atlas.get_icon("file", 20)
 		"browser":
-			return "🌐"
+			return _icon_atlas.get_icon("browser", 20)
 		"console":
-			return "⌨"
+			return _icon_atlas.get_icon("terminal", 20)
 		"system":
-			return "⚙"
+			return _icon_atlas.get_icon("settings", 20)
 		_:
-			return "◻"
+			return _icon_atlas.get_icon("placeholder", 20)
 
-func _category_icon(category_name: String) -> String:
+func _category_icon(category_name: String) -> Texture2D:
+	_ensure_icon_atlas()
 	match category_name.to_lower():
 		"all":
-			return "☰"
+			return _icon_atlas.get_icon("start", 16)
 		"favorites":
-			return "★"
+			return _icon_atlas.get_icon("home", 16)
 		"internet":
-			return "🌐"
+			return _icon_atlas.get_icon("browser", 16)
 		"office":
-			return "🗂"
+			return _icon_atlas.get_icon("notes", 16)
 		"programming":
-			return "⌨"
+			return _icon_atlas.get_icon("terminal", 16)
 		"system":
-			return "🖥"
+			return _icon_atlas.get_icon("settings", 16)
 		"administration":
-			return "⚙"
+			return _icon_atlas.get_icon("settings", 16)
 		_:
-			return "•"
+			return _icon_atlas.get_icon("placeholder", 16)
 
 func _open_account_settings() -> void:
 	_hide_launcher()
@@ -1680,7 +1716,7 @@ func _rebuild_launcher_list() -> void:
 
 	var any_added := false
 	var section_title := "Favorites" if _launcher_category_filter == "favorites" else "Applications"
-	_launcher_list.add_child(_label(section_title, 12, MUTED))
+	_launcher_list.add_child(_label(section_title, 12, Tokens.MUTED))
 
 	for app_id in _app_order:
 		if not _launcher_matches_filter(app_id):
@@ -1694,7 +1730,7 @@ func _rebuild_launcher_list() -> void:
 		any_added = true
 
 	if not any_added:
-		_launcher_list.add_child(_label("No apps match this view.", 12, MUTED))
+		_launcher_list.add_child(_label("No apps match this view.", 12, Tokens.MUTED))
 
 	_update_launcher_selection_visuals()
 
@@ -1704,9 +1740,9 @@ func _update_launcher_selection_visuals() -> void:
 		if not is_instance_valid(button):
 			continue
 		if app_id == _launcher_selected_app_id:
-			button.add_theme_stylebox_override("normal", _style(SURFACE_HOVER, FOCUS, 1, 6))
+			button.add_theme_stylebox_override("normal", _style(Tokens.SURFACE_HOVER, Tokens.FOCUS, 1, 6))
 		else:
-			button.add_theme_stylebox_override("normal", _style(SURFACE, BORDER, 1, 6))
+			button.add_theme_stylebox_override("normal", _style(Tokens.SURFACE, Tokens.BORDER, 1, 6))
 
 func _launcher_select_relative(delta: int) -> void:
 	var ids: Array[String] = []
@@ -1868,7 +1904,7 @@ func _create_task_button(app_id: String) -> void:
 	if _task_buttons.has(app_id):
 		return
 	var app: Dictionary = _apps[app_id]
-	var button := _button(_app_icon(app_id), Vector2(42, 40))
+	var button := _icon_button(app_id, Vector2(42, 40))
 	button.tooltip_text = str(app.get("title", app_id))
 	button.add_theme_font_size_override("font_size", 16)
 	button.pressed.connect(_on_task_button_pressed.bind(app_id))
@@ -1899,11 +1935,11 @@ func _update_task_button(app_id: String, active: bool) -> void:
 	if not is_instance_valid(button):
 		return
 	if active:
-		button.add_theme_stylebox_override("normal", _style(SURFACE_HOVER, FOCUS, 1, 6))
-		button.add_theme_color_override("font_color", TEXT)
+		button.add_theme_stylebox_override("normal", _style(Tokens.SURFACE_HOVER, Tokens.FOCUS, 1, 6))
+		button.add_theme_color_override("font_color", Tokens.TEXT)
 	else:
-		button.add_theme_stylebox_override("normal", _style(SURFACE, BORDER, 1, 6))
-		button.add_theme_color_override("font_color", MUTED)
+		button.add_theme_stylebox_override("normal", _style(Tokens.SURFACE, Tokens.BORDER, 1, 6))
+		button.add_theme_color_override("font_color", Tokens.MUTED)
 
 func _update_taskbar_indicators() -> void:
 	for app_id in _task_buttons.keys():
@@ -1917,11 +1953,11 @@ func _update_taskbar_indicators() -> void:
 			var window := _open_windows[app_id] as OSWindow
 			if window.visible:
 				if _active_window == window:
-					indicator.color = FOCUS
+					indicator.color = Tokens.FOCUS
 				else:
-					indicator.color = Color(MUTED.r, MUTED.g, MUTED.b, 0.45)
+					indicator.color = Color(Tokens.MUTED.r, Tokens.MUTED.g, Tokens.MUTED.b, 0.45)
 			else:
-				indicator.color = Color(MUTED.r, MUTED.g, MUTED.b, 0.18)
+				indicator.color = Color(Tokens.MUTED.r, Tokens.MUTED.g, Tokens.MUTED.b, 0.18)
 		else:
 			indicator.color = Color.TRANSPARENT
 
@@ -1971,6 +2007,8 @@ func _toggle_launcher() -> void:
 		_rebuild_launcher_list()
 		_layout()
 		_launcher.move_to_front()
+		var animator := UIAnimator.new()
+		animator.scale_in(_launcher, Tokens.TIME["normal"])
 		if _launcher_search:
 			_launcher_search.grab_focus()
 	else:
@@ -2035,11 +2073,14 @@ func _alt_tab_item(window: OSWindow, selected: bool) -> Control:
 	container.add_theme_constant_override("separation", 6)
 	container.custom_minimum_size = Vector2(74, 0)
 
-	var icon := Label.new()
-	icon.text = _app_icon(window.app_id)
-	icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	icon.add_theme_font_size_override("font_size", 26)
-	icon.add_theme_color_override("font_color", TEXT if selected else MUTED)
+	_ensure_icon_atlas()
+	var icon := TextureRect.new()
+	icon.texture = _app_icon(window.app_id)
+	icon.custom_minimum_size = Vector2(28, 28)
+	icon.size = Vector2(28, 28)
+	icon.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.modulate = Color(1, 1, 1, 1.0) if selected else Color(1, 1, 1, 0.6)
 	container.add_child(icon)
 
 	var title := Label.new()
@@ -2048,7 +2089,7 @@ func _alt_tab_item(window: OSWindow, selected: bool) -> Control:
 		title.text = window.app_id.capitalize()
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 11)
-	title.add_theme_color_override("font_color", TEXT if selected else MUTED)
+	title.add_theme_color_override("font_color", Tokens.TEXT if selected else Tokens.MUTED)
 	title.autowrap_mode = TextServer.AUTOWRAP_OFF
 	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	title.custom_minimum_size = Vector2(0, 18)
@@ -2057,7 +2098,7 @@ func _alt_tab_item(window: OSWindow, selected: bool) -> Control:
 	var indicator := ColorRect.new()
 	indicator.custom_minimum_size = Vector2(32 if selected else 0, 3)
 	indicator.size = Vector2(32 if selected else 0, 3)
-	indicator.color = FOCUS if selected else Color.TRANSPARENT
+	indicator.color = Tokens.FOCUS if selected else Color.TRANSPARENT
 	indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	container.add_child(indicator)
 
@@ -2142,8 +2183,11 @@ func _show_auth_screen(mode: String, message := "") -> void:
 
 	var card := Panel.new()
 	card.custom_minimum_size = Vector2(440, 430)
-	card.add_theme_stylebox_override("panel", _style(PANEL, BORDER_ACTIVE, 1, 10))
+	card.add_theme_stylebox_override("panel", StyleFactory.glass_panel(0.90, Tokens.alpha(Tokens.WHITE, 0.12), 1, 14))
 	center.add_child(card)
+	if DisplayServer.get_name() != "headless":
+		var animator := UIAnimator.new()
+		animator.scale_in(card, Tokens.TIME["slow"])
 
 	var column := VBoxContainer.new()
 	column.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -2159,9 +2203,9 @@ func _show_auth_screen(mode: String, message := "") -> void:
 		title_text = "Session locked"
 	elif mode == "switch":
 		title_text = "Switch user"
-	column.add_child(_label(title_text, 22, TEXT))
+	column.add_child(_label(title_text, 22, Tokens.TEXT))
 
-	var subtitle := _label("Choose an account and enter its password.", 13, MUTED)
+	var subtitle := _label("Choose an account and enter its password.", 13, Tokens.MUTED)
 	if mode == "login":
 		subtitle.text = "Choose an account to start a session. Blank passwords are accepted until a password is set."
 	elif mode == "locked":
@@ -2197,7 +2241,7 @@ func _show_auth_screen(mode: String, message := "") -> void:
 	_style_line_edit(password_input)
 	column.add_child(password_input)
 
-	var status := _label(message, 12, MUTED)
+	var status := _label(message, 12, Tokens.MUTED)
 	column.add_child(status)
 
 	var buttons := HFlowContainer.new()
@@ -2291,12 +2335,12 @@ func _build_files_app() -> Control:
 
 	var sidebar_panel := PanelContainer.new()
 	sidebar_panel.custom_minimum_size = Vector2(230, 0)
-	var sidebar_style := _style(Color("252932"), Color("2f3440"), 1, 10)
+	var sidebar_style := _style(Tokens.SURFACE, Tokens.SURFACE_HOVER, 1, 10)
 	sidebar_style.content_margin_left = 12
 	sidebar_style.content_margin_right = 12
 	sidebar_style.content_margin_top = 10
 	sidebar_style.content_margin_bottom = 10
-	sidebar_panel.add_theme_stylebox_override("panel", sidebar_style)
+	sidebar_panel.add_theme_stylebox_override("panel", StyleFactory.solid_panel(Tokens.alpha(Tokens.SURFACE, 0.7), Tokens.alpha(Tokens.WHITE, 0.06), 1, 10))
 	frame.add_child(sidebar_panel)
 
 	var sidebar := VBoxContainer.new()
@@ -2327,7 +2371,7 @@ func _build_files_app() -> Control:
 	var shortcuts_dialog := PopupPanel.new()
 	shortcuts_dialog.visible = false
 	shortcuts_dialog.size = Vector2(360, 154)
-	shortcuts_dialog.add_theme_stylebox_override("panel", _style(Color("252932"), BORDER_ACTIVE, 1, 8))
+	shortcuts_dialog.add_theme_stylebox_override("panel", _style(Tokens.SURFACE, Tokens.BORDER_ACTIVE, 1, 8))
 	sidebar.add_child(shortcuts_dialog)
 
 	var shortcuts_dialog_body := VBoxContainer.new()
@@ -2342,7 +2386,7 @@ func _build_files_app() -> Control:
 	var shortcut_dialog_title := Label.new()
 	shortcut_dialog_title.text = "Add shortcut"
 	shortcut_dialog_title.add_theme_font_size_override("font_size", 14)
-	shortcut_dialog_title.add_theme_color_override("font_color", TEXT)
+	shortcut_dialog_title.add_theme_color_override("font_color", Tokens.TEXT)
 	shortcuts_dialog_body.add_child(shortcut_dialog_title)
 
 	var shortcut_dialog_label_input := LineEdit.new()
@@ -2367,7 +2411,7 @@ func _build_files_app() -> Control:
 	shortcut_dialog_save_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	shortcut_dialog_actions.add_child(shortcut_dialog_save_button)
 
-	var shortcuts_hint := _label("Double-click a shortcut to open it", 11, MUTED)
+	var shortcuts_hint := _label("Double-click a shortcut to open it", 11, Tokens.MUTED)
 	shortcuts_hint.autowrap_mode = TextServer.AUTOWRAP_OFF
 	shortcuts_hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	sidebar.add_child(shortcuts_hint)
@@ -2396,7 +2440,7 @@ func _build_files_app() -> Control:
 	breadcrumb_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	breadcrumb_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	breadcrumb_label.add_theme_font_size_override("font_size", 15)
-	breadcrumb_label.add_theme_color_override("font_color", TEXT)
+	breadcrumb_label.add_theme_color_override("font_color", Tokens.TEXT)
 	nav_bar.add_child(breadcrumb_label)
 
 	var refresh_button := _files_chrome_button("Refresh", Vector2(74, 30))
@@ -2479,24 +2523,24 @@ func _build_files_app() -> Control:
 	status_row.add_theme_constant_override("separation", 10)
 	content.add_child(status_row)
 
-	var selected_label := _label("Selected: none", 12, MUTED)
+	var selected_label := _label("Selected: none", 12, Tokens.MUTED)
 	selected_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	selected_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	selected_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_row.add_child(selected_label)
 
-	var clipboard_label := _label("clip: empty", 12, MUTED)
+	var clipboard_label := _label("clip: empty", 12, Tokens.MUTED)
 	clipboard_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	clipboard_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	clipboard_label.custom_minimum_size = Vector2(280, 0)
 	status_row.add_child(clipboard_label)
 
-	var details_label := _label("", 11, MUTED)
+	var details_label := _label("", 11, Tokens.MUTED)
 	details_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	details_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	content.add_child(details_label)
 
-	var status := _label("", 12, MUTED)
+	var status := _label("", 12, Tokens.MUTED)
 	status.autowrap_mode = TextServer.AUTOWRAP_OFF
 	status.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	root.add_child(status)
@@ -3173,7 +3217,7 @@ func _build_text_app() -> Control:
 	_text_app_path_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_text_app_path_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_text_app_path_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_text_app_path_label.add_theme_color_override("font_color", MUTED)
+	_text_app_path_label.add_theme_color_override("font_color", Tokens.MUTED)
 	header.add_child(_text_app_path_label)
 
 	var save_button := _button("Save", Vector2(70, 30))
@@ -3196,7 +3240,7 @@ func _build_text_app() -> Control:
 	_style_text_edit(_text_app_editor)
 	root.add_child(_text_app_editor)
 
-	_text_app_status_label = _label("", 12, MUTED)
+	_text_app_status_label = _label("", 12, Tokens.MUTED)
 	root.add_child(_text_app_status_label)
 	return root
 
@@ -3600,14 +3644,14 @@ func _build_system_app() -> Control:
 	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	info.autowrap_mode = TextServer.AUTOWRAP_OFF
 	info.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	info.add_theme_color_override("font_color", TEXT)
+	info.add_theme_color_override("font_color", Tokens.TEXT)
 	info_scroll.add_child(info)
 	_update_system_info(info)
 
 	var bridge_panel := VBoxContainer.new()
 	bridge_panel.add_theme_constant_override("separation", 6)
 	system_tab.add_child(bridge_panel)
-	bridge_panel.add_child(_label("Hermes bridge", 12, TEXT))
+	bridge_panel.add_child(_label("Hermes bridge", 12, Tokens.TEXT))
 
 	var bridge_row := HBoxContainer.new()
 	bridge_row.add_theme_constant_override("separation", 8)
@@ -3624,11 +3668,11 @@ func _build_system_app() -> Control:
 	var bridge_disconnect_button := _button("Disconnect", Vector2(104, 30))
 	bridge_row.add_child(bridge_disconnect_button)
 
-	var bridge_status_label := _label("Bridge: unavailable", 11, MUTED)
+	var bridge_status_label := _label("Bridge: unavailable", 11, Tokens.MUTED)
 	bridge_panel.add_child(bridge_status_label)
 	var bridge_auto_connect := CheckBox.new()
 	bridge_auto_connect.text = "Auto-connect on boot"
-	bridge_auto_connect.add_theme_color_override("font_color", TEXT)
+	bridge_auto_connect.add_theme_color_override("font_color", Tokens.TEXT)
 	bridge_panel.add_child(bridge_auto_connect)
 
 	var refresh_bridge_status := func() -> void:
@@ -3637,7 +3681,7 @@ func _build_system_app() -> Control:
 		bridge_auto_connect.button_pressed = bool(state.get("auto_connect", false))
 		var connected := bool(state.get("connected", false))
 		bridge_status_label.text = "Bridge: connected" if connected else "Bridge: disconnected"
-		bridge_status_label.add_theme_color_override("font_color", TEXT if connected else MUTED)
+		bridge_status_label.add_theme_color_override("font_color", Tokens.TEXT if connected else Tokens.MUTED)
 		_update_system_info(info)
 
 	refresh_bridge_status.call()
@@ -3719,23 +3763,23 @@ func _build_system_app() -> Control:
 	right_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	appearance_shell.add_child(right_spacer)
 
-	appearance_card.add_child(_label("Desktop appearance", 13, TEXT))
-	appearance_card.add_child(_label("Selection and drag highlight", 11, MUTED))
+	appearance_card.add_child(_label("Desktop appearance", 13, Tokens.TEXT))
+	appearance_card.add_child(_label("Selection and drag highlight", 11, Tokens.MUTED))
 
 	var preset_row := HBoxContainer.new()
 	preset_row.add_theme_constant_override("separation", 8)
 	appearance_card.add_child(preset_row)
-	var preset_label := _label("Highlight", 12, TEXT)
+	var preset_label := _label("Highlight", 12, Tokens.TEXT)
 	preset_label.custom_minimum_size = Vector2(104, 0)
 	preset_row.add_child(preset_label)
 
 	var preset_option := OptionButton.new()
 	preset_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	preset_option.custom_minimum_size = Vector2(220, 30)
-	preset_option.add_theme_color_override("font_color", TEXT)
-	preset_option.add_theme_stylebox_override("normal", _style(SURFACE, BORDER, 1, 6))
-	preset_option.add_theme_stylebox_override("hover", _style(SURFACE_HOVER, BORDER_ACTIVE, 1, 6))
-	preset_option.add_theme_stylebox_override("focus", _style(SURFACE_HOVER, FOCUS, 2, 6))
+	preset_option.add_theme_color_override("font_color", Tokens.TEXT)
+	preset_option.add_theme_stylebox_override("normal", _style(Tokens.SURFACE, Tokens.BORDER, 1, 6))
+	preset_option.add_theme_stylebox_override("hover", _style(Tokens.SURFACE_HOVER, Tokens.BORDER_ACTIVE, 1, 6))
+	preset_option.add_theme_stylebox_override("focus", _style(Tokens.SURFACE_HOVER, Tokens.FOCUS, 2, 6))
 	var presets := _desktop_highlight_presets()
 	for preset in presets:
 		preset_option.add_item(str(preset.get("label", "Color")))
@@ -3752,7 +3796,7 @@ func _build_system_app() -> Control:
 	var alpha_row := HBoxContainer.new()
 	alpha_row.add_theme_constant_override("separation", 8)
 	appearance_card.add_child(alpha_row)
-	var alpha_label := _label("Opacity", 12, TEXT)
+	var alpha_label := _label("Opacity", 12, Tokens.TEXT)
 	alpha_label.custom_minimum_size = Vector2(104, 0)
 	alpha_row.add_child(alpha_label)
 	var alpha_slider := HSlider.new()
@@ -3763,7 +3807,7 @@ func _build_system_app() -> Control:
 	alpha_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	alpha_slider.custom_minimum_size = Vector2(190, 0)
 	alpha_row.add_child(alpha_slider)
-	var alpha_value := _label("%d%%" % int(round(_desktop_highlight_color.a * 100.0)), 12, MUTED)
+	var alpha_value := _label("%d%%" % int(round(_desktop_highlight_color.a * 100.0)), 12, Tokens.MUTED)
 	alpha_value.custom_minimum_size = Vector2(44, 0)
 	alpha_row.add_child(alpha_value)
 	alpha_slider.value_changed.connect(func(value: float) -> void:
@@ -4441,18 +4485,69 @@ func _month_name(month: int) -> String:
 
 func _set_status(label: Label, message: String, is_error := false) -> void:
 	label.text = message
-	label.add_theme_color_override("font_color", ERROR if is_error else MUTED)
+	label.add_theme_color_override("font_color", Tokens.ERROR if is_error else Tokens.MUTED)
 
 func _button(text_value: String, min_size: Vector2) -> Button:
 	var button := Button.new()
 	button.text = text_value
 	button.custom_minimum_size = min_size
-	button.add_theme_color_override("font_color", TEXT)
-	button.add_theme_stylebox_override("normal", _style(SURFACE, BORDER, 1, 6))
-	button.add_theme_stylebox_override("hover", _style(SURFACE_HOVER, BORDER_ACTIVE, 1, 6))
-	button.add_theme_stylebox_override("pressed", _style(Color("3b414d"), FOCUS, 1, 6))
-	button.add_theme_stylebox_override("focus", _style(Color(0, 0, 0, 0), FOCUS, 2, 6))
-	button.add_theme_stylebox_override("disabled", _style(Color("252830"), Color("333842"), 1, 6))
+	button.add_theme_color_override("font_color", Tokens.TEXT)
+	button.add_theme_stylebox_override("normal", StyleFactory.button_normal(8))
+	button.add_theme_stylebox_override("hover", StyleFactory.button_hover(8))
+	button.add_theme_stylebox_override("pressed", StyleFactory.button_pressed(8))
+	button.add_theme_stylebox_override("focus", StyleFactory.button_focus(8))
+	button.add_theme_stylebox_override("disabled", StyleFactory.button_disabled(8))
+	# Smooth hover scale (disabled in headless)
+	if DisplayServer.get_name() != "headless":
+		button.mouse_entered.connect(func() -> void:
+			var tw := button.create_tween()
+			tw.set_trans(Tween.TRANS_QUAD)
+			tw.set_ease(Tween.EASE_OUT)
+			tw.tween_property(button, "scale", Vector2(1.02, 1.02), Tokens.TIME["fast"])
+		)
+		button.mouse_exited.connect(func() -> void:
+			var tw := button.create_tween()
+			tw.set_trans(Tween.TRANS_QUAD)
+			tw.set_ease(Tween.EASE_OUT)
+			tw.tween_property(button, "scale", Vector2(1.0, 1.0), Tokens.TIME["fast"])
+		)
+		button.pivot_offset = min_size / 2.0
+	return button
+
+var _icon_atlas: IconAtlas
+
+func _ensure_icon_atlas() -> void:
+	if _icon_atlas == null:
+		_icon_atlas = IconAtlas.new()
+
+func _icon_button(icon_name: String, min_size: Vector2) -> Button:
+	_ensure_icon_atlas()
+	var button := Button.new()
+	button.custom_minimum_size = min_size
+	button.icon = _icon_atlas.get_icon(icon_name, int(min(minf(min_size.x, min_size.y) * 0.55, 22)))
+	button.expand_icon = true
+	button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	button.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
+	button.add_theme_color_override("font_color", Tokens.TEXT)
+	button.add_theme_stylebox_override("normal", StyleFactory.build(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 8))
+	button.add_theme_stylebox_override("hover", StyleFactory.build(Tokens.alpha(Tokens.WHITE, 0.08), Color(0, 0, 0, 0), 0, 8))
+	button.add_theme_stylebox_override("pressed", StyleFactory.build(Tokens.alpha(Tokens.WHITE, 0.12), Color(0, 0, 0, 0), 0, 8))
+	button.add_theme_stylebox_override("focus", StyleFactory.build(Color(0, 0, 0, 0), Tokens.FOCUS, 2, 8))
+	# Smooth hover scale (disabled in headless)
+	if DisplayServer.get_name() != "headless":
+		button.mouse_entered.connect(func() -> void:
+			var tw := button.create_tween()
+			tw.set_trans(Tween.TRANS_QUAD)
+			tw.set_ease(Tween.EASE_OUT)
+			tw.tween_property(button, "scale", Vector2(1.06, 1.06), Tokens.TIME["fast"])
+		)
+		button.mouse_exited.connect(func() -> void:
+			var tw := button.create_tween()
+			tw.set_trans(Tween.TRANS_QUAD)
+			tw.set_ease(Tween.EASE_OUT)
+			tw.tween_property(button, "scale", Vector2(1.0, 1.0), Tokens.TIME["fast"])
+		)
+		button.pivot_offset = min_size / 2.0
 	return button
 
 func _files_menu_button(text_value: String) -> Button:
@@ -4462,11 +4557,11 @@ func _files_menu_button(text_value: String) -> Button:
 	button.focus_mode = Control.FOCUS_NONE
 	button.custom_minimum_size = Vector2(52, 28)
 	button.add_theme_font_size_override("font_size", 14)
-	button.add_theme_color_override("font_color", MUTED)
-	button.add_theme_color_override("font_hover_color", TEXT)
-	button.add_theme_color_override("font_pressed_color", TEXT)
-	button.add_theme_stylebox_override("hover", _style(Color("2a2f39"), Color("2a2f39"), 1, 6))
-	button.add_theme_stylebox_override("pressed", _style(Color("313743"), Color("313743"), 1, 6))
+	button.add_theme_color_override("font_color", Tokens.MUTED)
+	button.add_theme_color_override("font_hover_color", Tokens.TEXT)
+	button.add_theme_color_override("font_pressed_color", Tokens.TEXT)
+	button.add_theme_stylebox_override("hover", StyleFactory.build(Tokens.alpha(Tokens.WHITE, 0.06), Color(0, 0, 0, 0), 0, 6))
+	button.add_theme_stylebox_override("pressed", StyleFactory.build(Tokens.alpha(Tokens.WHITE, 0.10), Color(0, 0, 0, 0), 0, 6))
 	return button
 
 func _files_sidebar_button(text_value: String) -> Button:
@@ -4476,13 +4571,13 @@ func _files_sidebar_button(text_value: String) -> Button:
 	button.custom_minimum_size = Vector2(0, 30)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.add_theme_font_size_override("font_size", 14)
-	button.add_theme_color_override("font_color", MUTED)
-	button.add_theme_color_override("font_hover_color", TEXT)
-	button.add_theme_color_override("font_pressed_color", TEXT)
-	button.add_theme_stylebox_override("normal", _style(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 6))
-	button.add_theme_stylebox_override("hover", _style(Color("2f3440"), Color("2f3440"), 1, 6))
-	button.add_theme_stylebox_override("pressed", _style(Color("363d4a"), Color("3d4554"), 1, 6))
-	button.add_theme_stylebox_override("focus", _style(Color(0, 0, 0, 0), FOCUS, 1, 6))
+	button.add_theme_color_override("font_color", Tokens.MUTED)
+	button.add_theme_color_override("font_hover_color", Tokens.TEXT)
+	button.add_theme_color_override("font_pressed_color", Tokens.TEXT)
+	button.add_theme_stylebox_override("normal", StyleFactory.build(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 6))
+	button.add_theme_stylebox_override("hover", StyleFactory.build(Tokens.alpha(Tokens.WHITE, 0.06), Color(0, 0, 0, 0), 0, 6))
+	button.add_theme_stylebox_override("pressed", StyleFactory.build(Tokens.alpha(Tokens.WHITE, 0.10), Color(0, 0, 0, 0), 0, 6))
+	button.add_theme_stylebox_override("focus", StyleFactory.build(Color(0, 0, 0, 0), Tokens.FOCUS, 1, 6))
 	return button
 
 func _files_chrome_button(text_value: String, min_size: Vector2) -> Button:
@@ -4496,57 +4591,50 @@ func _files_table_header_label(text_value: String) -> Label:
 	label.custom_minimum_size = Vector2(0, 26)
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 14)
-	label.add_theme_color_override("font_color", TEXT)
+	label.add_theme_color_override("font_color", Tokens.TEXT)
 	return label
 
 func _style_files_tree(tree: Tree) -> void:
-	tree.add_theme_color_override("font_color", TEXT)
-	tree.add_theme_color_override("font_selected_color", TEXT)
-	tree.add_theme_color_override("guide_color", Color("303642"))
-	tree.add_theme_stylebox_override("panel", _style(Color("171a20"), Color("2e3440"), 1, 8))
-	tree.add_theme_stylebox_override("selected", _style(Color("2f3541"), Color("3d4658"), 1, 4))
-	tree.add_theme_stylebox_override("selected_focus", _style(Color("334055"), FOCUS, 1, 4))
-	tree.add_theme_stylebox_override("cursor", _style(Color("334055"), FOCUS, 1, 4))
-	tree.add_theme_stylebox_override("cursor_unfocused", _style(Color("2b313d"), Color("3a414e"), 1, 4))
-	tree.add_theme_stylebox_override("focus", _style(Color(0, 0, 0, 0), FOCUS, 2, 8))
+	tree.add_theme_color_override("font_color", Tokens.TEXT)
+	tree.add_theme_color_override("font_selected_color", Tokens.TEXT)
+	tree.add_theme_color_override("guide_color", Tokens.alpha(Tokens.WHITE, 0.04))
+	tree.add_theme_stylebox_override("panel", StyleFactory.list_panel(10))
+	tree.add_theme_stylebox_override("selected", StyleFactory.list_selected())
+	tree.add_theme_stylebox_override("selected_focus", StyleFactory.list_selected())
+	tree.add_theme_stylebox_override("cursor", StyleFactory.list_selected())
+	tree.add_theme_stylebox_override("cursor_unfocused", StyleFactory.build(Tokens.alpha(Tokens.SURFACE, 0.5), Tokens.BORDER_ACTIVE, 1, 4))
+	tree.add_theme_stylebox_override("focus", StyleFactory.build(Color(0, 0, 0, 0), Tokens.FOCUS, 2, 10))
 
 func _style_line_edit(input: LineEdit) -> void:
-	input.add_theme_color_override("font_color", TEXT)
-	input.add_theme_color_override("caret_color", TEXT)
-	input.add_theme_color_override("font_placeholder_color", MUTED)
-	input.add_theme_stylebox_override("normal", _style(Color("1d2026"), BORDER, 1, 6))
-	input.add_theme_stylebox_override("focus", _style(Color("1d2026"), FOCUS, 2, 6))
+	input.add_theme_color_override("font_color", Tokens.TEXT)
+	input.add_theme_color_override("caret_color", Tokens.TEXT)
+	input.add_theme_color_override("font_placeholder_color", Tokens.MUTED)
+	input.add_theme_stylebox_override("normal", StyleFactory.input_normal(8))
+	input.add_theme_stylebox_override("focus", StyleFactory.input_focus(8))
 
 func _style_text_edit(input: TextEdit) -> void:
-	input.add_theme_color_override("font_color", TEXT)
-	input.add_theme_color_override("font_readonly_color", MUTED)
-	input.add_theme_color_override("caret_color", TEXT)
-	input.add_theme_stylebox_override("normal", _style(Color("1d2026"), BORDER, 1, 6))
-	input.add_theme_stylebox_override("focus", _style(Color("1d2026"), FOCUS, 2, 6))
-	input.add_theme_stylebox_override("read_only", _style(Color("1b1d22"), BORDER, 1, 6))
+	input.add_theme_color_override("font_color", Tokens.TEXT)
+	input.add_theme_color_override("font_readonly_color", Tokens.MUTED)
+	input.add_theme_color_override("caret_color", Tokens.TEXT)
+	input.add_theme_stylebox_override("normal", StyleFactory.input_normal(8))
+	input.add_theme_stylebox_override("focus", StyleFactory.input_focus(8))
+	input.add_theme_stylebox_override("read_only", StyleFactory.build(Tokens.alpha(Tokens.PANEL, 0.5), Tokens.BORDER, 1, 8))
 
 func _style_item_list(list: ItemList) -> void:
-	list.add_theme_color_override("font_color", TEXT)
-	list.add_theme_color_override("font_selected_color", TEXT)
-	list.add_theme_stylebox_override("panel", _style(Color("1d2026"), BORDER, 1, 6))
-	list.add_theme_stylebox_override("focus", _style(Color(0, 0, 0, 0), FOCUS, 2, 6))
-	list.add_theme_stylebox_override("selected", _style(SURFACE_HOVER, FOCUS, 1, 4))
-	list.add_theme_stylebox_override("selected_focus", _style(SURFACE_HOVER, FOCUS, 1, 4))
+	list.add_theme_color_override("font_color", Tokens.TEXT)
+	list.add_theme_color_override("font_selected_color", Tokens.TEXT)
+	list.add_theme_stylebox_override("panel", StyleFactory.list_panel(10))
+	list.add_theme_stylebox_override("focus", StyleFactory.build(Color(0, 0, 0, 0), Tokens.FOCUS, 2, 8))
+	list.add_theme_stylebox_override("selected", StyleFactory.list_selected())
+	list.add_theme_stylebox_override("selected_focus", StyleFactory.list_selected())
 
 func _style(bg: Color, border: Color, border_width: int, radius: int) -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = bg
-	style.border_color = border
-	style.border_width_left = border_width
-	style.border_width_right = border_width
-	style.border_width_top = border_width
-	style.border_width_bottom = border_width
-	style.corner_radius_top_left = radius
-	style.corner_radius_top_right = radius
-	style.corner_radius_bottom_left = radius
-	style.corner_radius_bottom_right = radius
-	style.content_margin_left = 8
-	style.content_margin_right = 8
-	style.content_margin_top = 6
-	style.content_margin_bottom = 6
+	return StyleFactory.build(bg, border, border_width, radius)
+
+func _style_corners(bg: Color, border: Color, border_width: int, top_left: int, top_right: int, bottom_left: int, bottom_right: int) -> StyleBoxFlat:
+	var style := StyleFactory.build(bg, border, border_width, top_left)
+	style.corner_radius_top_left = top_left
+	style.corner_radius_top_right = top_right
+	style.corner_radius_bottom_left = bottom_left
+	style.corner_radius_bottom_right = bottom_right
 	return style
