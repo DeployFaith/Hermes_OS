@@ -23,8 +23,13 @@ var _restore_position := Vector2.ZERO
 var _restore_size := Vector2.ZERO
 var _maximized := false
 var _minimum_window_size := Vector2.ZERO
+var _snapped := false
+var _snap_direction := ""
+var _snap_restore_position := Vector2.ZERO
+var _snap_restore_size := Vector2.ZERO
 
 const MIN_SIZE := Vector2(420, 280)
+const SNAP_THRESHOLD := 16.0
 const TITLE_HEIGHT := 42.0
 const BG := Color("202329")
 const BODY_BG := Color("242832")
@@ -78,6 +83,9 @@ func toggle_maximize() -> void:
 	var parent_control := get_parent() as Control
 	if parent_control == null:
 		return
+
+	_snapped = false
+	_snap_direction = ""
 
 	if _maximized:
 		position = _restore_position
@@ -206,10 +214,17 @@ func _on_title_bar_gui_input(event: InputEvent) -> void:
 		if event.pressed:
 			_dragging = true
 			_drag_offset = get_global_mouse_position() - global_position
+			if _snapped:
+				_unsnap_for_drag()
 			focused.emit(self)
 			move_to_front()
 		else:
-			_dragging = false
+			if _dragging:
+				_dragging = false
+				var parent_control := get_parent() as Control
+				if parent_control:
+					var local_mouse := get_global_mouse_position() - parent_control.global_position
+					_try_snap(local_mouse, parent_control.size)
 	elif event is InputEventMouseMotion and _dragging and not _maximized:
 		var parent_control := get_parent() as Control
 		var target := get_global_mouse_position() - _drag_offset
@@ -271,6 +286,54 @@ func _base_minimum_size(content: Control) -> Vector2:
 		if value is Vector2:
 			return value
 	return MIN_SIZE
+
+func _unsnap_for_drag() -> void:
+	_snapped = false
+	_snap_direction = ""
+	var mouse_global := get_global_mouse_position()
+	var new_pos := mouse_global - _snap_restore_size / 2.0
+	var parent_control := get_parent() as Control
+	if parent_control:
+		new_pos -= parent_control.global_position
+		new_pos.x = clampf(new_pos.x, 0.0, maxf(parent_control.size.x - _snap_restore_size.x, 0.0))
+		new_pos.y = clampf(new_pos.y, 0.0, maxf(parent_control.size.y - _snap_restore_size.y, 0.0))
+	position = new_pos
+	size = _snap_restore_size
+	_drag_offset = _snap_restore_size / 2.0
+
+func _try_snap(local_mouse: Vector2, parent_size: Vector2) -> void:
+	if local_mouse.y < SNAP_THRESHOLD:
+		_snap_maximize()
+	elif local_mouse.x < SNAP_THRESHOLD:
+		_snap_left(parent_size)
+	elif local_mouse.x > parent_size.x - SNAP_THRESHOLD:
+		_snap_right(parent_size)
+
+func _save_snap_state() -> void:
+	if not _snapped:
+		_snap_restore_position = position
+		_snap_restore_size = size
+
+func _snap_maximize() -> void:
+	toggle_maximize()
+
+func _snap_left(parent_size: Vector2) -> void:
+	if _maximized:
+		toggle_maximize()
+	_save_snap_state()
+	_snapped = true
+	_snap_direction = "left"
+	position = Vector2.ZERO
+	size = Vector2(parent_size.x / 2.0, parent_size.y)
+
+func _snap_right(parent_size: Vector2) -> void:
+	if _maximized:
+		toggle_maximize()
+	_save_snap_state()
+	_snapped = true
+	_snap_direction = "right"
+	position = Vector2(parent_size.x / 2.0, 0.0)
+	size = Vector2(parent_size.x / 2.0, parent_size.y)
 
 func _window_style(border: Color, active: bool) -> StyleBoxFlat:
 	var style := _style_corners(BG, border, 1, 10, 10, 10, 10)

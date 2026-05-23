@@ -43,6 +43,10 @@ var _desktop_drag_icon_moved := false
 var _desktop_highlight_color := Color(0.34, 0.45, 0.62, 0.32)
 var _window_layer: Control
 var _taskbar_windows: HBoxContainer
+var _top_panel: Panel
+var _dock_panel: Panel
+var _start_button: Button
+var _status_icons_row: HBoxContainer
 var _launcher: Panel
 var _launcher_frame: VBoxContainer
 var _launcher_header_label: Label
@@ -50,12 +54,18 @@ var _launcher_user_label: Label
 var _launcher_search: LineEdit
 var _launcher_scroll: ScrollContainer
 var _launcher_list: VBoxContainer
+var _launcher_category_list: VBoxContainer
 var _launcher_footer: HBoxContainer
 var _launcher_filter_text := ""
+var _launcher_category_filter := "all"
 var _launcher_buttons: Dictionary = {}
 var _launcher_selected_app_id := ""
 var _session_menu: Panel
 var _auth_overlay: Control
+var _alt_tab_overlay: Panel
+var _alt_tab_content: HBoxContainer
+var _alt_tab_selected_index: int = 0
+var _alt_tab_window_order: Array[OSWindow] = []
 var _user_button: Button
 var _clock_label: Label
 var _notification_button: Button
@@ -82,6 +92,8 @@ var _terminal_sessions: Dictionary = {}
 var _terminal_session_sequence := 0
 var _console_outputs: Array[TextEdit] = []
 var _console_history: Array[String] = ["Type 'help' for commands. Current user: user"]
+var _state_save_timer: Timer
+var _state_loading := false
 
 const CONSOLE_HISTORY_MAX_LINES := 400
 const HERMES_V1_ALIAS_OPS: Dictionary = {
@@ -89,6 +101,11 @@ const HERMES_V1_ALIAS_OPS: Dictionary = {
 }
 
 const TASKBAR_HEIGHT := 46.0
+const TOP_PANEL_HEIGHT := 34.0
+const DOCK_HEIGHT := 56.0
+const DOCK_BOTTOM_MARGIN := 10.0
+const WINDOW_TOP_MARGIN := TOP_PANEL_HEIGHT + 6.0
+const WINDOW_BOTTOM_MARGIN := DOCK_HEIGHT + DOCK_BOTTOM_MARGIN + 8.0
 const LAUNCHER_MIN_WIDTH := 340.0
 const LAUNCHER_MAX_WIDTH := 520.0
 const LAUNCHER_MIN_HEIGHT := 280.0
@@ -107,6 +124,7 @@ const DESKTOP_ICON_SIZE := Vector2(118, 86)
 const DESKTOP_ICON_GAP := Vector2(14, 10)
 const DESKTOP_ICON_MARGIN := Vector2(14, 14)
 const WALLPAPERS: Array[Color] = [Color("181a1f"), Color("20242b"), Color("1c2424"), Color("211f25"), Color("24221d")]
+const PERSISTED_STATE_PATH := "user://hermes_os_shell_state.cfg"
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -120,8 +138,11 @@ func _ready() -> void:
 	_console_history = ["Type 'help' for commands. Current user: " + _fs.current_user()]
 	_register_apps()
 	_build_ui()
+	_setup_state_save_timer()
+	var restored := _load_persisted_state()
 	_update_clock()
-	_show_auth_screen("login")
+	if not restored:
+		_show_auth_screen("login")
 	if has_node("/root/HermesOSKernel"):
 		var kernel := get_node("/root/HermesOSKernel")
 		if kernel and kernel.has_method("register_shell"):
@@ -134,6 +155,52 @@ func _ready() -> void:
 	add_child(clock_timer)
 
 	resized.connect(_layout)
+
+func _exit_tree() -> void:
+	_save_persisted_state()
+
+func _setup_state_save_timer() -> void:
+	if _state_save_timer != null:
+		return
+	_state_save_timer = Timer.new()
+	_state_save_timer.wait_time = 0.35
+	_state_save_timer.one_shot = true
+	_state_save_timer.timeout.connect(_save_persisted_state)
+	add_child(_state_save_timer)
+
+func _queue_state_save() -> void:
+	if _state_loading:
+		return
+	if _state_save_timer == null:
+		_save_persisted_state()
+		return
+	_state_save_timer.start()
+
+func _load_persisted_state() -> bool:
+	if not FileAccess.file_exists(PERSISTED_STATE_PATH):
+		return false
+	var cfg := ConfigFile.new()
+	if cfg.load(PERSISTED_STATE_PATH) != OK:
+		return false
+	var state_variant: Variant = cfg.get_value("shell", "state", {})
+	if not (state_variant is Dictionary):
+		return false
+	_state_loading = true
+	var message := import_state(state_variant as Dictionary)
+	_state_loading = false
+	if message != "":
+		push_warning("Could not load HermesOS shell state: " + message)
+		return false
+	return true
+
+func _save_persisted_state() -> void:
+	if _state_loading:
+		return
+	var cfg := ConfigFile.new()
+	cfg.set_value("shell", "state", export_state())
+	var err := cfg.save(PERSISTED_STATE_PATH)
+	if err != OK:
+		push_warning("Could not save HermesOS shell state")
 
 func launch_app(app_id: String) -> OSWindow:
 	if not _session_active or _auth_overlay != null:
@@ -165,6 +232,7 @@ func launch_app(app_id: String) -> OSWindow:
 	_open_windows[app_id] = window
 	_create_task_button(app_id)
 	_focus_window(window)
+	_update_taskbar_indicators()
 	_emit_hermes_event("window.opened", {
 		"window_id": _window_id(window),
 		"app_id": app_id,
@@ -186,6 +254,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if not key_event.pressed or key_event.echo:
 		return
 	if key_event.keycode == KEY_ESCAPE:
+		if _alt_tab_overlay and _alt_tab_overlay.visible:
+			_hide_alt_tab(false)
+			get_viewport().set_input_as_handled()
+			return
 		_hide_desktop_context_menu()
 		_hide_launcher()
 		if _session_menu:
@@ -206,8 +278,14 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_launcher_activate_selected()
 		get_viewport().set_input_as_handled()
 	elif key_event.alt_pressed and key_event.keycode == KEY_TAB:
-		_focus_next_window()
+		if not _alt_tab_overlay.visible:
+			_show_alt_tab()
+		_alt_tab_advance()
 		get_viewport().set_input_as_handled()
+	elif key_event.keycode == KEY_ALT and not key_event.pressed:
+		if _alt_tab_overlay.visible:
+			_hide_alt_tab(true)
+			get_viewport().set_input_as_handled()
 	elif key_event.ctrl_pressed and key_event.keycode == KEY_W:
 		_close_active_window()
 		get_viewport().set_input_as_handled()
@@ -264,6 +342,7 @@ func import_state(state: Dictionary) -> String:
 		_hide_auth_screen()
 	else:
 		_show_auth_screen("login")
+	_queue_state_save()
 	return ""
 
 func reset_state() -> void:
@@ -283,16 +362,17 @@ func reset_state() -> void:
 	_refresh_desktop_icons()
 	_update_clock()
 	_show_auth_screen("login")
+	_queue_state_save()
 
 func _register_apps() -> void:
 	_app_order = ["files", "notes", "text", "browser", "console", "system"]
 	_apps = {
-		"files": {"title": "Files", "subtitle": "Browse and manage files", "keywords": "folders storage manager", "pinned": true, "builder": Callable(self, "_build_files_app")},
-		"notes": {"title": "Notes", "subtitle": "Quick note workspace", "keywords": "notes writing markdown", "pinned": true, "builder": Callable(self, "_build_notes_app")},
-		"text": {"title": "Text", "subtitle": "Edit plain text files", "keywords": "editor code", "pinned": false, "builder": Callable(self, "_build_text_app")},
-		"browser": {"title": "Browser", "subtitle": "Web and local pages", "keywords": "web internet", "pinned": true, "builder": Callable(self, "_build_browser_app")},
-		"console": {"title": "Terminal", "subtitle": "Command line shell", "keywords": "console terminal shell", "pinned": true, "builder": Callable(self, "_build_console_app")},
-		"system": {"title": "System", "subtitle": "System status and settings", "keywords": "settings diagnostics", "pinned": true, "builder": Callable(self, "_build_system_app")}
+		"files": {"title": "Files", "subtitle": "Browse and manage files", "keywords": "folders storage manager", "category": "System", "pinned": true, "builder": Callable(self, "_build_files_app")},
+		"notes": {"title": "Notes", "subtitle": "Quick note workspace", "keywords": "notes writing markdown", "category": "Office", "pinned": true, "builder": Callable(self, "_build_notes_app")},
+		"text": {"title": "Text", "subtitle": "Edit plain text files", "keywords": "editor code", "category": "Programming", "pinned": false, "builder": Callable(self, "_build_text_app")},
+		"browser": {"title": "Browser", "subtitle": "Web and local pages", "keywords": "web internet", "category": "Internet", "pinned": true, "builder": Callable(self, "_build_browser_app")},
+		"console": {"title": "Terminal", "subtitle": "Command line shell", "keywords": "console terminal shell", "category": "Programming", "pinned": true, "builder": Callable(self, "_build_console_app")},
+		"system": {"title": "System", "subtitle": "System status and settings", "keywords": "settings diagnostics", "category": "Administration", "pinned": true, "builder": Callable(self, "_build_system_app")}
 	}
 
 func _build_ui() -> void:
@@ -304,7 +384,8 @@ func _build_ui() -> void:
 	_desktop_layer = Control.new()
 	_desktop_layer.name = "DesktopLayer"
 	_desktop_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_desktop_layer.offset_bottom = -TASKBAR_HEIGHT
+	_desktop_layer.offset_top = WINDOW_TOP_MARGIN
+	_desktop_layer.offset_bottom = -WINDOW_BOTTOM_MARGIN
 	_desktop_layer.mouse_filter = Control.MOUSE_FILTER_STOP
 	_desktop_layer.gui_input.connect(_on_desktop_gui_input)
 	add_child(_desktop_layer)
@@ -313,7 +394,8 @@ func _build_ui() -> void:
 	_window_layer = Control.new()
 	_window_layer.name = "WindowLayer"
 	_window_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_window_layer.offset_bottom = -TASKBAR_HEIGHT
+	_window_layer.offset_top = WINDOW_TOP_MARGIN
+	_window_layer.offset_bottom = -WINDOW_BOTTOM_MARGIN
 	_window_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_window_layer)
 
@@ -323,57 +405,108 @@ func _build_ui() -> void:
 	_build_desktop_context_menu()
 	_build_notification_history_panel()
 	_build_notification_layer()
+	_build_alt_tab_overlay()
 	_layout()
 
 func _build_taskbar() -> void:
-	var taskbar := Panel.new()
-	taskbar.name = "Taskbar"
-	taskbar.anchor_left = 0.0
-	taskbar.anchor_right = 1.0
-	taskbar.anchor_top = 1.0
-	taskbar.anchor_bottom = 1.0
-	taskbar.offset_top = -TASKBAR_HEIGHT
-	taskbar.add_theme_stylebox_override("panel", _style(PANEL, BORDER, 1, 0))
-	add_child(taskbar)
+	_top_panel = Panel.new()
+	_top_panel.name = "TopPanel"
+	_top_panel.anchor_left = 0.0
+	_top_panel.anchor_right = 1.0
+	_top_panel.anchor_top = 0.0
+	_top_panel.anchor_bottom = 0.0
+	_top_panel.offset_bottom = TOP_PANEL_HEIGHT
+	_top_panel.add_theme_stylebox_override("panel", _style(Color("121419ee"), Color("2d313b"), 1, 0))
+	add_child(_top_panel)
 
-	var row := HBoxContainer.new()
-	row.set_anchors_preset(Control.PRESET_FULL_RECT)
-	row.offset_left = 8
-	row.offset_right = -8
-	row.offset_top = 6
-	row.offset_bottom = -6
-	row.add_theme_constant_override("separation", 6)
-	taskbar.add_child(row)
+	var top_row := HBoxContainer.new()
+	top_row.set_anchors_preset(Control.PRESET_FULL_RECT)
+	top_row.offset_left = 8
+	top_row.offset_right = -8
+	top_row.offset_top = 4
+	top_row.offset_bottom = -4
+	top_row.add_theme_constant_override("separation", 8)
+	_top_panel.add_child(top_row)
 
-	var start_button := _button("Start", Vector2(84, 0))
-	start_button.pressed.connect(_toggle_launcher)
-	row.add_child(start_button)
+	var left_row := HBoxContainer.new()
+	left_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left_row.add_theme_constant_override("separation", 8)
+	top_row.add_child(left_row)
+
+	var workspaces_button := _button("Workspaces", Vector2(0, 24))
+	workspaces_button.flat = true
+	left_row.add_child(workspaces_button)
+	var apps_button := _button("Applications", Vector2(0, 24))
+	apps_button.flat = true
+	apps_button.pressed.connect(_toggle_launcher)
+	left_row.add_child(apps_button)
+
+	_clock_label = Label.new()
+	_clock_label.custom_minimum_size = Vector2(180, 0)
+	_clock_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_clock_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_clock_label.add_theme_color_override("font_color", TEXT)
+	top_row.add_child(_clock_label)
+
+	_status_icons_row = HBoxContainer.new()
+	_status_icons_row.alignment = BoxContainer.ALIGNMENT_END
+	_status_icons_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_status_icons_row.add_theme_constant_override("separation", 4)
+	top_row.add_child(_status_icons_row)
+
+	for pair in [["◎", "Network"], ["🔊", "Audio"], ["⌁", "Bluetooth"], ["🔋", "Power"], ["⏻", "Session"]]:
+		var icon_button := _button(str(pair[0]), Vector2(28, 24))
+		icon_button.tooltip_text = str(pair[1])
+		icon_button.add_theme_font_size_override("font_size", 12)
+		if str(pair[1]) == "Session":
+			icon_button.pressed.connect(_toggle_session_menu)
+		_status_icons_row.add_child(icon_button)
+
+	_dock_panel = Panel.new()
+	_dock_panel.name = "Dock"
+	_dock_panel.anchor_left = 0.5
+	_dock_panel.anchor_right = 0.5
+	_dock_panel.anchor_top = 1.0
+	_dock_panel.anchor_bottom = 1.0
+	_dock_panel.offset_left = -360
+	_dock_panel.offset_right = 360
+	_dock_panel.offset_top = -DOCK_HEIGHT - DOCK_BOTTOM_MARGIN
+	_dock_panel.offset_bottom = -DOCK_BOTTOM_MARGIN
+	_dock_panel.add_theme_stylebox_override("panel", _style(Color("10131acc"), Color("323845"), 1, 26))
+	add_child(_dock_panel)
+
+	var dock_row := HBoxContainer.new()
+	dock_row.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dock_row.offset_left = 10
+	dock_row.offset_right = -10
+	dock_row.offset_top = 8
+	dock_row.offset_bottom = -8
+	dock_row.add_theme_constant_override("separation", 8)
+	_dock_panel.add_child(dock_row)
+
+	_start_button = _button("◉", Vector2(40, 40))
+	_start_button.tooltip_text = "Start"
+	_start_button.pressed.connect(_toggle_launcher)
+	dock_row.add_child(_start_button)
 
 	var divider := VSeparator.new()
-	row.add_child(divider)
+	dock_row.add_child(divider)
 
 	_taskbar_windows = HBoxContainer.new()
 	_taskbar_windows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_taskbar_windows.add_theme_constant_override("separation", 6)
-	row.add_child(_taskbar_windows)
+	_taskbar_windows.alignment = BoxContainer.ALIGNMENT_CENTER
+	_taskbar_windows.add_theme_constant_override("separation", 8)
+	dock_row.add_child(_taskbar_windows)
 
-	_notification_button = _button("Notifications", Vector2(128, 0))
+	_notification_button = _button("🔔", Vector2(40, 40))
 	_notification_button.tooltip_text = "Notification history"
 	_notification_button.pressed.connect(_toggle_notification_history)
-	row.add_child(_notification_button)
+	dock_row.add_child(_notification_button)
 
-	_user_button = _button("", Vector2(160, 0))
-	_user_button.alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_user_button.tooltip_text = "Session options"
+	_user_button = _button("🙂", Vector2(40, 40))
+	_user_button.tooltip_text = "User menu"
 	_user_button.pressed.connect(_toggle_session_menu)
-	row.add_child(_user_button)
-
-	_clock_label = Label.new()
-	_clock_label.custom_minimum_size = Vector2(88, 0)
-	_clock_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_clock_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_clock_label.add_theme_color_override("font_color", TEXT)
-	row.add_child(_clock_label)
+	dock_row.add_child(_user_button)
 
 func _build_launcher() -> void:
 	_launcher = Panel.new()
@@ -413,9 +546,41 @@ func _build_launcher() -> void:
 	)
 	_launcher_frame.add_child(_launcher_search)
 
-	var pinned_label := _label("Pinned", 12, MUTED)
-	pinned_label.name = "PinnedLabel"
-	_launcher_frame.add_child(pinned_label)
+	var content_row := HBoxContainer.new()
+	content_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content_row.add_theme_constant_override("separation", 8)
+	_launcher_frame.add_child(content_row)
+
+	var categories_panel := Panel.new()
+	categories_panel.custom_minimum_size = Vector2(156, 0)
+	categories_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	categories_panel.add_theme_stylebox_override("panel", _style(Color("1b1f27"), BORDER, 1, 8))
+	content_row.add_child(categories_panel)
+
+	var categories_scroll := ScrollContainer.new()
+	categories_scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	categories_scroll.offset_left = 6
+	categories_scroll.offset_right = -6
+	categories_scroll.offset_top = 6
+	categories_scroll.offset_bottom = -6
+	categories_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	categories_panel.add_child(categories_scroll)
+
+	_launcher_category_list = VBoxContainer.new()
+	_launcher_category_list.add_theme_constant_override("separation", 4)
+	categories_scroll.add_child(_launcher_category_list)
+
+	var categories: Array[String] = ["all", "Favorites", "Internet", "Office", "Programming", "System", "Administration"]
+	for category_name in categories:
+		var category_button := _button(_category_icon(category_name) + "  " + category_name.capitalize(), Vector2(0, 30))
+		category_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		category_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		category_button.pressed.connect(func() -> void:
+			_launcher_category_filter = category_name
+			_rebuild_launcher_list()
+		)
+		_launcher_category_list.add_child(category_button)
 
 	_launcher_scroll = ScrollContainer.new()
 	_launcher_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -423,7 +588,7 @@ func _build_launcher() -> void:
 	_launcher_scroll.clip_contents = true
 	_launcher_scroll.custom_minimum_size = Vector2(0, 110)
 	_launcher_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_launcher_frame.add_child(_launcher_scroll)
+	content_row.add_child(_launcher_scroll)
 
 	_launcher_list = VBoxContainer.new()
 	_launcher_list.name = "AppList"
@@ -436,16 +601,26 @@ func _build_launcher() -> void:
 	_launcher_footer.add_theme_constant_override("separation", 6)
 	_launcher_frame.add_child(_launcher_footer)
 
-	for quick_app in ["files", "browser", "console", "system"]:
-		if _apps.has(quick_app):
-			var quick := _button(str((_apps[quick_app] as Dictionary).get("title", quick_app)).left(1), Vector2(0, 30))
-			quick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			quick.tooltip_text = "Open " + str((_apps[quick_app] as Dictionary).get("title", quick_app))
-			quick.pressed.connect(func() -> void:
-				_hide_launcher()
-				launch_app(quick_app)
-			)
-			_launcher_footer.add_child(quick)
+	var account_button := _button("🙂 Account", Vector2(0, 30))
+	account_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	account_button.pressed.connect(_open_account_settings)
+	_launcher_footer.add_child(account_button)
+
+	var lock_button := _button("🔒 Lock", Vector2(0, 30))
+	lock_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lock_button.pressed.connect(func() -> void:
+		_hide_launcher()
+		_power_action("lock")
+	)
+	_launcher_footer.add_child(lock_button)
+
+	var power_button := _button("⏻ Power", Vector2(0, 30))
+	power_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	power_button.pressed.connect(func() -> void:
+		_hide_launcher()
+		_toggle_session_menu()
+	)
+	_launcher_footer.add_child(power_button)
 
 	_rebuild_launcher_list()
 	_refresh_launcher_header()
@@ -454,47 +629,43 @@ func _build_session_menu() -> void:
 	_session_menu = Panel.new()
 	_session_menu.name = "SessionMenu"
 	_session_menu.visible = false
-	_session_menu.size = Vector2(220, 176)
-	_session_menu.add_theme_stylebox_override("panel", _style(PANEL, BORDER_ACTIVE, 1, 8))
+	_session_menu.size = Vector2(280, 264)
+	_session_menu.add_theme_stylebox_override("panel", _style(PANEL, BORDER_ACTIVE, 1, 10))
 	add_child(_session_menu)
 
 	var column := VBoxContainer.new()
 	column.set_anchors_preset(Control.PRESET_FULL_RECT)
-	column.offset_left = 10
-	column.offset_right = -10
-	column.offset_top = 10
-	column.offset_bottom = -10
-	column.add_theme_constant_override("separation", 7)
+	column.offset_left = 12
+	column.offset_right = -12
+	column.offset_top = 12
+	column.offset_bottom = -12
+	column.add_theme_constant_override("separation", 8)
 	_session_menu.add_child(column)
 
-	column.add_child(_label("Session", 14, TEXT))
-
-	var lock_button := _button("Lock", Vector2(0, 34))
-	lock_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	lock_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	lock_button.pressed.connect(func() -> void:
+	var profile := _button("🙂  " + _fs.current_user(), Vector2(0, 36))
+	profile.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	profile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	profile.pressed.connect(func() -> void:
 		_session_menu.visible = false
-		lock_session()
+		_open_account_settings()
 	)
-	column.add_child(lock_button)
+	column.add_child(profile)
 
-	var switch_button := _button("Switch user", Vector2(0, 34))
-	switch_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	switch_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	switch_button.pressed.connect(func() -> void:
-		_session_menu.visible = false
-		switch_user_session()
-	)
-	column.add_child(switch_button)
+	column.add_child(HSeparator.new())
 
-	var logout_button := _button("Log out", Vector2(0, 34))
-	logout_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	logout_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	logout_button.pressed.connect(func() -> void:
-		_session_menu.visible = false
-		logout_session()
-	)
-	column.add_child(logout_button)
+	for item in [["🔒  Lock", "lock"], ["⇄  Switch user", "switch"], ["↻  Reboot", "reboot"], ["⏻  Shut down", "shutdown"], ["⇦  Log out", "logoff"]]:
+		var option := _button(str(item[0]), Vector2(0, 34))
+		option.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var action_key := str(item[1])
+		option.pressed.connect(func() -> void:
+			_session_menu.visible = false
+			if action_key == "switch":
+				switch_user_session()
+			else:
+				_power_action(action_key)
+		)
+		column.add_child(option)
 
 func _build_desktop_context_menu() -> void:
 	_desktop_context_menu = Panel.new()
@@ -628,6 +799,40 @@ func _build_notification_layer() -> void:
 	_notification_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_notification_layer)
 	_notification_layer.move_to_front()
+
+func _build_alt_tab_overlay() -> void:
+	_alt_tab_overlay = Panel.new()
+	_alt_tab_overlay.name = "AltTabOverlay"
+	_alt_tab_overlay.visible = false
+	_alt_tab_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_alt_tab_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_alt_tab_overlay)
+
+	var dim := ColorRect.new()
+	dim.color = Color(0.04, 0.045, 0.055, 0.55)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_alt_tab_overlay.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.offset_top = -80
+	_alt_tab_overlay.add_child(center)
+
+	var inner := Panel.new()
+	inner.custom_minimum_size = Vector2(420, 130)
+	inner.add_theme_stylebox_override("panel", _style(PANEL, BORDER_ACTIVE, 1, 12))
+	center.add_child(inner)
+
+	_alt_tab_content = HBoxContainer.new()
+	_alt_tab_content.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_alt_tab_content.offset_left = 16
+	_alt_tab_content.offset_right = -16
+	_alt_tab_content.offset_top = 16
+	_alt_tab_content.offset_bottom = -16
+	_alt_tab_content.alignment = BoxContainer.ALIGNMENT_CENTER
+	_alt_tab_content.add_theme_constant_override("separation", 14)
+	inner.add_child(_alt_tab_content)
 
 func _build_notification_history_panel() -> void:
 	_notification_history_panel = Panel.new()
@@ -906,6 +1111,7 @@ func _set_desktop_icon_position(button: Button, desired_position: Vector2, save_
 		var item_path := str(button.get_meta("desktop_path", ""))
 		if item_path != "":
 			_desktop_icon_positions[item_path] = button.position
+			_queue_state_save()
 
 func _clamp_all_desktop_icon_positions() -> void:
 	if not _desktop_icons:
@@ -1036,6 +1242,7 @@ func _delete_selected_desktop_items() -> bool:
 	_refresh_desktop_icons()
 	_hide_desktop_context_menu()
 	_set_desktop_context_status("Deleted %d item(s)" % deleted)
+	_queue_state_save()
 	return true
 
 func _rename_selected_desktop_item() -> bool:
@@ -1072,6 +1279,7 @@ func _rename_selected_desktop_item() -> bool:
 	if _desktop_rename_input:
 		_desktop_rename_input.text = target_name
 	_set_desktop_context_status("Renamed to " + target_name)
+	_queue_state_save()
 	return true
 
 func _select_desktop_icon_by_path(target_path: String) -> void:
@@ -1117,6 +1325,7 @@ func _move_desktop_item_to_folder(source_button: Button, target_folder_button: B
 	_desktop_icon_positions.erase(source_path)
 	_refresh_desktop_icons()
 	_set_desktop_context_status("Moved to " + target_folder_path.get_file())
+	_queue_state_save()
 	return true
 
 func _update_desktop_context_actions() -> void:
@@ -1158,6 +1367,7 @@ func _set_desktop_highlight_color(color: Color) -> void:
 	if _desktop_drag_rect:
 		_desktop_drag_rect.color = _desktop_highlight_color
 	_update_desktop_icon_selection()
+	_queue_state_save()
 
 func _desktop_icon_texture(is_folder: bool) -> Texture2D:
 	var image := Image.create(36, 36, false, Image.FORMAT_RGBA8)
@@ -1273,7 +1483,7 @@ func _show_desktop_context_menu(global_pos: Vector2) -> void:
 		_notification_history_panel.visible = false
 	_desktop_context_menu.position = Vector2(
 		clampf(global_pos.x, 8.0, maxf(size.x - _desktop_context_menu.size.x - 8.0, 8.0)),
-		clampf(global_pos.y, 8.0, maxf(size.y - TASKBAR_HEIGHT - _desktop_context_menu.size.y - 8.0, 8.0))
+		clampf(global_pos.y, WINDOW_TOP_MARGIN, maxf(size.y - WINDOW_BOTTOM_MARGIN - _desktop_context_menu.size.y - 8.0, WINDOW_TOP_MARGIN))
 	)
 	_set_desktop_context_status("")
 	_update_desktop_context_actions()
@@ -1327,6 +1537,7 @@ func _cycle_wallpaper() -> void:
 	if _desktop_bg:
 		_desktop_bg.color = WALLPAPERS[_wallpaper_index]
 	_set_desktop_context_status("Wallpaper changed")
+	_queue_state_save()
 
 func _set_desktop_context_status(message: String, is_error := false) -> void:
 	if not _desktop_status_label:
@@ -1347,18 +1558,85 @@ func _set_desktop_context_status(message: String, is_error := false) -> void:
 
 func _app_button(app_id: String, min_size: Vector2) -> Button:
 	var app: Dictionary = _apps[app_id]
-	var button := _button(str(app["title"]), min_size)
+	var subtitle := str(app.get("subtitle", "")).strip_edges()
+	var title_line := "%s  %s" % [_app_icon(app_id), str(app["title"])]
+	var button_text := title_line if subtitle == "" else "%s\n%s" % [title_line, subtitle]
+	var button := _button(button_text, min_size)
+	button.custom_minimum_size.y = maxf(button.custom_minimum_size.y, 48.0)
 	button.tooltip_text = "Open " + str(app["title"])
+	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	button.add_theme_font_size_override("font_size", 13)
 	button.pressed.connect(func() -> void:
 		_hide_launcher()
 		launch_app(app_id)
 	)
 	return button
 
+func _app_icon(app_id: String) -> String:
+	match app_id:
+		"files":
+			return "📁"
+		"notes":
+			return "📝"
+		"text":
+			return "📄"
+		"browser":
+			return "🌐"
+		"console":
+			return "⌨"
+		"system":
+			return "⚙"
+		_:
+			return "◻"
+
+func _category_icon(category_name: String) -> String:
+	match category_name.to_lower():
+		"all":
+			return "☰"
+		"favorites":
+			return "★"
+		"internet":
+			return "🌐"
+		"office":
+			return "🗂"
+		"programming":
+			return "⌨"
+		"system":
+			return "🖥"
+		"administration":
+			return "⚙"
+		_:
+			return "•"
+
+func _open_account_settings() -> void:
+	_hide_launcher()
+	launch_app("system")
+	notify({
+		"title": "Account",
+		"body": "Open System > Account details to manage profile and password.",
+		"level": "info",
+		"app_id": "system"
+	})
+
+func _power_action(action: String) -> void:
+	match action:
+		"shutdown":
+			logout_session()
+			notify({"title": "Power", "body": "System powered off (session closed)", "level": "warning", "app_id": "system"})
+		"reboot":
+			_close_all_windows()
+			_session_active = false
+			_show_auth_screen("login", "System rebooted")
+			_queue_state_save()
+		"lock":
+			lock_session()
+		"logoff":
+			logout_session()
+
 func _compute_launcher_size(viewport_size: Vector2) -> Vector2:
-	var usable_height := maxf(viewport_size.y - TASKBAR_HEIGHT - (LAUNCHER_MARGIN * 2.0), LAUNCHER_MIN_HEIGHT)
-	var width := clampf(viewport_size.x * 0.28, LAUNCHER_MIN_WIDTH, LAUNCHER_MAX_WIDTH)
-	var height := clampf(usable_height * 0.92, LAUNCHER_MIN_HEIGHT, usable_height)
+	var usable_height := maxf(viewport_size.y - WINDOW_TOP_MARGIN - WINDOW_BOTTOM_MARGIN - (LAUNCHER_MARGIN * 2.0), LAUNCHER_MIN_HEIGHT)
+	var width := clampf(viewport_size.x * 0.38, LAUNCHER_MIN_WIDTH, 720.0)
+	var height := clampf(usable_height * 0.86, LAUNCHER_MIN_HEIGHT, usable_height)
 	return Vector2(width, height)
 
 func _refresh_launcher_header() -> void:
@@ -1377,12 +1655,19 @@ func _hide_launcher() -> void:
 	_launcher_filter_text = ""
 
 func _launcher_matches_filter(app_id: String) -> bool:
-	if _launcher_filter_text == "":
-		return true
 	if not _apps.has(app_id):
 		return false
 	var app: Dictionary = _apps[app_id]
-	var haystack := (app_id + " " + str(app.get("title", "")) + " " + str(app.get("subtitle", "")) + " " + str(app.get("keywords", ""))).to_lower()
+	if _launcher_category_filter != "all":
+		var app_category := str(app.get("category", "")).to_lower()
+		if _launcher_category_filter == "favorites":
+			if not bool(app.get("pinned", false)):
+				return false
+		elif app_category != _launcher_category_filter.to_lower():
+			return false
+	if _launcher_filter_text == "":
+		return true
+	var haystack := (app_id + " " + str(app.get("title", "")) + " " + str(app.get("subtitle", "")) + " " + str(app.get("keywords", "")) + " " + str(app.get("category", ""))).to_lower()
 	return haystack.find(_launcher_filter_text) != -1
 
 func _rebuild_launcher_list() -> void:
@@ -1394,44 +1679,22 @@ func _rebuild_launcher_list() -> void:
 	_launcher_selected_app_id = ""
 
 	var any_added := false
-	var pinned_title := _label("Pinned", 12, MUTED)
-	_launcher_list.add_child(pinned_title)
+	var section_title := "Favorites" if _launcher_category_filter == "favorites" else "Applications"
+	_launcher_list.add_child(_label(section_title, 12, MUTED))
+
 	for app_id in _app_order:
 		if not _launcher_matches_filter(app_id):
 			continue
-		var app: Dictionary = _apps.get(app_id, {})
-		if not bool(app.get("pinned", false)):
-			continue
-		var button := _app_button(app_id, Vector2(0, 34))
+		var button := _app_button(app_id, Vector2(0, 48))
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		_launcher_list.add_child(button)
 		_launcher_buttons[app_id] = button
 		if _launcher_selected_app_id == "":
 			_launcher_selected_app_id = app_id
 		any_added = true
 
-	var all_title := _label("All apps", 12, MUTED)
-	all_title.custom_minimum_size = Vector2(0, 24)
-	_launcher_list.add_child(all_title)
-	for app_id in _app_order:
-		if not _launcher_matches_filter(app_id):
-			continue
-		var all_button := _app_button(app_id, Vector2(0, 34))
-		all_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		all_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		var app_data: Dictionary = _apps.get(app_id, {})
-		var subtitle := str(app_data.get("subtitle", "")).strip_edges()
-		if subtitle != "":
-			all_button.tooltip_text = str(app_data.get("title", app_id)) + " — " + subtitle
-		_launcher_list.add_child(all_button)
-		_launcher_buttons[app_id] = all_button
-		if _launcher_selected_app_id == "":
-			_launcher_selected_app_id = app_id
-		any_added = true
-
 	if not any_added:
-		_launcher_list.add_child(_label("No apps match your search.", 12, MUTED))
+		_launcher_list.add_child(_label("No apps match this view.", 12, MUTED))
 
 	_update_launcher_selection_visuals()
 
@@ -1469,16 +1732,22 @@ func _launcher_activate_selected() -> void:
 			button.emit_signal("pressed")
 
 func _layout() -> void:
+	if _dock_panel:
+		var dock_width := clampf(size.x * 0.48, 540.0, 980.0)
+		_dock_panel.offset_left = -dock_width * 0.5
+		_dock_panel.offset_right = dock_width * 0.5
+		_dock_panel.offset_top = -DOCK_HEIGHT - DOCK_BOTTOM_MARGIN
+		_dock_panel.offset_bottom = -DOCK_BOTTOM_MARGIN
 	if _launcher:
 		_launcher.size = _compute_launcher_size(size)
-		var launcher_pos := Vector2(LAUNCHER_MARGIN, size.y - TASKBAR_HEIGHT - _launcher.size.y - 6.0)
+		var launcher_pos := Vector2(maxf((size.x - _launcher.size.x) * 0.5, LAUNCHER_MARGIN), size.y - WINDOW_BOTTOM_MARGIN - _launcher.size.y - 8.0)
 		var max_x := maxf(size.x - _launcher.size.x - LAUNCHER_MARGIN, LAUNCHER_MARGIN)
-		var max_y := maxf(size.y - TASKBAR_HEIGHT - _launcher.size.y - LAUNCHER_MARGIN, LAUNCHER_MARGIN)
-		_launcher.position = Vector2(clampf(launcher_pos.x, LAUNCHER_MARGIN, max_x), clampf(launcher_pos.y, LAUNCHER_MARGIN, max_y))
+		var max_y := maxf(size.y - WINDOW_BOTTOM_MARGIN - _launcher.size.y - LAUNCHER_MARGIN, LAUNCHER_MARGIN)
+		_launcher.position = Vector2(clampf(launcher_pos.x, LAUNCHER_MARGIN, max_x), clampf(launcher_pos.y, WINDOW_TOP_MARGIN, max_y))
 	if _session_menu:
-		_session_menu.position = Vector2(maxf(size.x - _session_menu.size.x - 96.0, 8.0), maxf(size.y - TASKBAR_HEIGHT - _session_menu.size.y - 6.0, 8.0))
+		_session_menu.position = Vector2(maxf(size.x - _session_menu.size.x - 12.0, 8.0), TOP_PANEL_HEIGHT + 8.0)
 	if _notification_history_panel:
-		_notification_history_panel.position = Vector2(maxf(size.x - _notification_history_panel.size.x - 8.0, 8.0), maxf(size.y - TASKBAR_HEIGHT - _notification_history_panel.size.y - 6.0, 8.0))
+		_notification_history_panel.position = Vector2(maxf(size.x - _notification_history_panel.size.x - 8.0, 8.0), TOP_PANEL_HEIGHT + 8.0)
 	_clamp_all_desktop_icon_positions()
 	if _desktop_drag_rect and _desktop_drag_selecting:
 		_update_desktop_drag_rect_visual()
@@ -1496,7 +1765,7 @@ func _default_window_size(app_id: String) -> Vector2:
 		"console":
 			return Vector2(680, 430)
 		"system":
-			return Vector2(560, 240)
+			return Vector2(860, 620)
 		_:
 			return Vector2(560, 380)
 
@@ -1524,6 +1793,7 @@ func _focus_window(window: OSWindow) -> void:
 	window.visible = true
 	window.move_to_front()
 	_update_task_button(window.app_id, true)
+	_update_taskbar_indicators()
 	_emit_hermes_event("window.focused", {
 		"window_id": _window_id(window),
 		"app_id": window.app_id
@@ -1552,6 +1822,7 @@ func _on_window_close_requested(window: OSWindow) -> void:
 				_prepare_window_content_for_close(window)
 				window.queue_free()
 		)
+	_update_taskbar_indicators()
 	_emit_hermes_event("window.closed", {"window_id": window_id, "app_id": app_id})
 	_emit_hermes_event("app.closed", {"app_id": app_id})
 
@@ -1590,14 +1861,34 @@ func _on_window_minimize_requested(window: OSWindow) -> void:
 		_active_window = null
 	window.visible = false
 	_update_task_button(window.app_id, false)
+	_update_taskbar_indicators()
 	_emit_hermes_event("window.minimized", {"window_id": _window_id(window), "app_id": window.app_id})
 
 func _create_task_button(app_id: String) -> void:
 	if _task_buttons.has(app_id):
 		return
 	var app: Dictionary = _apps[app_id]
-	var button := _button(str(app["title"]), Vector2(112, 0))
+	var button := _button(_app_icon(app_id), Vector2(42, 40))
+	button.tooltip_text = str(app.get("title", app_id))
+	button.add_theme_font_size_override("font_size", 16)
 	button.pressed.connect(_on_task_button_pressed.bind(app_id))
+
+	var indicator := ColorRect.new()
+	indicator.name = "Indicator"
+	indicator.custom_minimum_size = Vector2(20, 3)
+	indicator.size = Vector2(20, 3)
+	indicator.anchor_left = 0.5
+	indicator.anchor_right = 0.5
+	indicator.anchor_top = 1.0
+	indicator.anchor_bottom = 1.0
+	indicator.offset_left = -10
+	indicator.offset_right = 10
+	indicator.offset_top = -4
+	indicator.offset_bottom = -1
+	indicator.color = Color.TRANSPARENT
+	indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	button.add_child(indicator)
+
 	_taskbar_windows.add_child(button)
 	_task_buttons[app_id] = button
 
@@ -1613,6 +1904,26 @@ func _update_task_button(app_id: String, active: bool) -> void:
 	else:
 		button.add_theme_stylebox_override("normal", _style(SURFACE, BORDER, 1, 6))
 		button.add_theme_color_override("font_color", MUTED)
+
+func _update_taskbar_indicators() -> void:
+	for app_id in _task_buttons.keys():
+		var button := _task_buttons[app_id] as Button
+		if not is_instance_valid(button):
+			continue
+		var indicator: ColorRect = button.get_node_or_null("Indicator") as ColorRect
+		if indicator == null:
+			continue
+		if _open_windows.has(app_id) and is_instance_valid(_open_windows[app_id]):
+			var window := _open_windows[app_id] as OSWindow
+			if window.visible:
+				if _active_window == window:
+					indicator.color = FOCUS
+				else:
+					indicator.color = Color(MUTED.r, MUTED.g, MUTED.b, 0.45)
+			else:
+				indicator.color = Color(MUTED.r, MUTED.g, MUTED.b, 0.18)
+		else:
+			indicator.color = Color.TRANSPARENT
 
 func _on_task_button_pressed(app_id: String) -> void:
 	if not _open_windows.has(app_id):
@@ -1674,13 +1985,92 @@ func _toggle_session_menu() -> void:
 	if _session_menu.visible:
 		_session_menu.move_to_front()
 
+func _show_alt_tab() -> void:
+	_alt_tab_window_order.clear()
+	for app_id in _app_order:
+		if _open_windows.has(app_id):
+			var window := _open_windows[app_id] as OSWindow
+			if is_instance_valid(window) and window.visible:
+				_alt_tab_window_order.append(window)
+	if _alt_tab_window_order.size() < 2:
+		return
+	var current_index := 0
+	if _active_window and is_instance_valid(_active_window):
+		current_index = _alt_tab_window_order.find(_active_window)
+		if current_index == -1:
+			current_index = 0
+	_alt_tab_selected_index = (current_index + 1) % _alt_tab_window_order.size()
+	_rebuild_alt_tab_content()
+	_alt_tab_overlay.visible = true
+	_alt_tab_overlay.move_to_front()
+
+func _alt_tab_advance() -> void:
+	if _alt_tab_window_order.is_empty():
+		return
+	_alt_tab_selected_index = (_alt_tab_selected_index + 1) % _alt_tab_window_order.size()
+	_rebuild_alt_tab_content()
+
+func _hide_alt_tab(activate := true) -> void:
+	if not _alt_tab_overlay or not _alt_tab_overlay.visible:
+		return
+	_alt_tab_overlay.visible = false
+	if activate and _alt_tab_selected_index >= 0 and _alt_tab_selected_index < _alt_tab_window_order.size():
+		var window := _alt_tab_window_order[_alt_tab_selected_index] as OSWindow
+		if is_instance_valid(window):
+			_focus_window(window)
+
+func _rebuild_alt_tab_content() -> void:
+	if not _alt_tab_content:
+		return
+	for child in _alt_tab_content.get_children():
+		child.queue_free()
+	for i in range(_alt_tab_window_order.size()):
+		var window := _alt_tab_window_order[i] as OSWindow
+		var item := _alt_tab_item(window, i == _alt_tab_selected_index)
+		_alt_tab_content.add_child(item)
+
+func _alt_tab_item(window: OSWindow, selected: bool) -> Control:
+	var container := VBoxContainer.new()
+	container.alignment = BoxContainer.ALIGNMENT_CENTER
+	container.add_theme_constant_override("separation", 6)
+	container.custom_minimum_size = Vector2(74, 0)
+
+	var icon := Label.new()
+	icon.text = _app_icon(window.app_id)
+	icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	icon.add_theme_font_size_override("font_size", 26)
+	icon.add_theme_color_override("font_color", TEXT if selected else MUTED)
+	container.add_child(icon)
+
+	var title := Label.new()
+	title.text = str(window.app_title).strip_edges()
+	if title.text == "":
+		title.text = window.app_id.capitalize()
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 11)
+	title.add_theme_color_override("font_color", TEXT if selected else MUTED)
+	title.autowrap_mode = TextServer.AUTOWRAP_OFF
+	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	title.custom_minimum_size = Vector2(0, 18)
+	container.add_child(title)
+
+	var indicator := ColorRect.new()
+	indicator.custom_minimum_size = Vector2(32 if selected else 0, 3)
+	indicator.size = Vector2(32 if selected else 0, 3)
+	indicator.color = FOCUS if selected else Color.TRANSPARENT
+	indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	container.add_child(indicator)
+
+	return container
+
 func _update_clock() -> void:
 	if _user_button:
-		_user_button.text = _fs.current_user() + "  " + _fs.home_path()
+		_user_button.text = "🙂"
+		_user_button.tooltip_text = _fs.current_user() + "  " + _fs.home_path()
 	if not _clock_label:
 		return
 	var now := Time.get_datetime_dict_from_system()
-	_clock_label.text = "%02d:%02d" % [now.hour, now.minute]
+	_clock_label.text = "%s %d, %02d:%02d" % [_month_name(int(now.month)), int(now.day), int(now.hour), int(now.minute)]
 
 func login_session(username: String, password := "") -> String:
 	var clean := _fs.clean_username(username)
@@ -1698,22 +2088,27 @@ func login_session(username: String, password := "") -> String:
 	_hide_auth_screen()
 	_refresh_desktop_icons()
 	_update_clock()
+	_queue_state_save()
 	return ""
 
 func lock_session() -> void:
 	if not _session_active:
 		_show_auth_screen("login")
+		_queue_state_save()
 		return
 	_show_auth_screen("locked", "Locked as " + _fs.current_user())
+	_queue_state_save()
 
 func switch_user_session() -> void:
 	_show_auth_screen("switch", "Choose another account")
+	_queue_state_save()
 
 func logout_session() -> void:
 	_close_all_windows()
 	_session_active = false
 	_refresh_desktop_icons()
 	_show_auth_screen("login", "Signed out")
+	_queue_state_save()
 
 func _show_auth_screen(mode: String, message := "") -> void:
 	_hide_auth_screen()
@@ -2591,6 +2986,7 @@ func _files_add_shortcut(state: Dictionary, ui: Dictionary, label: String, path:
 	_files_shortcuts = shortcuts.duplicate(true)
 	_set_status(ui["status"] as Label, "Shortcut added")
 	_refresh_files_shortcuts(state, ui)
+	_queue_state_save()
 
 func _files_rename_shortcut(state: Dictionary, ui: Dictionary, label: String, path: String) -> void:
 	var status := ui["status"] as Label
@@ -2604,6 +3000,7 @@ func _files_rename_shortcut(state: Dictionary, ui: Dictionary, label: String, pa
 	_files_shortcuts = shortcuts.duplicate(true)
 	_set_status(status, "Shortcut updated")
 	_refresh_files_shortcuts(state, ui)
+	_queue_state_save()
 
 func _files_delete_shortcut(state: Dictionary, ui: Dictionary) -> void:
 	var status := ui["status"] as Label
@@ -2618,6 +3015,7 @@ func _files_delete_shortcut(state: Dictionary, ui: Dictionary) -> void:
 	_files_shortcuts = shortcuts.duplicate(true)
 	_set_status(status, "Shortcut deleted")
 	_refresh_files_shortcuts(state, ui)
+	_queue_state_save()
 
 func _files_move_shortcut(direction: int, state: Dictionary, ui: Dictionary) -> void:
 	var status := ui["status"] as Label
@@ -2637,6 +3035,7 @@ func _files_move_shortcut(direction: int, state: Dictionary, ui: Dictionary) -> 
 	_files_shortcuts = shortcuts.duplicate(true)
 	_set_status(status, "Shortcut order updated")
 	_refresh_files_shortcuts(state, ui)
+	_queue_state_save()
 
 func _files_navigate_history(direction: int, state: Dictionary, ui: Dictionary) -> void:
 	var history_variant: Variant = state.get("history", [])
@@ -3177,8 +3576,8 @@ func _resolve_command_path(path: String, state: Dictionary) -> String:
 
 func _build_system_app() -> Control:
 	var root := _app_root()
-	root.custom_minimum_size = Vector2(520, 280)
-	root.set_meta("window_min_size", Vector2(500, 280))
+	root.custom_minimum_size = Vector2(760, 460)
+	root.set_meta("window_min_size", Vector2(720, 420))
 
 	var tabs := TabContainer.new()
 	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -4033,6 +4432,12 @@ func _label(text_value: String, font_size: int, color: Color) -> Label:
 	label.add_theme_color_override("font_color", color)
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	return label
+
+func _month_name(month: int) -> String:
+	var names := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+	if month < 1 or month > names.size():
+		return "Mon"
+	return str(names[month - 1])
 
 func _set_status(label: Label, message: String, is_error := false) -> void:
 	label.text = message
