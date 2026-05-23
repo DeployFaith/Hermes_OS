@@ -14,19 +14,19 @@ var _body_host: MarginContainer
 var _maximize_button: Button
 var _resize_handle: ColorRect
 
-var _dragging := false
-var _resizing := false
-var _drag_offset := Vector2.ZERO
-var _resize_start_mouse := Vector2.ZERO
-var _resize_start_size := Vector2.ZERO
-var _restore_position := Vector2.ZERO
-var _restore_size := Vector2.ZERO
-var _maximized := false
-var _minimum_window_size := Vector2.ZERO
-var _snapped := false
-var _snap_direction := ""
-var _snap_restore_position := Vector2.ZERO
-var _snap_restore_size := Vector2.ZERO
+var _dragging: bool = false
+var _resizing: bool = false
+var _drag_offset: Vector2 = Vector2.ZERO
+var _resize_start_mouse: Vector2 = Vector2.ZERO
+var _resize_start_size: Vector2 = Vector2.ZERO
+var _restore_position: Vector2 = Vector2.ZERO
+var _restore_size: Vector2 = Vector2.ZERO
+var _maximized: bool = false
+var _minimum_window_size: Vector2 = Vector2.ZERO
+var _snapped: bool = false
+var _snap_direction: String = ""
+var _snap_restore_position: Vector2 = Vector2.ZERO
+var _snap_restore_size: Vector2 = Vector2.ZERO
 
 const MIN_SIZE := Vector2(420, 280)
 const SNAP_THRESHOLD := 16.0
