@@ -44,6 +44,16 @@ var _desktop_highlight_color := Color(0.34, 0.45, 0.62, 0.32)
 var _window_layer: Control
 var _taskbar_windows: HBoxContainer
 var _launcher: Panel
+var _launcher_frame: VBoxContainer
+var _launcher_header_label: Label
+var _launcher_user_label: Label
+var _launcher_search: LineEdit
+var _launcher_scroll: ScrollContainer
+var _launcher_list: VBoxContainer
+var _launcher_footer: HBoxContainer
+var _launcher_filter_text := ""
+var _launcher_buttons: Dictionary = {}
+var _launcher_selected_app_id := ""
 var _session_menu: Panel
 var _auth_overlay: Control
 var _user_button: Button
@@ -79,6 +89,10 @@ const HERMES_V1_ALIAS_OPS: Dictionary = {
 }
 
 const TASKBAR_HEIGHT := 46.0
+const LAUNCHER_MIN_WIDTH := 340.0
+const LAUNCHER_MAX_WIDTH := 520.0
+const LAUNCHER_MIN_HEIGHT := 280.0
+const LAUNCHER_MARGIN := 8.0
 const BG := Color("181a1f")
 const PANEL := Color("22252b")
 const SURFACE := Color("2b2f38")
@@ -173,12 +187,23 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	if key_event.keycode == KEY_ESCAPE:
 		_hide_desktop_context_menu()
-		if _launcher:
-			_launcher.visible = false
+		_hide_launcher()
 		if _session_menu:
 			_session_menu.visible = false
 		if _notification_history_panel:
 			_notification_history_panel.visible = false
+		get_viewport().set_input_as_handled()
+	elif key_event.keycode == KEY_META or (key_event.ctrl_pressed and key_event.keycode == KEY_SPACE):
+		_toggle_launcher()
+		get_viewport().set_input_as_handled()
+	elif _launcher and _launcher.visible and key_event.keycode == KEY_DOWN:
+		_launcher_select_relative(1)
+		get_viewport().set_input_as_handled()
+	elif _launcher and _launcher.visible and key_event.keycode == KEY_UP:
+		_launcher_select_relative(-1)
+		get_viewport().set_input_as_handled()
+	elif _launcher and _launcher.visible and key_event.keycode == KEY_ENTER:
+		_launcher_activate_selected()
 		get_viewport().set_input_as_handled()
 	elif key_event.alt_pressed and key_event.keycode == KEY_TAB:
 		_focus_next_window()
@@ -262,12 +287,12 @@ func reset_state() -> void:
 func _register_apps() -> void:
 	_app_order = ["files", "notes", "text", "browser", "console", "system"]
 	_apps = {
-		"files": {"title": "Files", "builder": Callable(self, "_build_files_app")},
-		"notes": {"title": "Notes", "builder": Callable(self, "_build_notes_app")},
-		"text": {"title": "Text", "builder": Callable(self, "_build_text_app")},
-		"browser": {"title": "Browser", "builder": Callable(self, "_build_browser_app")},
-		"console": {"title": "Terminal", "builder": Callable(self, "_build_console_app")},
-		"system": {"title": "System", "builder": Callable(self, "_build_system_app")}
+		"files": {"title": "Files", "subtitle": "Browse and manage files", "keywords": "folders storage manager", "pinned": true, "builder": Callable(self, "_build_files_app")},
+		"notes": {"title": "Notes", "subtitle": "Quick note workspace", "keywords": "notes writing markdown", "pinned": true, "builder": Callable(self, "_build_notes_app")},
+		"text": {"title": "Text", "subtitle": "Edit plain text files", "keywords": "editor code", "pinned": false, "builder": Callable(self, "_build_text_app")},
+		"browser": {"title": "Browser", "subtitle": "Web and local pages", "keywords": "web internet", "pinned": true, "builder": Callable(self, "_build_browser_app")},
+		"console": {"title": "Terminal", "subtitle": "Command line shell", "keywords": "console terminal shell", "pinned": true, "builder": Callable(self, "_build_console_app")},
+		"system": {"title": "System", "subtitle": "System status and settings", "keywords": "settings diagnostics", "pinned": true, "builder": Callable(self, "_build_system_app")}
 	}
 
 func _build_ui() -> void:
@@ -354,27 +379,76 @@ func _build_launcher() -> void:
 	_launcher = Panel.new()
 	_launcher.name = "Launcher"
 	_launcher.visible = false
-	_launcher.size = Vector2(260, 222)
+	_launcher.clip_contents = true
+	_launcher.size = _compute_launcher_size(get_viewport_rect().size)
 	_launcher.add_theme_stylebox_override("panel", _style(PANEL, BORDER_ACTIVE, 1, 8))
 	add_child(_launcher)
 
-	var column := VBoxContainer.new()
-	column.set_anchors_preset(Control.PRESET_FULL_RECT)
-	column.offset_left = 10
-	column.offset_right = -10
-	column.offset_top = 10
-	column.offset_bottom = -10
-	column.add_theme_constant_override("separation", 7)
-	_launcher.add_child(column)
+	_launcher_frame = VBoxContainer.new()
+	_launcher_frame.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_launcher_frame.offset_left = 10
+	_launcher_frame.offset_right = -10
+	_launcher_frame.offset_top = 10
+	_launcher_frame.offset_bottom = -10
+	_launcher_frame.add_theme_constant_override("separation", 8)
+	_launcher.add_child(_launcher_frame)
 
-	var label := _label("Applications", 14, TEXT)
-	column.add_child(label)
+	var header := VBoxContainer.new()
+	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_theme_constant_override("separation", 2)
+	_launcher_frame.add_child(header)
 
-	for app_id in _app_order:
-		var button := _app_button(app_id, Vector2(0, 36))
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		column.add_child(button)
+	_launcher_header_label = _label("Start", 16, TEXT)
+	header.add_child(_launcher_header_label)
+	_launcher_user_label = _label("", 12, MUTED)
+	header.add_child(_launcher_user_label)
+
+	_launcher_search = LineEdit.new()
+	_launcher_search.placeholder_text = "Search apps"
+	_launcher_search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_line_edit(_launcher_search)
+	_launcher_search.text_changed.connect(func(new_text: String) -> void:
+		_launcher_filter_text = new_text.strip_edges().to_lower()
+		_rebuild_launcher_list()
+	)
+	_launcher_frame.add_child(_launcher_search)
+
+	var pinned_label := _label("Pinned", 12, MUTED)
+	pinned_label.name = "PinnedLabel"
+	_launcher_frame.add_child(pinned_label)
+
+	_launcher_scroll = ScrollContainer.new()
+	_launcher_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_launcher_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_launcher_scroll.clip_contents = true
+	_launcher_scroll.custom_minimum_size = Vector2(0, 110)
+	_launcher_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_launcher_frame.add_child(_launcher_scroll)
+
+	_launcher_list = VBoxContainer.new()
+	_launcher_list.name = "AppList"
+	_launcher_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_launcher_list.add_theme_constant_override("separation", 6)
+	_launcher_scroll.add_child(_launcher_list)
+
+	_launcher_footer = HBoxContainer.new()
+	_launcher_footer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_launcher_footer.add_theme_constant_override("separation", 6)
+	_launcher_frame.add_child(_launcher_footer)
+
+	for quick_app in ["files", "browser", "console", "system"]:
+		if _apps.has(quick_app):
+			var quick := _button(str((_apps[quick_app] as Dictionary).get("title", quick_app)).left(1), Vector2(0, 30))
+			quick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			quick.tooltip_text = "Open " + str((_apps[quick_app] as Dictionary).get("title", quick_app))
+			quick.pressed.connect(func() -> void:
+				_hide_launcher()
+				launch_app(quick_app)
+			)
+			_launcher_footer.add_child(quick)
+
+	_rebuild_launcher_list()
+	_refresh_launcher_header()
 
 func _build_session_menu() -> void:
 	_session_menu = Panel.new()
@@ -607,8 +681,7 @@ func _toggle_notification_history() -> void:
 	if not _session_active:
 		return
 	_hide_desktop_context_menu()
-	if _launcher:
-		_launcher.visible = false
+	_hide_launcher()
 	if _session_menu:
 		_session_menu.visible = false
 	_notification_history_panel.visible = not _notification_history_panel.visible
@@ -1145,8 +1218,7 @@ func _on_desktop_gui_input(event: InputEvent) -> void:
 		if mouse_event.button_index == MOUSE_BUTTON_LEFT:
 			if mouse_event.pressed:
 				_hide_desktop_context_menu()
-				if _launcher:
-					_launcher.visible = false
+				_hide_launcher()
 				if _session_menu:
 					_session_menu.visible = false
 				if _notification_history_panel:
@@ -1194,8 +1266,7 @@ func _select_icons_in_drag_rect() -> void:
 func _show_desktop_context_menu(global_pos: Vector2) -> void:
 	if not _session_active or _auth_overlay != null:
 		return
-	if _launcher:
-		_launcher.visible = false
+	_hide_launcher()
 	if _session_menu:
 		_session_menu.visible = false
 	if _notification_history_panel:
@@ -1279,14 +1350,131 @@ func _app_button(app_id: String, min_size: Vector2) -> Button:
 	var button := _button(str(app["title"]), min_size)
 	button.tooltip_text = "Open " + str(app["title"])
 	button.pressed.connect(func() -> void:
-		_launcher.visible = false
+		_hide_launcher()
 		launch_app(app_id)
 	)
 	return button
 
+func _compute_launcher_size(viewport_size: Vector2) -> Vector2:
+	var usable_height := maxf(viewport_size.y - TASKBAR_HEIGHT - (LAUNCHER_MARGIN * 2.0), LAUNCHER_MIN_HEIGHT)
+	var width := clampf(viewport_size.x * 0.28, LAUNCHER_MIN_WIDTH, LAUNCHER_MAX_WIDTH)
+	var height := clampf(usable_height * 0.92, LAUNCHER_MIN_HEIGHT, usable_height)
+	return Vector2(width, height)
+
+func _refresh_launcher_header() -> void:
+	if _launcher_header_label:
+		_launcher_header_label.text = "Start Menu"
+	if _launcher_user_label:
+		var user_name := _fs.current_user() if _fs else "user"
+		var home := _fs.home_path() if _fs else "~"
+		_launcher_user_label.text = "%s  %s" % [user_name, home]
+
+func _hide_launcher() -> void:
+	if _launcher:
+		_launcher.visible = false
+	if _launcher_search:
+		_launcher_search.text = ""
+	_launcher_filter_text = ""
+
+func _launcher_matches_filter(app_id: String) -> bool:
+	if _launcher_filter_text == "":
+		return true
+	if not _apps.has(app_id):
+		return false
+	var app: Dictionary = _apps[app_id]
+	var haystack := (app_id + " " + str(app.get("title", "")) + " " + str(app.get("subtitle", "")) + " " + str(app.get("keywords", ""))).to_lower()
+	return haystack.find(_launcher_filter_text) != -1
+
+func _rebuild_launcher_list() -> void:
+	if _launcher_list == null:
+		return
+	for child in _launcher_list.get_children():
+		child.queue_free()
+	_launcher_buttons.clear()
+	_launcher_selected_app_id = ""
+
+	var any_added := false
+	var pinned_title := _label("Pinned", 12, MUTED)
+	_launcher_list.add_child(pinned_title)
+	for app_id in _app_order:
+		if not _launcher_matches_filter(app_id):
+			continue
+		var app: Dictionary = _apps.get(app_id, {})
+		if not bool(app.get("pinned", false)):
+			continue
+		var button := _app_button(app_id, Vector2(0, 34))
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		_launcher_list.add_child(button)
+		_launcher_buttons[app_id] = button
+		if _launcher_selected_app_id == "":
+			_launcher_selected_app_id = app_id
+		any_added = true
+
+	var all_title := _label("All apps", 12, MUTED)
+	all_title.custom_minimum_size = Vector2(0, 24)
+	_launcher_list.add_child(all_title)
+	for app_id in _app_order:
+		if not _launcher_matches_filter(app_id):
+			continue
+		var all_button := _app_button(app_id, Vector2(0, 34))
+		all_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		all_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		var app_data: Dictionary = _apps.get(app_id, {})
+		var subtitle := str(app_data.get("subtitle", "")).strip_edges()
+		if subtitle != "":
+			all_button.tooltip_text = str(app_data.get("title", app_id)) + " — " + subtitle
+		_launcher_list.add_child(all_button)
+		_launcher_buttons[app_id] = all_button
+		if _launcher_selected_app_id == "":
+			_launcher_selected_app_id = app_id
+		any_added = true
+
+	if not any_added:
+		_launcher_list.add_child(_label("No apps match your search.", 12, MUTED))
+
+	_update_launcher_selection_visuals()
+
+func _update_launcher_selection_visuals() -> void:
+	for app_id in _launcher_buttons.keys():
+		var button := _launcher_buttons[app_id] as Button
+		if not is_instance_valid(button):
+			continue
+		if app_id == _launcher_selected_app_id:
+			button.add_theme_stylebox_override("normal", _style(SURFACE_HOVER, FOCUS, 1, 6))
+		else:
+			button.add_theme_stylebox_override("normal", _style(SURFACE, BORDER, 1, 6))
+
+func _launcher_select_relative(delta: int) -> void:
+	var ids: Array[String] = []
+	for app_id in _app_order:
+		if _launcher_buttons.has(app_id):
+			ids.append(app_id)
+	if ids.is_empty():
+		return
+	var index: int = maxi(ids.find(_launcher_selected_app_id), 0)
+	index = clampi(index + delta, 0, ids.size() - 1)
+	_launcher_selected_app_id = ids[index]
+	_update_launcher_selection_visuals()
+	var selected: Control = _launcher_buttons.get(_launcher_selected_app_id, null) as Control
+	if selected != null and _launcher_scroll:
+		_launcher_scroll.ensure_control_visible(selected)
+
+func _launcher_activate_selected() -> void:
+	if _launcher_selected_app_id == "":
+		return
+	if _launcher_buttons.has(_launcher_selected_app_id):
+		var button := _launcher_buttons[_launcher_selected_app_id] as Button
+		if is_instance_valid(button):
+			button.emit_signal("pressed")
+
 func _layout() -> void:
 	if _launcher:
-		_launcher.position = Vector2(8, maxf(size.y - TASKBAR_HEIGHT - _launcher.size.y - 6.0, 8.0))
+		_launcher.size = _compute_launcher_size(size)
+		var launcher_pos := Vector2(LAUNCHER_MARGIN, size.y - TASKBAR_HEIGHT - _launcher.size.y - 6.0)
+		var max_x := maxf(size.x - _launcher.size.x - LAUNCHER_MARGIN, LAUNCHER_MARGIN)
+		var max_y := maxf(size.y - TASKBAR_HEIGHT - _launcher.size.y - LAUNCHER_MARGIN, LAUNCHER_MARGIN)
+		_launcher.position = Vector2(clampf(launcher_pos.x, LAUNCHER_MARGIN, max_x), clampf(launcher_pos.y, LAUNCHER_MARGIN, max_y))
 	if _session_menu:
 		_session_menu.position = Vector2(maxf(size.x - _session_menu.size.x - 96.0, 8.0), maxf(size.y - TASKBAR_HEIGHT - _session_menu.size.y - 6.0, 8.0))
 	if _notification_history_panel:
@@ -1462,16 +1650,26 @@ func _toggle_launcher() -> void:
 	_hide_desktop_context_menu()
 	if _session_menu:
 		_session_menu.visible = false
+	if _notification_history_panel:
+		_notification_history_panel.visible = false
+	if _launcher == null:
+		return
 	_launcher.visible = not _launcher.visible
 	if _launcher.visible:
+		_refresh_launcher_header()
+		_rebuild_launcher_list()
+		_layout()
 		_launcher.move_to_front()
+		if _launcher_search:
+			_launcher_search.grab_focus()
+	else:
+		_hide_launcher()
 
 func _toggle_session_menu() -> void:
 	if not _session_active:
 		return
 	_hide_desktop_context_menu()
-	if _launcher:
-		_launcher.visible = false
+	_hide_launcher()
 	_session_menu.visible = not _session_menu.visible
 	if _session_menu.visible:
 		_session_menu.move_to_front()
