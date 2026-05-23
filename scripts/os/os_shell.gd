@@ -916,7 +916,8 @@ func _toggle_notification_history() -> void:
 
 func _refresh_notifications() -> void:
 	if _notification_button:
-		_notification_button.text = "Notifications" if _notifications.is_empty() else "Notifications (" + str(_notifications.size()) + ")"
+		_notification_button.text = ""
+		_notification_button.tooltip_text = "Notifications" if _notifications.is_empty() else "Notifications (" + str(_notifications.size()) + ")"
 	if not _notification_list:
 		return
 	for child in _notification_list.get_children():
@@ -1623,21 +1624,21 @@ func _category_icon(category_name: String) -> Texture2D:
 	_ensure_icon_atlas()
 	match category_name.to_lower():
 		"all":
-			return _icon_atlas.get_icon("start", 16)
+			return _icon_atlas.get_icon("start", 20)
 		"favorites":
-			return _icon_atlas.get_icon("home", 16)
+			return _icon_atlas.get_icon("home", 20)
 		"internet":
-			return _icon_atlas.get_icon("browser", 16)
+			return _icon_atlas.get_icon("browser", 20)
 		"office":
-			return _icon_atlas.get_icon("notes", 16)
+			return _icon_atlas.get_icon("notes", 20)
 		"programming":
-			return _icon_atlas.get_icon("code", 16)
+			return _icon_atlas.get_icon("code", 22)
 		"system":
-			return _icon_atlas.get_icon("settings", 16)
+			return _icon_atlas.get_icon("settings", 20)
 		"administration":
-			return _icon_atlas.get_icon("settings", 16)
+			return _icon_atlas.get_icon("settings", 20)
 		_:
-			return _icon_atlas.get_icon("placeholder", 16)
+			return _icon_atlas.get_icon("placeholder", 20)
 
 func _open_account_settings() -> void:
 	_hide_launcher()
