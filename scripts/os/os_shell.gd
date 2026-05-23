@@ -19,7 +19,7 @@ var _active_window: OSWindow
 var _window_cascade: int = 0
 var _fs: OSFileSystem
 
-var _desktop_bg: TextureRect
+var _desktop_bg: ColorRect
 var _desktop_layer: Control
 var _desktop_icons: Control
 var _desktop_context_menu: Panel
@@ -76,7 +76,13 @@ var _notifications: Array[Dictionary] = []
 var _notification_sequence: int = 0
 var _session_active: bool = false
 var _wallpaper_index: int = 0
-var _gradient_textures: Array[GradientTexture2D] = []
+var _wallpaper_colors: Array[Color] = [
+	Color("0d0f14"),
+	Color("10141d"),
+	Color("12111a"),
+	Color("0f1312"),
+	Color("14100f")
+]
 var _files_app_state: Dictionary = {}
 var _files_app_ui: Dictionary = {}
 var _text_app_editor: TextEdit
@@ -320,7 +326,7 @@ func import_state(state: Dictionary) -> String:
 				_notification_sequence = maxi(_notification_sequence, int(str(notification.get("id", "0")).trim_prefix("n_")))
 	_refresh_notifications()
 	var session: Dictionary = state.get("session", {}) if state.get("session", {}) is Dictionary else {}
-	_wallpaper_index = clampi(int(session.get("wallpaper_index", _wallpaper_index)), 0, _gradient_textures.size() - 1)
+	_wallpaper_index = clampi(int(session.get("wallpaper_index", _wallpaper_index)), 0, _wallpaper_colors.size() - 1)
 	_session_active = bool(session.get("active", _session_active))
 	_desktop_icon_positions = session.get("desktop_icon_positions", {}).duplicate(true) if session.get("desktop_icon_positions", {}) is Dictionary else {}
 	_set_desktop_highlight_color(_color_from_variant(session.get("desktop_highlight_color", []), _desktop_highlight_color))
@@ -331,8 +337,7 @@ func import_state(state: Dictionary) -> String:
 		_launcher.visible = false
 	if _session_menu:
 		_session_menu.visible = false
-	if _desktop_bg:
-		_desktop_bg.texture = _gradient_textures[_wallpaper_index]
+	_apply_wallpaper()
 	_refresh_desktop_icons()
 	_update_clock()
 	if _session_active:
@@ -354,8 +359,7 @@ func reset_state() -> void:
 	_session_active = false
 	_close_all_windows()
 	_hide_desktop_context_menu()
-	if _desktop_bg:
-		_desktop_bg.texture = _gradient_textures[_wallpaper_index]
+	_apply_wallpaper()
 	_refresh_desktop_icons()
 	_update_clock()
 	_show_auth_screen("login")
@@ -372,36 +376,19 @@ func _register_apps() -> void:
 		"system": {"title": "System", "subtitle": "System status and settings", "keywords": "settings diagnostics", "category": "Administration", "pinned": true, "builder": Callable(self, "_build_system_app")}
 	}
 
-func _build_gradient_textures() -> void:
-	if not _gradient_textures.is_empty():
+func _apply_wallpaper() -> void:
+	if not _desktop_bg:
 		return
-	var presets: Array[Dictionary] = [
-		{"c1": Color("0d0f14"), "c2": Color("0d0f14")},   # Default solid charcoal
-		{"c1": Color("10141d"), "c2": Color("10141d")},   # Solid slate
-		{"c1": Color("12111a"), "c2": Color("12111a")},   # Solid dusk
-		{"c1": Color("0f1312"), "c2": Color("0f1312")},   # Solid deep green
-		{"c1": Color("14100f"), "c2": Color("14100f")},   # Solid warm dark
-	]
-	for preset in presets:
-		var grad := Gradient.new()
-		grad.add_point(0.0, preset["c1"])
-		grad.add_point(1.0, preset["c2"])
-		var tex := GradientTexture2D.new()
-		tex.width = 2048
-		tex.height = 2048
-		tex.gradient = grad
-		tex.fill = GradientTexture2D.FILL_LINEAR
-		tex.fill_from = Vector2(0.0, 0.0)
-		tex.fill_to = Vector2(1.0, 1.0)
-		_gradient_textures.append(tex)
+	if _wallpaper_colors.is_empty():
+		_desktop_bg.color = Color("0d0f14")
+		return
+	_wallpaper_index = clampi(_wallpaper_index, 0, _wallpaper_colors.size() - 1)
+	_desktop_bg.color = _wallpaper_colors[_wallpaper_index]
 
 func _build_ui() -> void:
-	_desktop_bg = TextureRect.new()
+	_desktop_bg = ColorRect.new()
 	_desktop_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_desktop_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_desktop_bg.stretch_mode = TextureRect.STRETCH_SCALE
-	_build_gradient_textures()
-	_desktop_bg.texture = _gradient_textures[_wallpaper_index]
+	_apply_wallpaper()
 	add_child(_desktop_bg)
 
 	_desktop_layer = Control.new()
@@ -1172,10 +1159,14 @@ func _clamp_all_desktop_icon_positions() -> void:
 func _apply_desktop_icon_style(button: Button, selected: bool) -> void:
 	var border_color := _desktop_highlight_border_color()
 	var normal_color := _desktop_highlight_color if selected else Color(0, 0, 0, 0)
-	button.add_theme_stylebox_override("normal", StyleFactory.desktop_icon_selected(10) if selected else StyleFactory.desktop_icon_hover(10))
-	button.add_theme_stylebox_override("hover", StyleFactory.desktop_icon_hover(10))
-	button.add_theme_stylebox_override("pressed", StyleFactory.desktop_icon_selected(10))
-	button.add_theme_stylebox_override("focus", StyleFactory.desktop_icon_selected(10))
+	var normal_style := StyleFactory.build(normal_color, border_color if selected else Color.TRANSPARENT, 1 if selected else 0, 10)
+	var hover_style := StyleFactory.desktop_icon_hover(10)
+	var pressed_style := StyleFactory.build(_desktop_highlight_color, border_color, 1, 10)
+	var focus_style := StyleFactory.build(_desktop_highlight_color, border_color, 1, 10)
+	button.add_theme_stylebox_override("normal", normal_style)
+	button.add_theme_stylebox_override("hover", hover_style)
+	button.add_theme_stylebox_override("pressed", pressed_style)
+	button.add_theme_stylebox_override("focus", focus_style)
 
 func _desktop_highlight_border_color() -> Color:
 	return Color(minf(_desktop_highlight_color.r + 0.16, 1.0), minf(_desktop_highlight_color.g + 0.16, 1.0), minf(_desktop_highlight_color.b + 0.16, 1.0), 0.95)
@@ -1414,7 +1405,7 @@ func _update_desktop_context_actions() -> void:
 func _set_desktop_highlight_color(color: Color) -> void:
 	_desktop_highlight_color = Color(color.r, color.g, color.b, clampf(color.a, 0.14, 0.7))
 	if _desktop_drag_rect:
-		_desktop_drag_rect.color = Tokens.alpha(Tokens.ACCENT, 0.15)
+		_desktop_drag_rect.color = Tokens.alpha(_desktop_highlight_color, minf(_desktop_highlight_color.a * 0.6, 0.45))
 	_update_desktop_icon_selection()
 	_queue_state_save()
 
@@ -1570,9 +1561,8 @@ func _unique_child_path(parent_path: String, base_name: String) -> String:
 	return _fs.join_path(clean_parent, candidate_name)
 
 func _cycle_wallpaper() -> void:
-	_wallpaper_index = (_wallpaper_index + 1) % _gradient_textures.size()
-	if _desktop_bg:
-		_desktop_bg.texture = _gradient_textures[_wallpaper_index]
+	_wallpaper_index = (_wallpaper_index + 1) % _wallpaper_colors.size()
+	_apply_wallpaper()
 	_set_desktop_context_status("Wallpaper changed")
 	_queue_state_save()
 
