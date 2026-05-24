@@ -130,21 +130,21 @@ func _build(content: Control) -> void:
 	_title_label.add_theme_color_override("font_color", Tokens.TEXT)
 	title_row.add_child(_title_label)
 
-	var close_button := _title_button("", true)
-	close_button.tooltip_text = "Close"
-	close_button.pressed.connect(func() -> void: close_requested.emit(self))
-	title_row.add_child(close_button)
+	var minimize_button := _title_button("−", false)
+	minimize_button.tooltip_text = "Minimize"
+	minimize_button.pressed.connect(func() -> void: minimize_requested.emit(self))
+	title_row.add_child(minimize_button)
 
-	var maximize_button := _title_button("", false)
+	var maximize_button := _title_button("□", false)
 	_maximize_button = maximize_button
 	maximize_button.tooltip_text = "Maximize / restore"
 	maximize_button.pressed.connect(toggle_maximize)
 	title_row.add_child(maximize_button)
 
-	var minimize_button := _title_button("", false)
-	minimize_button.tooltip_text = "Minimize"
-	minimize_button.pressed.connect(func() -> void: minimize_requested.emit(self))
-	title_row.add_child(minimize_button)
+	var close_button := _title_button("×", true)
+	close_button.tooltip_text = "Close"
+	close_button.pressed.connect(func() -> void: close_requested.emit(self))
+	title_row.add_child(close_button)
 
 	_body_host = MarginContainer.new()
 	_body_host.name = "Body"
