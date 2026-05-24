@@ -3633,7 +3633,7 @@ func _build_notes_app_legacy() -> Control:
 func _build_text_app() -> Control:
 	var text_app := TextEditorApp.new()
 	text_app.name = "TextEditorApp"
-	text_app.os_app_init({"shell": self})
+	text_app.os_app_init({"shell": self, "filesystem": _fs})
 	return text_app
 
 func _build_text_app_legacy() -> Control:
@@ -3675,6 +3675,17 @@ func _build_text_app_legacy() -> Control:
 	root.add_child(_text_app_status_label)
 	return root
 
+func _text_editor_instance(window: OSWindow = null) -> TextEditorApp:
+	var target_window := window
+	if target_window == null:
+		target_window = _current_window_for_app("text")
+	if target_window == null or not is_instance_valid(target_window):
+		return null
+	var node := target_window.find_child("TextEditorApp", true, false)
+	if node != null and node is TextEditorApp:
+		return node as TextEditorApp
+	return null
+
 func _open_text_file(path: String, app_id := "text") -> void:
 	var target_path := _fs.normalize_path(path)
 	if not _fs.is_file(target_path):
@@ -3682,6 +3693,13 @@ func _open_text_file(path: String, app_id := "text") -> void:
 		return
 	var window := launch_app(app_id)
 	if window == null:
+		return
+	if app_id == "text":
+		var text_app := _text_editor_instance(window)
+		if text_app == null:
+			return
+		text_app.open_file(target_path)
+		_focus_window(window)
 		return
 	if _text_app_editor == null:
 		return
