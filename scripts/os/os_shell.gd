@@ -2718,7 +2718,14 @@ func _close_all_windows() -> void:
 func _build_files_app() -> Control:
 	var files_app := FilesApp.new()
 	files_app.name = "FilesApp"
-	files_app.os_app_init({"shell": self})
+	files_app.os_app_init({
+		"shell": self,
+		"filesystem": _fs,
+		"shortcuts": _files_shortcuts.duplicate(true),
+		"open_file_callback": Callable(self, "_open_text_file"),
+		"shortcuts_changed_callback": Callable(self, "_sync_files_shortcuts_from_app"),
+		"state_save_callback": Callable(self, "_queue_state_save")
+	})
 	return files_app
 
 func _build_files_app_legacy() -> Control:
@@ -3559,27 +3566,35 @@ func _files_size_text(item: Dictionary) -> String:
 		return "%.1f MB" % size_mb
 	return "%.1f GB" % (size_mb / 1024.0)
 
+func _files_app_instance(window: OSWindow = null) -> FilesApp:
+	var target_window := window
+	if target_window == null:
+		target_window = _current_window_for_app("files")
+	if target_window == null or not is_instance_valid(target_window):
+		return null
+	var node := target_window.find_child("FilesApp", true, false)
+	if node != null and node is FilesApp:
+		return node as FilesApp
+	return null
+
+func _sync_files_shortcuts_from_app(shortcuts: Array) -> void:
+	_files_shortcuts = _files_sanitize_shortcuts(shortcuts, _fs.home_path())
+
 func _open_files_to_path(path: String) -> void:
 	var target := _fs.normalize_path(path)
 	var folder_path := target
-	var select_path := ""
 	if _fs.is_file(target):
 		folder_path = _fs.parent_path(target)
-		select_path = target
 	elif not _fs.is_dir(target):
 		folder_path = _fs.home_path()
 	var window := launch_app("files")
 	if window == null:
 		return
-	if _files_app_state.is_empty() or _files_app_ui.is_empty():
-		return
-	var path_input := _files_app_ui.get("path_input", null) as LineEdit
-	if path_input == null:
-		return
-	path_input.text = folder_path
-	_refresh_files(_files_app_state, _files_app_ui)
-	if select_path != "":
-		_select_files_item_by_path(select_path, _files_app_state, _files_app_ui)
+	var files_app := _files_app_instance(window)
+	if files_app != null:
+		files_app.open_path(folder_path)
+		if _fs.is_file(target):
+			files_app.select_path(target)
 	_focus_window(window)
 
 func _select_files_item_by_path(target_path: String, state: Dictionary, ui: Dictionary) -> bool:
