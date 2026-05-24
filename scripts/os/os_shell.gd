@@ -3618,7 +3618,7 @@ func _paste_destination_path(source_path: String, destination_dir: String) -> St
 func _build_notes_app() -> Control:
 	var notes_app := NotesApp.new()
 	notes_app.name = "NotesApp"
-	notes_app.os_app_init({"shell": self})
+	notes_app.os_app_init({"shell": self, "filesystem": _fs})
 	return notes_app
 
 func _build_notes_app_legacy() -> Control:
@@ -3686,6 +3686,17 @@ func _text_editor_instance(window: OSWindow = null) -> TextEditorApp:
 		return node as TextEditorApp
 	return null
 
+func _notes_app_instance(window: OSWindow = null) -> NotesApp:
+	var target_window := window
+	if target_window == null:
+		target_window = _current_window_for_app("notes")
+	if target_window == null or not is_instance_valid(target_window):
+		return null
+	var node := target_window.find_child("NotesApp", true, false)
+	if node != null and node is NotesApp:
+		return node as NotesApp
+	return null
+
 func _open_text_file(path: String, app_id := "text") -> void:
 	var target_path := _fs.normalize_path(path)
 	if not _fs.is_file(target_path):
@@ -3699,6 +3710,13 @@ func _open_text_file(path: String, app_id := "text") -> void:
 		if text_app == null:
 			return
 		text_app.open_file(target_path)
+		_focus_window(window)
+		return
+	if app_id == "notes":
+		var notes_app := _notes_app_instance(window)
+		if notes_app == null:
+			return
+		notes_app.open_file(target_path)
 		_focus_window(window)
 		return
 	if _text_app_editor == null:
@@ -4553,8 +4571,9 @@ func _notes_update_note(note_id_or_path: String, content: String) -> Dictionary:
 		return {"ok": false, "error": HermesProtocol.make_error("WRITE_FAILED", write_message)}
 	var note_id := target_path.get_file()
 	_notes_active_note_id = note_id
-	if _text_app_current_path == target_path and _text_app_editor:
-		_text_app_editor.text = content
+	var notes_app := _notes_app_instance()
+	if notes_app != null and notes_app.get_current_path() == target_path:
+		notes_app.set_note_content(content, false)
 	if not _notes_open_notes.has(note_id):
 		_notes_open_notes.append(note_id)
 	_emit_hermes_event("note.updated", {"note_id": note_id, "path": target_path})
