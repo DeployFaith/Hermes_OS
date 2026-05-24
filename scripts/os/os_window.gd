@@ -14,30 +14,27 @@ var _body_host: MarginContainer
 var _maximize_button: Button
 var _resize_handle: ColorRect
 
-var _dragging := false
-var _resizing := false
-var _drag_offset := Vector2.ZERO
-var _resize_start_mouse := Vector2.ZERO
-var _resize_start_size := Vector2.ZERO
-var _restore_position := Vector2.ZERO
-var _restore_size := Vector2.ZERO
-var _maximized := false
-var _minimum_window_size := Vector2.ZERO
+var _dragging: bool = false
+var _resizing: bool = false
+var _drag_offset: Vector2 = Vector2.ZERO
+var _resize_start_mouse: Vector2 = Vector2.ZERO
+var _resize_start_size: Vector2 = Vector2.ZERO
+var _restore_position: Vector2 = Vector2.ZERO
+var _restore_size: Vector2 = Vector2.ZERO
+var _maximized: bool = false
+var _minimum_window_size: Vector2 = Vector2.ZERO
+var _snapped: bool = false
+var _snap_direction: String = ""
+var _snap_restore_position: Vector2 = Vector2.ZERO
+var _snap_restore_size: Vector2 = Vector2.ZERO
 
 const MIN_SIZE := Vector2(420, 280)
+const SNAP_THRESHOLD := 16.0
 const TITLE_HEIGHT := 42.0
-const BG := Color("202329")
-const BODY_BG := Color("242832")
-const TITLE_BG := Color("2b3039")
-const TITLE_BG_INACTIVE := Color("262a32")
-const BORDER_ACTIVE := Color("7286aa")
-const BORDER_INACTIVE := Color("3c4350")
-const BUTTON_BG := Color(0, 0, 0, 0)
-const BUTTON_HOVER := Color("3a414e")
-const BUTTON_PRESSED := Color("465061")
-const BUTTON_CLOSE_HOVER := Color("a84d57")
-const TEXT := Color("eceff4")
-const TEXT_MUTED := Color("b8c0cc")
+
+const Tokens = preload("res://scripts/os/design_tokens.gd")
+const StyleFactory = preload("res://scripts/os/style_factory.gd")
+const UIAnimator = preload("res://scripts/os/ui_animator.gd")
 
 func setup(id: String, title: String, content: Control) -> void:
 	app_id = id
@@ -60,12 +57,12 @@ func set_window_size(requested_size: Vector2) -> void:
 	size = Vector2(maxf(requested_size.x, min_size.x), maxf(requested_size.y, min_size.y))
 
 func set_active(active: bool) -> void:
-	var border: Color = BORDER_ACTIVE if active else BORDER_INACTIVE
+	var border: Color = Tokens.BORDER_ACTIVE if active else Tokens.BORDER
 	add_theme_stylebox_override("panel", _window_style(border, active))
 	if _title_bar:
-		_title_bar.add_theme_stylebox_override("panel", _style_corners(TITLE_BG if active else TITLE_BG_INACTIVE, Color.TRANSPARENT, 0, 10, 10, 0, 0))
+		_title_bar.add_theme_stylebox_override("panel", StyleFactory.title_bar(active, 16))
 	if _title_label:
-		_title_label.add_theme_color_override("font_color", TEXT if active else TEXT_MUTED)
+		_title_label.add_theme_color_override("font_color", Tokens.TEXT if active else Tokens.TEXT_MUTED)
 
 func set_app_title(title: String) -> void:
 	app_title = title.strip_edges()
@@ -78,6 +75,9 @@ func toggle_maximize() -> void:
 	var parent_control := get_parent() as Control
 	if parent_control == null:
 		return
+
+	_snapped = false
+	_snap_direction = ""
 
 	if _maximized:
 		position = _restore_position
@@ -126,19 +126,20 @@ func _build(content: Control) -> void:
 	_title_label.text = app_title
 	_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_title_label.add_theme_font_size_override("font_size", 13)
-	_title_label.add_theme_color_override("font_color", TEXT)
+	_title_label.add_theme_font_size_override("font_size", 14)
+	_title_label.add_theme_color_override("font_color", Tokens.TEXT)
 	title_row.add_child(_title_label)
 
-	var minimize_button := _title_button("−")
+	var minimize_button := _title_button("−", false)
 	minimize_button.tooltip_text = "Minimize"
 	minimize_button.pressed.connect(func() -> void: minimize_requested.emit(self))
 	title_row.add_child(minimize_button)
 
-	_maximize_button = _title_button("□")
-	_maximize_button.tooltip_text = "Maximize / restore"
-	_maximize_button.pressed.connect(toggle_maximize)
-	title_row.add_child(_maximize_button)
+	var maximize_button := _title_button("□", false)
+	_maximize_button = maximize_button
+	maximize_button.tooltip_text = "Maximize / restore"
+	maximize_button.pressed.connect(toggle_maximize)
+	title_row.add_child(maximize_button)
 
 	var close_button := _title_button("×", true)
 	close_button.tooltip_text = "Close"
@@ -187,15 +188,21 @@ func _build(content: Control) -> void:
 func _title_button(text_value: String, destructive := false) -> Button:
 	var button := Button.new()
 	button.text = text_value
-	button.custom_minimum_size = Vector2(28, 28)
+	button.custom_minimum_size = Vector2(30, 30)
 	button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	button.add_theme_font_size_override("font_size", 14)
-	button.add_theme_color_override("font_color", TEXT)
-	button.add_theme_stylebox_override("normal", _button_style(BUTTON_BG, Color.TRANSPARENT, 0))
-	button.add_theme_stylebox_override("hover", _button_style(BUTTON_CLOSE_HOVER if destructive else BUTTON_HOVER, Color.TRANSPARENT, 0))
-	button.add_theme_stylebox_override("pressed", _button_style(BUTTON_PRESSED, Color.TRANSPARENT, 0))
-	button.add_theme_stylebox_override("focus", _button_style(Color(0, 0, 0, 0), BORDER_ACTIVE, 1))
+	button.add_theme_color_override("font_color", Tokens.TEXT)
+	button.add_theme_stylebox_override("normal", StyleFactory.traffic_light_default())
+	if destructive:
+		button.add_theme_stylebox_override("hover", StyleFactory.traffic_light_close())
+		button.add_theme_stylebox_override("pressed", StyleFactory.traffic_light_close())
+	else:
+		# Distinguish minimize vs maximize by position, not by different hover colors here
+		# We'll use a single green hover for all non-destructive; the position gives semantic meaning
+		button.add_theme_stylebox_override("hover", StyleFactory.traffic_light_maximize())
+		button.add_theme_stylebox_override("pressed", StyleFactory.traffic_light_maximize())
+	button.add_theme_stylebox_override("focus", StyleFactory.build(Color(0, 0, 0, 0), Tokens.FOCUS, 2, 15))
 	return button
 
 func _on_title_bar_gui_input(event: InputEvent) -> void:
@@ -206,10 +213,17 @@ func _on_title_bar_gui_input(event: InputEvent) -> void:
 		if event.pressed:
 			_dragging = true
 			_drag_offset = get_global_mouse_position() - global_position
+			if _snapped:
+				_unsnap_for_drag()
 			focused.emit(self)
 			move_to_front()
 		else:
-			_dragging = false
+			if _dragging:
+				_dragging = false
+				var parent_control := get_parent() as Control
+				if parent_control:
+					var local_mouse := get_global_mouse_position() - parent_control.global_position
+					_try_snap(local_mouse, parent_control.size)
 	elif event is InputEventMouseMotion and _dragging and not _maximized:
 		var parent_control := get_parent() as Control
 		var target := get_global_mouse_position() - _drag_offset
@@ -272,43 +286,70 @@ func _base_minimum_size(content: Control) -> Vector2:
 			return value
 	return MIN_SIZE
 
+func _unsnap_for_drag() -> void:
+	_snapped = false
+	_snap_direction = ""
+	var mouse_global := get_global_mouse_position()
+	var new_pos := mouse_global - _snap_restore_size / 2.0
+	var parent_control := get_parent() as Control
+	if parent_control:
+		new_pos -= parent_control.global_position
+		new_pos.x = clampf(new_pos.x, 0.0, maxf(parent_control.size.x - _snap_restore_size.x, 0.0))
+		new_pos.y = clampf(new_pos.y, 0.0, maxf(parent_control.size.y - _snap_restore_size.y, 0.0))
+	position = new_pos
+	size = _snap_restore_size
+	_drag_offset = _snap_restore_size / 2.0
+
+func _try_snap(local_mouse: Vector2, parent_size: Vector2) -> void:
+	if local_mouse.y < SNAP_THRESHOLD:
+		_snap_maximize()
+	elif local_mouse.x < SNAP_THRESHOLD:
+		_snap_left(parent_size)
+	elif local_mouse.x > parent_size.x - SNAP_THRESHOLD:
+		_snap_right(parent_size)
+
+func _save_snap_state() -> void:
+	if not _snapped:
+		_snap_restore_position = position
+		_snap_restore_size = size
+
+func _snap_maximize() -> void:
+	toggle_maximize()
+
+func _snap_left(parent_size: Vector2) -> void:
+	if _maximized:
+		toggle_maximize()
+	_save_snap_state()
+	_snapped = true
+	_snap_direction = "left"
+	position = Vector2.ZERO
+	size = Vector2(parent_size.x / 2.0, parent_size.y)
+
+func _snap_right(parent_size: Vector2) -> void:
+	if _maximized:
+		toggle_maximize()
+	_save_snap_state()
+	_snapped = true
+	_snap_direction = "right"
+	position = Vector2(parent_size.x / 2.0, 0.0)
+	size = Vector2(parent_size.x / 2.0, parent_size.y)
+
 func _window_style(border: Color, active: bool) -> StyleBoxFlat:
-	var style := _style_corners(BG, border, 1, 10, 10, 10, 10)
-	style.shadow_color = Color(0, 0, 0, 0.34 if active else 0.22)
-	style.shadow_size = 14 if active else 8
-	style.shadow_offset = Vector2(0, 4 if active else 3)
-	style.anti_aliasing = true
-	return style
+	if active:
+		return StyleFactory.window_active(16)
+	return StyleFactory.window_inactive(16)
 
 func _body_style() -> StyleBoxFlat:
-	var style := _style_corners(BODY_BG, Color("303744"), 1, 8, 8, 8, 8)
-	style.content_margin_left = 10
-	style.content_margin_right = 10
-	style.content_margin_top = 10
-	style.content_margin_bottom = 10
-	style.anti_aliasing = true
-	return style
+	return StyleFactory.body_panel(true, 12)
 
 func _button_style(bg: Color, border: Color, border_width: int) -> StyleBoxFlat:
-	var style := _style_corners(bg, border, border_width, 6, 6, 6, 6)
-	style.content_margin_left = 0
-	style.content_margin_right = 0
-	style.content_margin_top = 0
-	style.content_margin_bottom = 0
-	style.anti_aliasing = true
-	return style
+	return StyleFactory.build(bg, border, border_width, 6)
 
 func _style(bg: Color, border: Color, border_width: int, radius: int) -> StyleBoxFlat:
-	return _style_corners(bg, border, border_width, radius, radius, radius, radius)
+	return StyleFactory.build(bg, border, border_width, radius)
 
 func _style_corners(bg: Color, border: Color, border_width: int, top_left: int, top_right: int, bottom_left: int, bottom_right: int) -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = bg
-	style.border_color = border
-	style.border_width_left = border_width
-	style.border_width_right = border_width
-	style.border_width_top = border_width
-	style.border_width_bottom = border_width
+	var style := StyleFactory.build(bg, border, border_width, top_left)
 	style.corner_radius_top_left = top_left
 	style.corner_radius_top_right = top_right
 	style.corner_radius_bottom_left = bottom_left

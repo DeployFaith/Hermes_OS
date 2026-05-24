@@ -13,9 +13,21 @@ var _url := ""
 var _was_connected := false
 
 func connect_to_endpoint(url: String) -> String:
-	_url = url.strip_edges()
-	if _url == "":
+	var target := url.strip_edges()
+	if target == "":
 		return "Endpoint URL is required"
+	var state := _peer.get_ready_state()
+	if _url == target and (state == WebSocketPeer.STATE_CONNECTING or state == WebSocketPeer.STATE_OPEN):
+		set_process(true)
+		return ""
+	if state == WebSocketPeer.STATE_CONNECTING or state == WebSocketPeer.STATE_OPEN:
+		var should_emit_disconnect := _was_connected or state == WebSocketPeer.STATE_OPEN
+		_peer.close(1000, "reconnect")
+		_peer = WebSocketPeer.new()
+		_was_connected = false
+		if should_emit_disconnect:
+			disconnected.emit()
+	_url = target
 	var status := _peer.connect_to_url(_url)
 	if status != OK:
 		return "WebSocket connect failed: %s" % str(status)
