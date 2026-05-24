@@ -3,6 +3,21 @@ extends Control
 
 const OSWindow = preload("res://scripts/os/os_window.gd")
 const OSFileSystem = preload("res://scripts/os/os_file_system.gd")
+const OSEventBus = preload("res://scripts/os/core/os_event_bus.gd")
+const NotificationCenter = preload("res://scripts/os/core/notification_center.gd")
+const AppRegistry = preload("res://scripts/os/core/app_registry.gd")
+const AppInstance = preload("res://scripts/os/core/app_instance.gd")
+const WindowManager = preload("res://scripts/os/core/window_manager.gd")
+const FilesApp = preload("res://scripts/apps/files/files_app.gd")
+const FilesAppManifest = preload("res://scripts/apps/files/files_app_manifest.gd")
+const TerminalApp = preload("res://scripts/apps/terminal/terminal_app.gd")
+const TerminalAppManifest = preload("res://scripts/apps/terminal/terminal_app_manifest.gd")
+const TextEditorApp = preload("res://scripts/apps/text_editor/text_editor_app.gd")
+const TextEditorAppManifest = preload("res://scripts/apps/text_editor/text_editor_app_manifest.gd")
+const NotesApp = preload("res://scripts/apps/notes/notes_app.gd")
+const NotesAppManifest = preload("res://scripts/apps/notes/notes_app_manifest.gd")
+const SystemSettingsApp = preload("res://scripts/apps/system_settings/system_settings_app.gd")
+const SystemSettingsAppManifest = preload("res://scripts/apps/system_settings/system_settings_app_manifest.gd")
 const HermesProtocol = preload("res://scripts/hermes/hermes_protocol.gd")
 const BrowserApp = preload("res://scripts/apps/browser_app.gd")
 
@@ -13,10 +28,19 @@ signal hermes_event(event_name: String, payload: Dictionary)
 
 var _apps: Dictionary = {}
 var _app_order: Array[String] = []
+var _app_registry: AppRegistry
+var _app_instances: Dictionary = {}
+var _app_instances_by_app: Dictionary = {}
+var _app_instance_by_app: Dictionary = {} # TODO(redesign): compatibility mirror; stores most recent instance id per app.
+var _window_to_app_instance: Dictionary = {}
+var _next_app_instance_id: int = 1
 var _open_windows: Dictionary = {}
 var _task_buttons: Dictionary = {}
 var _active_window: OSWindow
 var _window_cascade: int = 0
+var _event_bus: OSEventBus
+var _notification_center: NotificationCenter
+var _window_manager: WindowManager
 var _fs: OSFileSystem
 
 var _desktop_bg: ColorRect
@@ -143,12 +167,24 @@ func _ready() -> void:
 	offset_right = 0.0
 	offset_bottom = 0.0
 	position = Vector2.ZERO
+	_event_bus = OSEventBus.new()
+	_event_bus.event_emitted.connect(_on_os_event_bus_event_emitted)
+	_event_bus.subscribe(OSEventBus.NOTIFICATION_CREATED, self, &"_on_notification_center_event")
+	_event_bus.subscribe(OSEventBus.NOTIFICATION_CLEARED, self, &"_on_notification_center_event")
+	_event_bus.subscribe(OSEventBus.WINDOW_OPENED, self, &"_on_window_service_event")
+	_event_bus.subscribe(OSEventBus.WINDOW_CLOSED, self, &"_on_window_service_event")
+	_event_bus.subscribe(OSEventBus.WINDOW_FOCUSED, self, &"_on_window_service_event")
+	_event_bus.subscribe(OSEventBus.WINDOW_MINIMIZED, self, &"_on_window_service_event")
+	_event_bus.subscribe(OSEventBus.WINDOW_RESTORED, self, &"_on_window_service_event")
+	_notification_center = NotificationCenter.new()
+	_notification_center.setup(_event_bus)
 	_fs = OSFileSystem.new()
 	_fs.load_or_create()
 	_apply_theme_mode(_theme_mode, false)
 	_console_history = ["Type 'help' for commands. Current user: " + _fs.current_user()]
 	_register_apps()
 	_build_ui()
+	_setup_window_manager()
 	_setup_state_save_timer()
 	var restored := _load_persisted_state()
 	_update_clock()
@@ -166,6 +202,103 @@ func _ready() -> void:
 	add_child(clock_timer)
 
 	resized.connect(_layout)
+
+func _setup_window_manager() -> void:
+	_window_manager = WindowManager.new()
+	_window_manager.setup(_window_layer, _event_bus)
+	_window_manager.window_opened.connect(_on_window_manager_window_opened)
+	_window_manager.window_closed.connect(_on_window_manager_window_closed)
+	_window_manager.window_focused.connect(_on_window_manager_window_focused)
+	_window_manager.window_minimized.connect(_on_window_manager_window_minimized)
+	_window_manager.window_restored.connect(_on_window_manager_window_restored)
+
+func _on_window_manager_window_opened(window: OSWindow, _window_id_value: int) -> void:
+	if window == null or not is_instance_valid(window):
+		return
+	_open_windows[window.app_id] = window
+	_create_task_button(window.app_id)
+	_active_window = window
+	_update_task_button(window.app_id, true)
+	_update_taskbar_indicators()
+
+func _on_window_manager_window_closed(window_id_value: int, app_id: String) -> void:
+	_remove_app_instance_for_window(app_id, window_id_value)
+	var remaining_window: OSWindow = null
+	if _window_manager != null:
+		var remaining_ids := _window_manager.get_window_ids_for_app(StringName(app_id))
+		if not remaining_ids.is_empty():
+			remaining_window = _window_manager.get_window(int(remaining_ids[remaining_ids.size() - 1]))
+	if remaining_window != null:
+		_open_windows[app_id] = remaining_window
+	else:
+		if _open_windows.has(app_id):
+			_open_windows.erase(app_id)
+		if _task_buttons.has(app_id):
+			var button := _task_buttons[app_id] as Button
+			if is_instance_valid(button):
+				button.queue_free()
+			_task_buttons.erase(app_id)
+		_emit_hermes_event("app.closed", {"app_id": app_id})
+	_active_window = _window_manager.get_focused_window() if _window_manager != null else null
+	_update_taskbar_indicators()
+
+func _on_window_manager_window_focused(window: OSWindow, _window_id_value: int) -> void:
+	if window == null or not is_instance_valid(window):
+		return
+	var previous_window := _active_window
+	if previous_window != null and is_instance_valid(previous_window) and previous_window != window:
+		_call_app_lifecycle(previous_window, "os_app_blur")
+	_active_window = window
+	_open_windows[window.app_id] = window
+	_call_app_lifecycle(window, "os_app_focus")
+	_update_task_button(window.app_id, true)
+	_update_taskbar_indicators()
+
+func _on_window_manager_window_minimized(window: OSWindow, _window_id_value: int) -> void:
+	if window == null or not is_instance_valid(window):
+		return
+	if _active_window == window:
+		_call_app_lifecycle(window, "os_app_blur")
+		_active_window = null
+	_update_task_button(window.app_id, false)
+	_update_taskbar_indicators()
+
+func _on_window_manager_window_restored(window: OSWindow, _window_id_value: int) -> void:
+	if window == null or not is_instance_valid(window):
+		return
+	var previous_window := _active_window
+	if previous_window != null and is_instance_valid(previous_window) and previous_window != window:
+		_call_app_lifecycle(previous_window, "os_app_blur")
+	_active_window = window
+	_open_windows[window.app_id] = window
+	_call_app_lifecycle(window, "os_app_focus")
+	_update_task_button(window.app_id, true)
+	_update_taskbar_indicators()
+
+func _on_window_service_event(_event_name: StringName, _payload: Dictionary) -> void:
+	_update_taskbar_indicators()
+
+func _on_notification_center_event(event_name: StringName, payload: Dictionary) -> void:
+	match event_name:
+		OSEventBus.NOTIFICATION_CREATED:
+			var notification_variant: Variant = payload.get("notification", {})
+			if not (notification_variant is Dictionary):
+				return
+			var notification: Dictionary = (notification_variant as Dictionary).duplicate(true)
+			_notifications = _notification_center.get_recent(50) if _notification_center != null else _notifications
+			_refresh_notifications()
+			_show_notification_toast(notification)
+			var notification_id := str(notification.get("id", ""))
+			if notification_id != "":
+				notification_created.emit(notification_id)
+			_emit_hermes_event("notification.shown", {
+				"notification_id": notification_id,
+				"title": str(notification.get("title", "")),
+				"level": str(notification.get("level", "info"))
+			})
+		OSEventBus.NOTIFICATION_CLEARED:
+			_notifications.clear()
+			_refresh_notifications()
 
 func _exit_tree() -> void:
 	_save_persisted_state()
@@ -220,44 +353,197 @@ func launch_app(app_id: String) -> OSWindow:
 		push_warning("Unknown app: %s" % app_id)
 		return null
 
-	if _open_windows.has(app_id) and is_instance_valid(_open_windows[app_id]):
-		var existing := _open_windows[app_id] as OSWindow
-		existing.visible = true
-		_focus_window(existing)
-		_update_task_button(app_id, true)
-		return existing
-
 	var app: Dictionary = _apps[app_id]
+	var single_instance := bool(app.get("single_instance", true))
+	if single_instance:
+		var existing := _current_window_for_app(app_id)
+		if existing != null:
+			existing.visible = true
+			_focus_window(existing)
+			_update_task_button(app_id, true)
+			return existing
+
+	var app_instance := _create_app_instance(app_id, {})
 	var builder := app["builder"] as Callable
 	var content := builder.call() as Control
-	var window := OSWindow.new()
-	_window_layer.add_child(window)
-	window.setup(app_id, str(app["title"]), content)
-	window.set_window_size(_default_window_size(app_id))
-	window.position = _center_window_position(window)
-	_clamp_window_to_layer(window)
-	window.close_requested.connect(_on_window_close_requested)
-	window.minimize_requested.connect(_on_window_minimize_requested)
-	window.focused.connect(_focus_window)
+	var window: OSWindow
+	if _window_manager != null:
+		window = _window_manager.create_window(StringName(app_id), str(app["title"]), content, {"size": _default_window_size(app_id)})
+	else:
+		window = OSWindow.new()
+		_window_layer.add_child(window)
+		window.setup(app_id, str(app["title"]), content)
+		window.set_window_size(_default_window_size(app_id))
+		window.position = _center_window_position(window)
+		_clamp_window_to_layer(window)
+		window.close_requested.connect(_on_window_close_requested)
+		window.minimize_requested.connect(_on_window_minimize_requested)
+		window.focused.connect(_focus_window)
+	if window == null:
+		_remove_app_instance(app_id, app_instance.instance_id if app_instance != null else 0)
+		return null
 
 	_open_windows[app_id] = window
+	if app_instance != null and _window_manager != null:
+		var manager_window_id := _window_manager.get_window_id(window)
+		app_instance.add_window(manager_window_id)
+		_window_to_app_instance[manager_window_id] = app_instance.instance_id
+		_window_to_app_instance[_window_id(window)] = app_instance.instance_id
+		window.set_meta("app_instance_id", app_instance.instance_id)
+	elif app_instance != null:
+		_window_to_app_instance[_window_id(window)] = app_instance.instance_id
+		window.set_meta("app_instance_id", app_instance.instance_id)
 	_create_task_button(app_id)
-	if DisplayServer.get_name() != "headless":
-		var animator := UIAnimator.new()
-		animator.scale_in(window, Tokens.TIME["normal"])
 	_focus_window(window)
 	_update_taskbar_indicators()
-	_emit_hermes_event("window.opened", {
-		"window_id": _window_id(window),
-		"app_id": app_id,
-		"title": str(app.get("title", app_id))
-	})
 	_emit_hermes_event("app.opened", {"app_id": app_id})
 	return window
 
 func close_app(app_id: String) -> void:
-	if _open_windows.has(app_id) and is_instance_valid(_open_windows[app_id]):
-		_on_window_close_requested(_open_windows[app_id])
+	var window := _current_window_for_app(app_id)
+	if window != null:
+		_on_window_close_requested(window)
+
+func _current_window_for_app(app_id: String) -> OSWindow:
+	if _window_manager != null:
+		var ids := _window_manager.get_window_ids_for_app(StringName(app_id))
+		for index in range(ids.size() - 1, -1, -1):
+			var window := _window_manager.get_window(int(ids[index]))
+			if window != null and is_instance_valid(window):
+				return window
+	if _open_windows.has(app_id):
+		var window := _open_windows[app_id] as OSWindow
+		if is_instance_valid(window):
+			return window
+	return null
+
+func _all_open_windows_in_app_order() -> Array[OSWindow]:
+	var result: Array[OSWindow] = []
+	if _window_manager == null:
+		for app_id in _app_order:
+			if _open_windows.has(app_id):
+				var window := _open_windows[app_id] as OSWindow
+				if is_instance_valid(window):
+					result.append(window)
+		return result
+	for app_id in _app_order:
+		var ids := _window_manager.get_window_ids_for_app(StringName(app_id))
+		for id in ids:
+			var window := _window_manager.get_window(int(id))
+			if window != null and is_instance_valid(window):
+				result.append(window)
+	return result
+
+func _create_app_instance(app_id: String, launch_args: Dictionary = {}) -> AppInstance:
+	var instance := AppInstance.new()
+	instance.instance_id = _next_app_instance_id
+	instance.app_id = StringName(app_id)
+	instance.launch_args = launch_args.duplicate(true)
+	instance.created_at = Time.get_ticks_msec()
+	instance.last_active_at = instance.created_at
+	_next_app_instance_id += 1
+	_app_instances[instance.instance_id] = instance
+	if not _app_instances_by_app.has(app_id):
+		_app_instances_by_app[app_id] = []
+	var app_instance_ids: Array = _app_instances_by_app[app_id]
+	app_instance_ids.append(instance.instance_id)
+	_app_instances_by_app[app_id] = app_instance_ids
+	_app_instance_by_app[app_id] = instance.instance_id
+	return instance
+
+func _remove_app_instance_for_window(app_id: String, window_id_value: int) -> void:
+	var instance_id := int(_window_to_app_instance.get(window_id_value, 0))
+	if instance_id == 0:
+		instance_id = int(_app_instance_by_app.get(app_id, 0))
+	if instance_id == 0 or not _app_instances.has(instance_id):
+		_window_to_app_instance.erase(window_id_value)
+		return
+	var instance := _app_instances[instance_id] as AppInstance
+	if instance == null:
+		_window_to_app_instance.erase(window_id_value)
+		return
+	instance.remove_window(window_id_value)
+	_window_to_app_instance.erase(window_id_value)
+	if instance.window_ids.is_empty():
+		_remove_app_instance(app_id, instance_id)
+
+func _remove_app_instance(app_id: String, instance_id: int) -> void:
+	if instance_id == 0:
+		return
+	_app_instances.erase(instance_id)
+	for key in _window_to_app_instance.keys().duplicate():
+		if int(_window_to_app_instance.get(key, 0)) == instance_id:
+			_window_to_app_instance.erase(key)
+	if _app_instances_by_app.has(app_id):
+		var app_instance_ids: Array = _app_instances_by_app[app_id]
+		app_instance_ids.erase(instance_id)
+		if app_instance_ids.is_empty():
+			_app_instances_by_app.erase(app_id)
+		else:
+			_app_instances_by_app[app_id] = app_instance_ids
+	if int(_app_instance_by_app.get(app_id, 0)) == instance_id:
+		if _app_instances_by_app.has(app_id):
+			var remaining_ids: Array = _app_instances_by_app[app_id]
+			_app_instance_by_app[app_id] = int(remaining_ids[remaining_ids.size() - 1]) if not remaining_ids.is_empty() else 0
+		else:
+			_app_instance_by_app.erase(app_id)
+
+func _call_app_lifecycle(window: OSWindow, method_name: String) -> void:
+	if window == null or not is_instance_valid(window):
+		return
+	_call_app_lifecycle_on_node(window, method_name)
+
+func _call_app_lifecycle_on_node(root: Node, method_name: String) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	if root.has_method(method_name):
+		root.call(method_name)
+	for child in root.get_children():
+		_call_app_lifecycle_on_node(child, method_name)
+
+func _app_content_allows_close(window: OSWindow) -> bool:
+	if window == null or not is_instance_valid(window):
+		return true
+	return _node_content_allows_close(window)
+
+func _node_content_allows_close(root: Node) -> bool:
+	if root == null or not is_instance_valid(root):
+		return true
+	if root.has_method("os_app_close_requested"):
+		var result: Variant = root.call("os_app_close_requested")
+		if result is bool and not bool(result):
+			return false
+	for child in root.get_children():
+		if not _node_content_allows_close(child):
+			return false
+	return true
+
+func _capture_app_instance_state(window: OSWindow) -> void:
+	if window == null or not is_instance_valid(window):
+		return
+	var instance_id := int(window.get_meta("app_instance_id", 0))
+	if instance_id == 0 or not _app_instances.has(instance_id):
+		return
+	var state := _capture_app_state_from_node(window)
+	if state.is_empty():
+		return
+	var instance := _app_instances[instance_id] as AppInstance
+	if instance != null:
+		instance.state = state.duplicate(true)
+		instance.touch()
+
+func _capture_app_state_from_node(root: Node) -> Dictionary:
+	if root == null or not is_instance_valid(root):
+		return {}
+	if root.has_method("os_app_get_state"):
+		var result: Variant = root.call("os_app_get_state")
+		if result is Dictionary:
+			return (result as Dictionary).duplicate(true)
+	for child in root.get_children():
+		var child_state := _capture_app_state_from_node(child)
+		if not child_state.is_empty():
+			return child_state
+	return {}
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not _session_active or _auth_overlay != null:
@@ -310,7 +596,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 func export_state() -> Dictionary:
 	return {
 		"filesystem": _fs.export_state(),
-		"notifications": _notifications.duplicate(true),
+		"notifications": _notification_center.export_state() if _notification_center != null else _notifications.duplicate(true),
 		"session": {
 			"active": _session_active,
 			"theme_mode": _theme_mode,
@@ -330,7 +616,12 @@ func import_state(state: Dictionary) -> String:
 	var notification_state: Variant = state.get("notifications", [])
 	_notifications.clear()
 	_notification_sequence = 0
-	if notification_state is Array:
+	if _notification_center != null:
+		_notification_center.import_state(notification_state if notification_state is Array else [])
+		_notifications = _notification_center.get_recent(50)
+		for notification in _notifications:
+			_notification_sequence = maxi(_notification_sequence, int(str(notification.get("id", "0")).trim_prefix("n_")))
+	elif notification_state is Array:
 		for item in notification_state:
 			if item is Dictionary:
 				var notification: Dictionary = item
@@ -362,6 +653,8 @@ func import_state(state: Dictionary) -> String:
 
 func reset_state() -> void:
 	_fs.reset()
+	if _notification_center != null:
+		_notification_center.reset()
 	_notifications.clear()
 	_notification_sequence = 0
 	_refresh_notifications()
@@ -380,15 +673,16 @@ func reset_state() -> void:
 	_queue_state_save()
 
 func _register_apps() -> void:
-	_app_order = ["files", "notes", "text", "browser", "console", "system"]
-	_apps = {
-		"files": {"title": "Files", "subtitle": "Browse and manage files", "keywords": "folders storage manager", "category": "System", "pinned": true, "builder": Callable(self, "_build_files_app")},
-		"notes": {"title": "Notes", "subtitle": "Quick note workspace", "keywords": "notes writing markdown", "category": "Office", "pinned": true, "builder": Callable(self, "_build_notes_app")},
-		"text": {"title": "Text", "subtitle": "Edit plain text files", "keywords": "editor code", "category": "Programming", "pinned": false, "builder": Callable(self, "_build_text_app")},
-		"browser": {"title": "Browser", "subtitle": "Web and local pages", "keywords": "web internet", "category": "Internet", "pinned": true, "builder": Callable(self, "_build_browser_app")},
-		"console": {"title": "Terminal", "subtitle": "Command line shell", "keywords": "console terminal shell", "category": "Programming", "pinned": true, "builder": Callable(self, "_build_console_app")},
-		"system": {"title": "System", "subtitle": "System status and settings", "keywords": "settings diagnostics", "category": "Administration", "pinned": true, "builder": Callable(self, "_build_system_app")}
-	}
+	_app_registry = AppRegistry.new()
+	_app_registry.register_app(FilesAppManifest.manifest(Callable(self, "_build_files_app")))
+	_app_registry.register_app(NotesAppManifest.manifest(Callable(self, "_build_notes_app")))
+	_app_registry.register_app(TextEditorAppManifest.manifest(Callable(self, "_build_text_app")))
+	_app_registry.register_app({"id": &"browser", "title": "Browser", "name": "Browser", "description": "Web and local pages.", "subtitle": "Web and local pages", "keywords": "web internet", "category": "Internet", "pinned": true, "single_instance": true, "agent_visible": true, "agent_actions": ["browser.navigate", "browser.get_current_page"], "builder": Callable(self, "_build_browser_app")})
+	_app_registry.register_app(TerminalAppManifest.manifest(Callable(self, "_build_console_app")))
+	_app_registry.register_app(SystemSettingsAppManifest.manifest(Callable(self, "_build_system_app")))
+	# TODO(redesign): remove these compatibility mirrors once launcher/taskbar/app lifecycle fully read from AppRegistry.
+	_apps = _app_registry.export_legacy_apps()
+	_app_order = _app_registry.get_app_order()
 
 func _apply_theme_mode(mode: String, refresh_ui: bool = true) -> void:
 	_theme_mode = "light" if mode.to_lower() == "light" else "dark"
@@ -855,6 +1149,10 @@ func _build_desktop_context_menu() -> void:
 	_update_desktop_context_actions()
 
 func notify(data: Dictionary) -> String:
+	if _notification_center != null:
+		var notification := _notification_center.notify_from_dict(data)
+		_notification_sequence = maxi(_notification_sequence, int(str(notification.get("id", "0")).trim_prefix("n_")))
+		return str(notification.get("id", ""))
 	_notification_sequence += 1
 	var notification_id := "n_" + str(_notification_sequence)
 	var notification := {
@@ -883,10 +1181,14 @@ func notify(data: Dictionary) -> String:
 
 func clear_notifications() -> void:
 	var dismissed_ids: Array[String] = []
-	for notification in _notifications:
-		var item: Dictionary = notification
-		dismissed_ids.append(str(item.get("id", "")))
-	_notifications.clear()
+	if _notification_center != null:
+		dismissed_ids = _notification_center.clear()
+		_notifications.clear()
+	else:
+		for notification in _notifications:
+			var item: Dictionary = notification
+			dismissed_ids.append(str(item.get("id", "")))
+		_notifications.clear()
 	_refresh_notifications()
 	for notification_id in dismissed_ids:
 		if notification_id != "":
@@ -1899,33 +2201,58 @@ func _clamp_window_to_layer(window: OSWindow) -> void:
 	window.position = Vector2(clampf(window.position.x, 0.0, max_x), clampf(window.position.y, 0.0, max_y))
 
 func _focus_window(window: OSWindow) -> void:
+	if _window_manager != null:
+		var managed_id := _window_manager.get_window_id(window)
+		if managed_id > 0 and _window_manager.get_focused_window_id() != managed_id:
+			_window_manager.focus_window(managed_id)
+			return
+	var previous_window := _active_window
 	_active_window = window
 	for key in _open_windows.keys():
 		var other := _open_windows[key] as OSWindow
 		if is_instance_valid(other):
+			if other != window and other == previous_window:
+				_call_app_lifecycle(other, "os_app_blur")
 			other.set_active(other == window)
 	window.visible = true
 	window.move_to_front()
+	_open_windows[window.app_id] = window
+	_call_app_lifecycle(window, "os_app_focus")
 	_update_task_button(window.app_id, true)
 	_update_taskbar_indicators()
-	_emit_hermes_event("window.focused", {
-		"window_id": _window_id(window),
-		"app_id": window.app_id
-	})
+	if _window_manager == null:
+		_emit_hermes_event("window.focused", {
+			"window_id": _window_id(window),
+			"app_id": window.app_id
+		})
 
 func _on_window_close_requested(window: OSWindow) -> void:
+	if not _app_content_allows_close(window):
+		return
+	_capture_app_instance_state(window)
+	if _window_manager != null:
+		var managed_id := _window_manager.get_window_id(window)
+		if managed_id > 0 and _window_manager.get_window(managed_id) != null:
+			_window_manager.close_window(managed_id)
+			return
 	var app_id := window.app_id
 	var window_id := _window_id(window)
 	_prepare_window_content_for_close(window)
 	if _active_window == window:
 		_active_window = null
-	if _open_windows.has(app_id):
-		_open_windows.erase(app_id)
-	if _task_buttons.has(app_id):
-		var button := _task_buttons[app_id] as Button
-		if is_instance_valid(button):
-			button.queue_free()
-		_task_buttons.erase(app_id)
+	if _window_manager == null:
+		_remove_app_instance_for_window(app_id, int(window.get_meta("window_id", 0)))
+	var remaining_window := _current_window_for_app(app_id)
+	if remaining_window != null and remaining_window != window:
+		_open_windows[app_id] = remaining_window
+	else:
+		if _open_windows.has(app_id):
+			_open_windows.erase(app_id)
+		if _task_buttons.has(app_id):
+			var button := _task_buttons[app_id] as Button
+			if is_instance_valid(button):
+				button.queue_free()
+			_task_buttons.erase(app_id)
 	window.visible = false
 	if app_id == "browser":
 		_queue_browser_close_poll(window, Time.get_ticks_msec() + 1800)
@@ -1971,6 +2298,11 @@ func _prepare_window_content_for_close(root: Node) -> void:
 		_prepare_window_content_for_close(child)
 
 func _on_window_minimize_requested(window: OSWindow) -> void:
+	if _window_manager != null:
+		var managed_id := _window_manager.get_window_id(window)
+		if managed_id > 0 and _window_manager.get_window(managed_id) != null:
+			_window_manager.minimize_window(managed_id)
+			return
 	if _active_window == window:
 		_active_window = null
 	window.visible = false
@@ -2055,11 +2387,9 @@ func _close_active_window() -> void:
 
 func _focus_next_window() -> void:
 	var visible_windows: Array[OSWindow] = []
-	for app_id in _app_order:
-		if _open_windows.has(app_id):
-			var window := _open_windows[app_id] as OSWindow
-			if is_instance_valid(window) and window.visible:
-				visible_windows.append(window)
+	for window in _all_open_windows_in_app_order():
+		if is_instance_valid(window) and window.visible:
+			visible_windows.append(window)
 	if visible_windows.is_empty():
 		return
 	var next_index := 0
@@ -2103,11 +2433,9 @@ func _toggle_session_menu() -> void:
 
 func _show_alt_tab() -> void:
 	_alt_tab_window_order.clear()
-	for app_id in _app_order:
-		if _open_windows.has(app_id):
-			var window := _open_windows[app_id] as OSWindow
-			if is_instance_valid(window) and window.visible:
-				_alt_tab_window_order.append(window)
+	for window in _all_open_windows_in_app_order():
+		if is_instance_valid(window) and window.visible:
+			_alt_tab_window_order.append(window)
 	if _alt_tab_window_order.size() < 2:
 		return
 	var current_index := 0
@@ -2369,11 +2697,18 @@ func _hide_auth_screen() -> void:
 
 func _close_all_windows() -> void:
 	_active_window = null
-	for key in _open_windows.keys():
-		var window := _open_windows[key] as OSWindow
-		if is_instance_valid(window):
-			window.queue_free()
+	if _window_manager != null:
+		_window_manager.close_all()
+	else:
+		for key in _open_windows.keys():
+			var window := _open_windows[key] as OSWindow
+			if is_instance_valid(window):
+				window.queue_free()
 	_open_windows.clear()
+	_app_instances.clear()
+	_app_instances_by_app.clear()
+	_app_instance_by_app.clear()
+	_window_to_app_instance.clear()
 	for key in _task_buttons.keys():
 		var button := _task_buttons[key] as Button
 		if is_instance_valid(button):
@@ -2381,6 +2716,12 @@ func _close_all_windows() -> void:
 	_task_buttons.clear()
 
 func _build_files_app() -> Control:
+	var files_app := FilesApp.new()
+	files_app.name = "FilesApp"
+	files_app.os_app_init({"shell": self})
+	return files_app
+
+func _build_files_app_legacy() -> Control:
 	var root := _app_root()
 	root.clip_contents = true
 	root.custom_minimum_size = Vector2(860, 500)
@@ -3275,7 +3616,13 @@ func _paste_destination_path(source_path: String, destination_dir: String) -> St
 	return _fs.join_path(clean_destination_dir, candidate_name)
 
 func _build_notes_app() -> Control:
-	var root := _build_text_app()
+	var notes_app := NotesApp.new()
+	notes_app.name = "NotesApp"
+	notes_app.os_app_init({"shell": self})
+	return notes_app
+
+func _build_notes_app_legacy() -> Control:
+	var root := _build_text_app_legacy()
 	if _text_app_path_label:
 		_text_app_path_label.text = "No note opened"
 		_text_app_path_label.tooltip_text = ""
@@ -3284,6 +3631,12 @@ func _build_notes_app() -> Control:
 	return root
 
 func _build_text_app() -> Control:
+	var text_app := TextEditorApp.new()
+	text_app.name = "TextEditorApp"
+	text_app.os_app_init({"shell": self})
+	return text_app
+
+func _build_text_app_legacy() -> Control:
 	var root := _app_root()
 
 	var header := HBoxContainer.new()
@@ -3348,29 +3701,10 @@ func _open_text_file(path: String, app_id := "text") -> void:
 	_focus_window(window)
 
 func _build_console_app() -> Control:
-	var root := _app_root()
-	var state := {"cwd": _fs.home_path()}
-
-	var output := TextEdit.new()
-	output.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	output.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	output.editable = false
-	_style_text_edit(output)
-	_register_console_output(output)
-	output.text = _console_history_text()
-	root.add_child(output)
-	root.tree_exited.connect(func() -> void:
-		_unregister_console_output(output)
-	)
-
-	var input := LineEdit.new()
-	input.placeholder_text = _console_prompt(state)
-	_style_line_edit(input)
-	input.text_submitted.connect(func(command: String) -> void:
-		_handle_console_command(command, input, state)
-	)
-	root.add_child(input)
-	return root
+	var terminal := TerminalApp.new()
+	terminal.name = "TerminalApp"
+	terminal.os_app_init({"shell": self, "state": {"cwd": _fs.home_path()}})
+	return terminal
 
 func _build_browser_app() -> Control:
 	var browser := BrowserApp.new()
@@ -3697,6 +4031,12 @@ func _resolve_command_path(path: String, state: Dictionary) -> String:
 	return _fs.resolve_path(path, str(state.get("cwd", _fs.home_path())))
 
 func _build_system_app() -> Control:
+	var system_app := SystemSettingsApp.new()
+	system_app.name = "SystemSettingsApp"
+	system_app.os_app_init({"shell": self})
+	return system_app
+
+func _build_system_app_legacy() -> Control:
 	var root := _app_root()
 	root.custom_minimum_size = Vector2(760, 460)
 	root.set_meta("window_min_size", Vector2(720, 420))
@@ -4022,7 +4362,13 @@ func _time_text() -> String:
 	return "%04d-%02d-%02d %02d:%02d:%02d" % [now.year, now.month, now.day, now.hour, now.minute, now.second]
 
 func _emit_hermes_event(event_name: String, payload: Dictionary = {}) -> void:
+	if _event_bus != null:
+		_event_bus.emit_event(StringName(event_name), payload)
+		return
 	hermes_event.emit(event_name, payload)
+
+func _on_os_event_bus_event_emitted(event_name: StringName, payload: Dictionary) -> void:
+	hermes_event.emit(str(event_name), payload)
 
 func _hermes_kernel_node() -> Node:
 	return get_node_or_null("/root/HermesOSKernel")
