@@ -18,6 +18,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 HermesOSKernel="*res://scripts/hermes/hermes_os_kernel.gd"
+McpInteractionServer="*res://scripts/hermes/mcp_interaction_server.gd"
 
 [display]
 

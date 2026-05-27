@@ -3247,7 +3247,24 @@ func _emit_hermes_event(event_name: String, payload: Dictionary = {}) -> void:
 	hermes_event.emit(event_name, payload)
 
 func _on_os_event_bus_event_emitted(event_name: StringName, payload: Dictionary) -> void:
-	hermes_event.emit(str(event_name), payload)
+	var event_text := str(event_name)
+	hermes_event.emit(event_text, payload)
+	if event_text in ["file.created", "file.updated", "file.deleted", "file.moved", "file.copied"]:
+		_refresh_desktop_icons_for_file_event(payload)
+
+func _refresh_desktop_icons_for_file_event(payload: Dictionary) -> void:
+	if _fs == null or _desktop_icons == null:
+		return
+	var desktop_path := _fs.normalize_path(_desktop_folder_path())
+	var candidate_paths: Array[String] = []
+	for key in ["path", "source", "destination"]:
+		var value := str(payload.get(key, "")).strip_edges()
+		if value != "":
+			candidate_paths.append(_fs.normalize_path(value))
+	for path in candidate_paths:
+		if path == desktop_path or path.begins_with(desktop_path + "/"):
+			_refresh_desktop_icons()
+			return
 
 func _hermes_kernel_node() -> Node:
 	return get_node_or_null("/root/HermesOSKernel")
@@ -3473,7 +3490,8 @@ func hermes_get_manifest_apps() -> Array[Dictionary]:
 			"description": "Window operations",
 			"actions": {
 				"windows.open_app": {"description": "Open app window", "args_schema": {"app_id": "string"}},
-				"windows.focus_window": {"description": "Focus a window", "args_schema": {"window_id": "string", "app_id": "string"}},
+				"windows.focus": {"description": "Focus a window", "args_schema": {"window_id": "string", "app_id": "string"}},
+				"windows.focus_window": {"description": "Compatibility alias for windows.focus", "args_schema": {"window_id": "string", "app_id": "string"}},
 				"windows.close_window": {"description": "Close a window", "args_schema": {"window_id": "string", "app_id": "string"}}
 			}
 		},
@@ -3484,7 +3502,11 @@ func hermes_get_manifest_apps() -> Array[Dictionary]:
 			"actions": {
 				"files.list_dir": {"description": "List a directory", "args_schema": {"path": "string"}},
 				"files.read_file": {"description": "Read a file", "args_schema": {"path": "string"}},
-				"files.write_file": {"description": "Write a file", "args_schema": {"path": "string", "content": "string"}}
+				"files.write_file": {"description": "Write a file", "args_schema": {"path": "string", "content": "string"}},
+				"files.mkdir": {"description": "Create a directory", "args_schema": {"path": "string"}},
+				"files.delete": {"description": "Delete a file or directory", "args_schema": {"path": "string"}},
+				"files.move": {"description": "Move or rename a file or directory", "args_schema": {"source": "string", "destination": "string"}},
+				"files.copy": {"description": "Copy a file or directory", "args_schema": {"source": "string", "destination": "string"}}
 			}
 		},
 		{
