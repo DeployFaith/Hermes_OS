@@ -21,6 +21,10 @@ const NOTIFICATION_CLEARED := &"notification.cleared"
 const AGENT_OPERATION_REQUESTED := &"agent.operation_requested"
 const AGENT_OPERATION_COMPLETED := &"agent.operation_completed"
 const AGENT_OPERATION_FAILED := &"agent.operation_failed"
+const AGENT_MESSAGE_SENT := &"agent.message_sent"
+const AGENT_RESPONSE_RECEIVED := &"agent.response_received"
+const AGENT_ERROR := &"agent.error"
+const AGENT_STATUS_CHANGED := &"agent.status_changed"
 
 var _subscribers: Dictionary = {}
 

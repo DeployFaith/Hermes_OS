@@ -19,6 +19,8 @@ const NotesAppManifest = preload("res://scripts/apps/notes/notes_app_manifest.gd
 const SystemSettingsApp = preload("res://scripts/apps/system_settings/system_settings_app.gd")
 const SystemSettingsAppManifest = preload("res://scripts/apps/system_settings/system_settings_app_manifest.gd")
 const HermesProtocol = preload("res://scripts/hermes/hermes_protocol.gd")
+const HermesAgentService = preload("res://scripts/os/agent/hermes_agent_service.gd")
+const AgentOperationRouter = preload("res://scripts/os/agent/agent_operation_router.gd")
 const BrowserApp = preload("res://scripts/apps/browser_app.gd")
 
 signal notification_created(notification_id: String)
@@ -41,6 +43,8 @@ var _window_cascade: int = 0
 var _event_bus: OSEventBus
 var _notification_center: NotificationCenter
 var _window_manager: WindowManager
+var _hermes_agent_service: HermesAgentService
+var _agent_operation_router: AgentOperationRouter
 var _fs: OSFileSystem
 
 var _desktop_bg: ColorRect
@@ -127,8 +131,29 @@ var _state_save_timer: Timer
 var _state_loading := false
 
 const CONSOLE_HISTORY_MAX_LINES := 400
+const HERMES_GATEWAY_CLIENT_ENV_PATH := "res://runtime/hermes_gateway/compose.env"
 const HERMES_V1_ALIAS_OPS: Dictionary = {
-	"app.open": "windows.open_app"
+	"app.open": "windows.open_app",
+	"read_file": "files.read_file",
+	"readfile": "files.read_file",
+	"write_file": "files.write_file",
+	"writefile": "files.write_file",
+	"create_file": "files.write_file",
+	"listdir": "files.list_dir",
+	"list_directory": "files.list_dir",
+	"mkdir": "files.mkdir",
+	"mkdirp": "files.mkdir",
+	"create_directory": "files.mkdir",
+	"create_folder": "files.mkdir",
+	"make_directory": "files.mkdir",
+	"makedir": "files.mkdir",
+	"delete": "files.delete",
+	"remove": "files.delete",
+	"move": "files.move",
+	"rename": "files.move",
+	"copy": "files.copy",
+	"files.create_folder": "files.mkdir",
+	"files.list_directory": "files.list_dir"
 }
 
 const TASKBAR_HEIGHT := 46.0
@@ -176,6 +201,7 @@ func _ready() -> void:
 	_register_apps()
 	_build_ui()
 	_setup_window_manager()
+	_setup_hermes_agent_service()
 	_setup_state_save_timer()
 	var restored := _load_persisted_state()
 	_update_clock()
@@ -202,6 +228,94 @@ func _setup_window_manager() -> void:
 	_window_manager.window_focused.connect(_on_window_manager_window_focused)
 	_window_manager.window_minimized.connect(_on_window_manager_window_minimized)
 	_window_manager.window_restored.connect(_on_window_manager_window_restored)
+
+func _setup_hermes_agent_service() -> void:
+	_hermes_agent_service = HermesAgentService.new()
+	_hermes_agent_service.os_agent_init({
+		"shell": self,
+		"event_bus": _event_bus,
+		"notification_center": _notification_center,
+		"filesystem": _fs,
+		"window_manager": _window_manager,
+		"app_registry": _app_registry,
+		"gateway": _hermes_gateway_config()
+	})
+	_agent_operation_router = _hermes_agent_service.get_operation_router()
+
+func hermes_agent_service() -> HermesAgentService:
+	return _hermes_agent_service
+
+func hermes_operation_router() -> AgentOperationRouter:
+	return _agent_operation_router
+
+func _hermes_gateway_config() -> Dictionary:
+	var gateway_env := _read_gateway_client_env(HERMES_GATEWAY_CLIENT_ENV_PATH)
+	var gateway_host := _gateway_config_value(gateway_env, ["HERMESOS_GATEWAY_HOST", "HERMES_GATEWAY_HOST"], "127.0.0.1")
+	var gateway_port_text := _gateway_config_value(gateway_env, ["HERMESOS_GATEWAY_PORT", "HERMES_GATEWAY_PORT"], "8643")
+	var gateway_port := int(gateway_port_text) if gateway_port_text != "" else 8643
+	var gateway_path := _gateway_config_value(gateway_env, ["HERMESOS_GATEWAY_PATH", "HERMES_GATEWAY_PATH"], "/v1/chat/completions")
+	var gateway_model := _gateway_config_value(gateway_env, ["HERMESOS_GATEWAY_MODEL", "HERMES_GATEWAY_MODEL_NAME", "HERMES_GATEWAY_MODEL"], "hermesos")
+	var gateway_profile_hint := _gateway_config_value(gateway_env, ["HERMESOS_GATEWAY_PROFILE", "HERMES_PROFILE"], "hermesos")
+	var gateway_api_key := _gateway_config_value(gateway_env, ["HERMESOS_GATEWAY_API_KEY", "HERMES_GATEWAY_API_KEY"], "")
+	return {
+		"gateway_host": gateway_host,
+		"gateway_port": gateway_port,
+		"gateway_path": gateway_path,
+		"gateway_api_key": gateway_api_key,
+		"gateway_model": gateway_model,
+		"gateway_profile_hint": gateway_profile_hint,
+		"gateway_config_path": HERMES_GATEWAY_CLIENT_ENV_PATH,
+		"gateway_config_present": not gateway_env.is_empty(),
+		"gateway_timeout_seconds": 120.0
+	}
+
+func _read_gateway_client_env(path: String) -> Dictionary:
+	var values: Dictionary = {}
+	if not FileAccess.file_exists(path):
+		return values
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return values
+	var text := file.get_as_text()
+	for raw_line in text.split("\n"):
+		var line := str(raw_line).strip_edges()
+		if line == "" or line.begins_with("#"):
+			continue
+		var separator := line.find("=")
+		if separator <= 0:
+			continue
+		var key := line.substr(0, separator).strip_edges()
+		var value := line.substr(separator + 1).strip_edges()
+		if value.length() >= 2 and ((value.begins_with("\"") and value.ends_with("\"")) or (value.begins_with("'") and value.ends_with("'"))):
+			value = value.substr(1, value.length() - 2)
+		values[key] = value
+	return values
+
+func _gateway_config_value(file_values: Dictionary, names: Array, default_value: String = "") -> String:
+	for name_value in names:
+		var name := str(name_value)
+		var env_value := OS.get_environment(name).strip_edges()
+		if env_value != "":
+			return env_value
+		if file_values.has(name):
+			var file_value := str(file_values.get(name, "")).strip_edges()
+			if file_value != "":
+				return file_value
+	return default_value
+
+func hermes_supported_operations() -> Array[String]:
+	if _hermes_agent_service != null:
+		return _hermes_agent_service.get_supported_operations()
+	if _agent_operation_router != null:
+		return _agent_operation_router.get_supported_operations()
+	return []
+
+func hermes_describe_operation(operation: String) -> Dictionary:
+	if _hermes_agent_service != null:
+		return _hermes_agent_service.describe_operation(operation)
+	if _agent_operation_router != null:
+		return _agent_operation_router.describe_operation(operation)
+	return {"operation": operation, "capability": "legacy.compat", "risk": "medium", "mutates_state": false, "description": "Agent operation metadata unavailable", "requires_approval": false}
 
 func _on_window_manager_window_opened(window: OSWindow, _window_id_value: int) -> void:
 	if window == null or not is_instance_valid(window):
@@ -3102,20 +3216,15 @@ func _handle_console_command(command: String, input: LineEdit, state: Dictionary
 			result = JSON.stringify(hermes_get_state({"include_apps": true, "include_windows": true, "include_filesystem": false}), "\t")
 		"hermes":
 			var prompt := clean.substr(cmd.length()).strip_edges()
-			if prompt == "":
-				result = "Usage: hermes <prompt>"
+			if _hermes_agent_service == null:
+				result = "Hermes agent service is unavailable."
 			else:
-				var bridge_state := _kernel_bridge_state()
-				if not bool(bridge_state.get("connected", false)):
-					result = "Hermes bridge is disconnected. Open System app and connect first."
-				else:
-					_emit_hermes_event("terminal.chat_prompt", {
-						"prompt": prompt,
-						"cwd": str(state.get("cwd", _fs.home_path())),
-						"user": _fs.current_user(),
-						"timestamp": int(Time.get_unix_time_from_system())
-					})
-					result = "Sent to Hermes: " + prompt
+				var response: Dictionary = _hermes_agent_service.send_terminal_message(prompt, {
+					"cwd": str(state.get("cwd", _fs.home_path())),
+					"user": _fs.current_user(),
+					"timestamp": int(Time.get_unix_time_from_system())
+				})
+				result = str(response.get("terminal_result", ""))
 		"clear":
 			_console_history.clear()
 			_refresh_console_outputs()
@@ -3543,6 +3652,16 @@ func hermes_get_manifest_apps() -> Array[Dictionary]:
 	]
 
 func hermes_execute_operation(op: String, args: Dictionary) -> Dictionary:
+	if _agent_operation_router != null:
+		return _agent_operation_router.execute_operation(op, args)
+	if _hermes_agent_service != null:
+		var service_router: AgentOperationRouter = _hermes_agent_service.get_operation_router()
+		if service_router != null:
+			_agent_operation_router = service_router
+			return _agent_operation_router.execute_operation(op, args)
+	return _hermes_execute_operation_legacy_dispatch(op, args)
+
+func _hermes_execute_operation_legacy_dispatch(op: String, args: Dictionary) -> Dictionary:
 	var normalized := _normalize_v1_operation(op, args)
 	op = str(normalized.get("op", "")).strip_edges()
 	args = normalized.get("args", {}).duplicate(true)

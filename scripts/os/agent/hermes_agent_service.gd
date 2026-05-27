@@ -1,0 +1,242 @@
+class_name HermesAgentService
+extends RefCounted
+
+const OSEventBus = preload("res://scripts/os/core/os_event_bus.gd")
+const AgentContextBuilder = preload("res://scripts/os/agent/agent_context_builder.gd")
+const AgentOperationRouter = preload("res://scripts/os/agent/agent_operation_router.gd")
+const HermesGatewayClient = preload("res://scripts/os/agent/hermes_gateway_client.gd")
+
+var _shell: Node
+var _event_bus: OSEventBus
+var _notification_center: RefCounted
+var _filesystem: RefCounted
+var _window_manager: RefCounted
+var _app_registry: RefCounted
+var _context_builder: AgentContextBuilder
+var _operation_router: AgentOperationRouter
+var _gateway_client: HermesGatewayClient
+
+var _initialized: bool = false
+var _busy: bool = false
+var _last_message: String = ""
+var _last_response: Dictionary = {}
+var _last_error: Dictionary = {}
+var _last_context: Dictionary = {}
+
+func os_agent_init(context: Dictionary) -> void:
+	_shell = context.get("shell", null) as Node
+	_event_bus = context.get("event_bus", null) as OSEventBus
+	_notification_center = context.get("notification_center", null) as RefCounted
+	_filesystem = context.get("filesystem", null) as RefCounted
+	_window_manager = context.get("window_manager", null) as RefCounted
+	_app_registry = context.get("app_registry", null) as RefCounted
+	_context_builder = AgentContextBuilder.new()
+	_context_builder.agent_context_init({
+		"shell": _shell,
+		"event_bus": _event_bus,
+		"notification_center": _notification_center,
+		"filesystem": _filesystem,
+		"window_manager": _window_manager,
+		"app_registry": _app_registry
+	})
+	_operation_router = AgentOperationRouter.new()
+	_operation_router.agent_router_init({
+		"shell": _shell,
+		"event_bus": _event_bus,
+		"notification_center": _notification_center,
+		"filesystem": _filesystem,
+		"window_manager": _window_manager,
+		"app_registry": _app_registry
+	})
+	_gateway_client = HermesGatewayClient.new()
+	_gateway_client.gateway_init({
+		"shell": _shell,
+		"gateway": context.get("gateway", {}) if context.get("gateway", {}) is Dictionary else {}
+	})
+	_gateway_client.response_received.connect(_on_gateway_response_received)
+	_gateway_client.error_received.connect(_on_gateway_error_received)
+	_gateway_client.status_changed.connect(_on_gateway_status_changed)
+	_initialized = true
+	_emit_status_changed()
+
+func get_status() -> Dictionary:
+	var gateway_state: Dictionary = _gateway_status()
+	return {
+		"initialized": _initialized,
+		"busy": _busy or bool(gateway_state.get("busy", false)),
+		"connected": bool(gateway_state.get("configured", false)),
+		"gateway": gateway_state.duplicate(true),
+		"bridge": _bridge_state().duplicate(true),
+		"last_message": _last_message,
+		"last_response": _last_response.duplicate(true),
+		"last_error": _last_error.duplicate(true),
+		"last_context": _last_context.duplicate(true),
+		"operation_router_initialized": _operation_router != null and _operation_router.is_initialized()
+	}
+
+func get_context(options: Dictionary = {}) -> Dictionary:
+	if _context_builder == null:
+		return {}
+	return _context_builder.build_context(options)
+
+func get_context_builder() -> AgentContextBuilder:
+	return _context_builder
+
+func get_operation_router() -> AgentOperationRouter:
+	return _operation_router
+
+func execute_operation(op: String, args: Dictionary = {}) -> Dictionary:
+	if _operation_router == null:
+		return {"ok": false, "error": {"code": "ROUTER_UNAVAILABLE", "message": "AgentOperationRouter is unavailable", "details": {}}, "result": {}, "operation": op}
+	return _operation_router.execute_operation(op, args)
+
+func get_supported_operations() -> Array[String]:
+	if _operation_router == null:
+		return []
+	return _operation_router.get_supported_operations()
+
+func get_operation_metadata(operation: String) -> Dictionary:
+	if _operation_router == null:
+		return {"operation": operation, "capability": "legacy.compat", "risk": "medium", "mutates_state": false, "description": "AgentOperationRouter is unavailable", "requires_approval": false}
+	return _operation_router.get_operation_metadata(operation)
+
+func describe_operation(operation: String) -> Dictionary:
+	if _operation_router == null:
+		return {"operation": operation, "capability": "legacy.compat", "risk": "medium", "mutates_state": false, "description": "AgentOperationRouter is unavailable", "requires_approval": false}
+	return _operation_router.describe_operation(operation)
+
+func send_user_message(message: String, options: Dictionary = {}) -> Dictionary:
+	return _send_message(message, options)
+
+func send_terminal_message(message: String, terminal_context: Dictionary = {}) -> Dictionary:
+	var options: Dictionary = terminal_context.duplicate(true)
+	options["source"] = str(options.get("source", "terminal"))
+	return _send_message(message, options)
+
+func notify_response(payload: Dictionary) -> void:
+	_last_response = payload.duplicate(true)
+	_last_error.clear()
+	_busy = false
+	_emit_service_event(OSEventBus.AGENT_RESPONSE_RECEIVED, payload)
+	_emit_status_changed()
+
+func notify_error(message: String, details: Dictionary = {}) -> void:
+	_last_error = details.duplicate(true)
+	_last_error["message"] = message
+	_busy = false
+	_emit_service_event(OSEventBus.AGENT_ERROR, _last_error)
+	_emit_status_changed()
+
+func _send_message(message: String, options: Dictionary) -> Dictionary:
+	var prompt: String = message.strip_edges()
+	_last_message = prompt
+	_last_response.clear()
+	_last_error.clear()
+	if prompt == "":
+		notify_error("Usage: hermes <prompt>", {"code": "MISSING_PROMPT"})
+		return {"ok": false, "terminal_result": "Usage: hermes <prompt>", "error": _last_error.duplicate(true)}
+
+	_last_context = _build_terminal_context(prompt, options)
+	_busy = true
+	_emit_status_changed()
+	var terminal_context: Dictionary = _last_context.get("terminal", {}) if _last_context.get("terminal", {}) is Dictionary else {}
+	var payload: Dictionary = {
+		"prompt": prompt,
+		"cwd": str(terminal_context.get("cwd", options.get("cwd", _home_path()))),
+		"user": str(terminal_context.get("user", options.get("user", _current_user()))),
+		"timestamp": int(options.get("timestamp", Time.get_unix_time_from_system())),
+		"source": str(options.get("source", "user")),
+		"context": _last_context.duplicate(true)
+	}
+	_emit_service_event(OSEventBus.AGENT_MESSAGE_SENT, payload)
+	if _gateway_client == null:
+		notify_error("Hermes Gateway client is unavailable.", {"code": "GATEWAY_UNAVAILABLE"})
+		return {"ok": false, "terminal_result": "Hermes Gateway client is unavailable.", "error": _last_error.duplicate(true), "context": _last_context.duplicate(true)}
+	var request_options := _last_context.duplicate(true)
+	request_options["terminal"] = terminal_context.duplicate(true)
+	var response: Dictionary = _gateway_client.send_message(prompt, request_options)
+	if not bool(response.get("ok", false)):
+		notify_error(str(response.get("terminal_result", "Hermes Gateway request failed")), response.get("error", {}) if response.get("error", {}) is Dictionary else {})
+		return {"ok": false, "terminal_result": str(response.get("terminal_result", "Hermes Gateway request failed")), "error": _last_error.duplicate(true), "context": _last_context.duplicate(true)}
+	_last_response = {"queued": true, "terminal_result": str(response.get("terminal_result", "Sent to Hermes Gateway")), "gateway": _gateway_client.get_status()}
+	_emit_status_changed()
+	return {"ok": true, "terminal_result": str(response.get("terminal_result", "Sent to Hermes Gateway")), "result": _last_response.duplicate(true), "context": _last_context.duplicate(true)}
+
+func _build_terminal_context(prompt: String, options: Dictionary) -> Dictionary:
+	if _context_builder == null:
+		return {}
+	return _context_builder.build_terminal_context(prompt, options)
+
+func _bridge_state() -> Dictionary:
+	if _shell != null and _shell.has_method("_kernel_bridge_state"):
+		var state: Variant = _shell.call("_kernel_bridge_state")
+		if state is Dictionary:
+			return (state as Dictionary).duplicate(true)
+	return {
+		"connected": false,
+		"endpoint": "",
+		"session_id": "",
+		"last_message_at": 0,
+		"last_error": {},
+		"metrics": {}
+	}
+
+func _home_path() -> String:
+	if _filesystem != null and _filesystem.has_method("home_path"):
+		return str(_filesystem.call("home_path"))
+	return "/home/player"
+
+func _current_user() -> String:
+	if _filesystem != null and _filesystem.has_method("current_user"):
+		return str(_filesystem.call("current_user"))
+	return "player"
+
+func _gateway_status() -> Dictionary:
+	if _gateway_client == null:
+		return {
+			"configured": false,
+			"busy": false,
+			"endpoint": "",
+			"host": "",
+			"port": 0,
+			"path": "",
+			"model": "",
+			"profile_hint": "",
+			"auth_required": false,
+			"last_latency_ms": 0,
+			"last_error": {},
+			"last_response": {}
+		}
+	return _gateway_client.get_status()
+
+func _on_gateway_response_received(payload: Dictionary) -> void:
+	_last_response = payload.duplicate(true)
+	_last_error.clear()
+	_busy = false
+	var assistant_text := str(payload.get("assistant_text", "")).strip_edges()
+	if _shell != null and _shell.has_method("_append_hermes_terminal_output"):
+		_shell.call("_append_hermes_terminal_output", assistant_text if assistant_text != "" else "(no output)", "Hermes Gateway")
+	_emit_service_event(OSEventBus.AGENT_RESPONSE_RECEIVED, payload)
+	_emit_status_changed()
+
+func _on_gateway_error_received(message: String, details: Dictionary) -> void:
+	_last_error = details.duplicate(true)
+	_last_error["message"] = message
+	_busy = false
+	if _shell != null and _shell.has_method("_append_hermes_terminal_output"):
+		_shell.call("_append_hermes_terminal_output", message, "Hermes Gateway Error")
+	_emit_service_event(OSEventBus.AGENT_ERROR, _last_error)
+	_emit_status_changed()
+
+func _on_gateway_status_changed(_status: Dictionary) -> void:
+	_emit_status_changed()
+
+func _emit_service_event(event_name: StringName, payload: Dictionary = {}) -> void:
+	if _event_bus != null:
+		_event_bus.emit_event(event_name, payload)
+		return
+	if _shell != null and _shell.has_method("_emit_hermes_event"):
+		_shell.call("_emit_hermes_event", str(event_name), payload)
+
+func _emit_status_changed() -> void:
+	_emit_service_event(OSEventBus.AGENT_STATUS_CHANGED, get_status())
