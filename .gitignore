@@ -39,7 +39,10 @@ export_credentials.cfg
 node_modules/
 runtime/mock_backend/node_modules/
 runtime/live_bridge/node_modules/
-runtime/live_bridge/hermes-home/
+runtime/*/hermes-home/
+runtime/live_bridge/compose.env
+runtime/hermes_gateway/compose.env
+runtime/hermes_os_mcp/node_modules/
 
 # Editor/OS noise
 .DS_Store
