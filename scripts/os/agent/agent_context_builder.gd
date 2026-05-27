@@ -54,7 +54,8 @@ func build_terminal_context(prompt: String, terminal_context: Dictionary = {}) -
 		"prompt": prompt.strip_edges(),
 		"cwd": str(options.get("cwd", _home_path())),
 		"user": str(options.get("user", _current_user())),
-		"source": str(options.get("source", "terminal"))
+		"source": str(options.get("source", "terminal")),
+		"terminal_session_id": str(options.get("terminal_session_id", ""))
 	}
 	return context
 
@@ -145,7 +146,8 @@ func _terminal_context_from_options(options: Dictionary, cwd: String) -> Diction
 		"prompt": str(options.get("prompt", "")),
 		"cwd": cwd,
 		"user": str(options.get("user", _current_user())),
-		"source": str(options.get("source", "terminal"))
+		"source": str(options.get("source", "terminal")),
+		"terminal_session_id": str(options.get("terminal_session_id", ""))
 	}
 
 func _legacy_state_summary() -> Dictionary:

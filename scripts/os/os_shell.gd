@@ -12,6 +12,7 @@ const FilesApp = preload("res://scripts/apps/files/files_app.gd")
 const FilesAppManifest = preload("res://scripts/apps/files/files_app_manifest.gd")
 const TerminalApp = preload("res://scripts/apps/terminal/terminal_app.gd")
 const TerminalAppManifest = preload("res://scripts/apps/terminal/terminal_app_manifest.gd")
+const TerminalShellBackend = preload("res://scripts/apps/terminal/terminal_shell_backend.gd")
 const TextEditorApp = preload("res://scripts/apps/text_editor/text_editor_app.gd")
 const TextEditorAppManifest = preload("res://scripts/apps/text_editor/text_editor_app_manifest.gd")
 const NotesApp = preload("res://scripts/apps/notes/notes_app.gd")
@@ -124,6 +125,7 @@ var _files_shortcuts: Array[Dictionary] = []
 var _notes_active_note_id := ""
 var _notes_open_notes: Array[String] = []
 var _terminal_sessions: Dictionary = {}
+var _terminal_instances: Dictionary = {}
 var _terminal_session_sequence := 0
 var _console_outputs: Array[TextEdit] = []
 var _console_history: Array[String] = ["Type 'help' for commands. Current user: user"]
@@ -2972,9 +2974,13 @@ func _open_text_file(path: String, app_id := "text") -> void:
 	_set_desktop_context_status("Unsupported text app target: " + app_id, true)
 
 func _build_console_app() -> Control:
+	_terminal_session_sequence += 1
+	var session_id := "terminal_%d" % _terminal_session_sequence
 	var terminal := TerminalApp.new()
 	terminal.name = "TerminalApp"
-	terminal.os_app_init({"shell": self, "state": {"cwd": _fs.home_path()}})
+	var state := {"cwd": _fs.home_path(), "history": [], "session_id": session_id}
+	_terminal_sessions[session_id] = state
+	terminal.os_app_init({"shell": self, "filesystem": _fs, "state": state, "session_id": session_id})
 	return terminal
 
 func _build_browser_app() -> Control:
@@ -3036,207 +3042,28 @@ func _handle_console_command(command: String, input: LineEdit, state: Dictionary
 	var clean := command.strip_edges()
 	if clean == "":
 		return
-	var parts := clean.split(" ", false)
-	var cmd := parts[0].to_lower()
-	var result := ""
-
-	match cmd:
-		"help":
-			result = "apps\nopen <app_id>\nclose <app_id>\nwindows\nnotify <title> | <body>\nnotifications\ndismiss_notifications\npwd\ncd [path]\nls [path]\nmkdir <path>\ntouch <path>\nread <path>\nwrite <path> <text>\ncp <source> <destination>\nmv <source> <destination>\nrm <path>\nstat <path>\nchmod <mode> <path>\nchown <user> <path>\nwhoami\nid [user]\nusers\nsu <user> [password]\nuseradd <user>\npasswd <new_password>\npasswd <user> <new_password>\nlock\nswitch\nlogout\ntime\nstate\nhermes <prompt>\nclear"
-		"apps":
-			result = _apps_text()
-		"open":
-			if parts.size() < 2:
-				result = "Usage: open <app_id>"
-			else:
-				var app_id := parts[1]
-				if _apps.has(app_id):
-					launch_app(app_id)
-					result = "Opened " + app_id
-				else:
-					result = "Unknown app: " + app_id
-		"close":
-			if parts.size() < 2:
-				result = "Usage: close <app_id>"
-			else:
-				close_app(parts[1])
-				result = "Closed " + parts[1]
-		"windows":
-			result = _windows_text()
-		"notify":
-			var body_start := clean.find("|")
-			var title := clean.substr(cmd.length()).strip_edges()
-			var body := ""
-			if body_start >= 0:
-				title = clean.substr(cmd.length(), body_start - cmd.length()).strip_edges()
-				body = clean.substr(body_start + 1).strip_edges()
-			if title == "":
-				result = "Usage: notify <title> | <body>"
-			else:
-				var notification_id := notify({"title": title, "body": body, "app_id": "console", "level": "info"})
-				result = "Notification created: " + notification_id
-		"notifications":
-			result = _notifications_text()
-		"dismiss_notifications":
-			clear_notifications()
-			result = "Notifications dismissed"
-		"pwd":
-			result = str(state["cwd"])
-		"cd":
-			var target := _fs.home_path()
-			if parts.size() >= 2:
-				target = _resolve_command_path(parts[1], state)
-			if not _fs.is_dir(target):
-				result = "Folder not found: " + target
-			elif not _fs.can_list_dir(target):
-				result = "Permission denied: " + target
-			else:
-				state["cwd"] = target
-				result = target
-		"ls", "files":
-			var path := str(state["cwd"])
-			if parts.size() >= 2:
-				path = _resolve_command_path(parts[1], state)
-			result = _virtual_files_text(path)
-		"mkdir":
-			result = _command_requires_path(parts, "mkdir")
-			if result == "":
-				var message := _fs.make_dir(_resolve_command_path(parts[1], state))
-				result = message if message != "" else "Folder created"
-		"touch":
-			result = _command_requires_path(parts, "touch")
-			if result == "":
-				var message := _fs.write_file(_resolve_command_path(parts[1], state), "")
-				result = message if message != "" else "File created"
-		"read", "cat":
-			result = _command_requires_path(parts, "read")
-			if result == "":
-				var read_result := _fs.read_file_result(_resolve_command_path(parts[1], state))
-				result = str(read_result.get("content", "")) if bool(read_result.get("ok", false)) else str(read_result.get("error", "Could not read file"))
-		"write":
-			if parts.size() < 3:
-				result = "Usage: write <path> <text>"
-			else:
-				var target_path := parts[1]
-				var marker_position := clean.find(target_path) + target_path.length()
-				var text := clean.substr(marker_position).strip_edges()
-				var message := _fs.write_file(_resolve_command_path(target_path, state), text)
-				result = message if message != "" else "Saved"
-		"cp":
-			if parts.size() < 3:
-				result = "Usage: cp <source> <destination>"
-			else:
-				var source := _resolve_command_path(parts[1], state)
-				var destination := _resolve_command_path(parts[2], state)
-				var message := _fs.copy_path(source, destination)
-				result = message if message != "" else "Copied"
-		"mv":
-			if parts.size() < 3:
-				result = "Usage: mv <source> <destination>"
-			else:
-				var source := _resolve_command_path(parts[1], state)
-				var destination := _resolve_command_path(parts[2], state)
-				var message := _fs.move_path(source, destination)
-				result = message if message != "" else "Moved"
-		"rm":
-			result = _command_requires_path(parts, "rm")
-			if result == "":
-				var message := _fs.delete_path(_resolve_command_path(parts[1], state))
-				result = message if message != "" else "Deleted"
-		"stat":
-			result = _command_requires_path(parts, "stat")
-			if result == "":
-				result = _fs.stat_text(_resolve_command_path(parts[1], state))
-		"chmod":
-			if parts.size() < 3:
-				result = "Usage: chmod <mode> <path>"
-			else:
-				var message := _fs.set_mode(_resolve_command_path(parts[2], state), parts[1])
-				result = message if message != "" else "Mode changed"
-		"chown":
-			if parts.size() < 3:
-				result = "Usage: chown <user> <path>"
-			else:
-				var message := _fs.set_owner(_resolve_command_path(parts[2], state), parts[1])
-				result = message if message != "" else "Owner changed"
-		"whoami":
-			result = _fs.current_user()
-		"id":
-			result = _fs.user_id_text(parts[1] if parts.size() >= 2 else "")
-		"users":
-			result = "\n".join(_fs.get_users())
-		"su":
-			if parts.size() < 2:
-				result = "Usage: su <user> [password]"
-			else:
-				var target_user := _fs.clean_username(parts[1])
-				var password := parts[2] if parts.size() >= 3 else ""
-				var message := ""
-				if _fs.current_user() == OSFileSystem.ROOT_USER:
-					message = _fs.set_current_user(target_user)
-				else:
-					message = _fs.set_current_user_authenticated(target_user, password)
-				if message == "":
-					state["cwd"] = _fs.home_path()
-					_update_clock()
-					result = "Switched to " + _fs.current_user()
-				else:
-					result = message
-		"useradd":
-			if parts.size() < 2:
-				result = "Usage: useradd <user>"
-			else:
-				var message := _fs.add_user(parts[1])
-				result = message if message != "" else "User created: " + _fs.clean_username(parts[1])
-		"passwd":
-			if parts.size() < 2:
-				result = "Usage: passwd <new_password> or passwd <user> <new_password>"
-			else:
-				var target_user := _fs.current_user()
-				var new_password := parts[1]
-				var current_password := parts[2] if parts.size() >= 3 else ""
-				if _fs.current_user() == OSFileSystem.ROOT_USER and parts.size() >= 3:
-					target_user = parts[1]
-					new_password = parts[2]
-					current_password = ""
-				var message := _fs.set_user_password(target_user, new_password, current_password)
-				result = message if message != "" else "Password updated for " + _fs.clean_username(target_user)
-		"lock":
-			lock_session()
-			result = "Session locked"
-		"switch":
-			switch_user_session()
-			result = "Switch user"
-		"logout":
-			logout_session()
-			result = "Logged out"
-		"time":
-			result = _time_text()
-		"state":
-			result = JSON.stringify(hermes_get_state({"include_apps": true, "include_windows": true, "include_filesystem": false}), "\t")
-		"hermes":
-			var prompt := clean.substr(cmd.length()).strip_edges()
-			if _hermes_agent_service == null:
-				result = "Hermes agent service is unavailable."
-			else:
-				var response: Dictionary = _hermes_agent_service.send_terminal_message(prompt, {
-					"cwd": str(state.get("cwd", _fs.home_path())),
-					"user": _fs.current_user(),
-					"timestamp": int(Time.get_unix_time_from_system())
-				})
-				result = str(response.get("terminal_result", ""))
-		"clear":
-			_console_history.clear()
-			_refresh_console_outputs()
-			input.text = ""
-			input.placeholder_text = _console_prompt(state)
-			return
-		_:
-			result = "Unknown command: " + cmd
-
-	_append_console_entry(_console_prompt(state), clean, result)
+	var backend := _create_terminal_backend(state)
+	var prompt := backend.get_prompt()
+	var result: Dictionary = backend.run_command(clean)
+	if bool(result.get("clear_screen", false)):
+		_console_history.clear()
+		_refresh_console_outputs()
+		input.text = ""
+		input.placeholder_text = backend.get_prompt()
+		return
+	var output := str(result.get("stdout", ""))
+	if output == "":
+		output = str(result.get("stderr", ""))
+	_append_console_entry(prompt, clean, output)
 	input.text = ""
-	input.placeholder_text = _console_prompt(state)
+	input.placeholder_text = backend.get_prompt()
+
+func _create_terminal_backend(state: Dictionary, session_id: String = "") -> TerminalShellBackend:
+	if not state.has("cwd"):
+		state["cwd"] = _fs.home_path()
+	var backend := TerminalShellBackend.new()
+	backend.terminal_shell_init({"shell": self, "filesystem": _fs, "state": state, "session_id": session_id})
+	return backend
 
 func _register_console_output(output: TextEdit) -> void:
 	if output == null:
@@ -3276,12 +3103,32 @@ func _append_console_entry(prompt: String, command: String, result: String) -> v
 		_console_history = _console_history.slice(_console_history.size() - CONSOLE_HISTORY_MAX_LINES, _console_history.size())
 	_refresh_console_outputs()
 
-func _append_hermes_terminal_output(text: String, source := "Hermes") -> void:
+func _append_hermes_terminal_output(text: String, source := "Hermes", terminal_session_id: String = "") -> void:
 	var clean_source := source.strip_edges()
 	if clean_source == "":
 		clean_source = "Hermes"
 	var message := text.strip_edges()
 	_append_console_entry("[" + clean_source + "]", "", message if message != "" else "(no output)")
+	if terminal_session_id != "" and _terminal_instances.has(terminal_session_id):
+		var terminal: Variant = _terminal_instances[terminal_session_id]
+		if terminal != null and is_instance_valid(terminal) and (terminal as Object).has_method("append_external_output"):
+			(terminal as Object).call("append_external_output", message if message != "" else "(no output)", clean_source)
+		return
+	for key in _terminal_instances.keys():
+		var instance: Variant = _terminal_instances[key]
+		if instance != null and is_instance_valid(instance) and (instance as Object).has_method("append_external_output"):
+			(instance as Object).call("append_external_output", message if message != "" else "(no output)", clean_source)
+
+func _register_terminal_instance(session_id: String, terminal: Object) -> void:
+	if session_id.strip_edges() == "" or terminal == null:
+		return
+	_terminal_instances[session_id] = terminal
+
+func _unregister_terminal_instance(session_id: String, terminal: Object) -> void:
+	if session_id.strip_edges() == "":
+		return
+	if _terminal_instances.get(session_id, null) == terminal:
+		_terminal_instances.erase(session_id)
 
 func _normalize_v1_operation(op: String, args: Dictionary) -> Dictionary:
 	var clean_op := op.strip_edges()
@@ -3794,124 +3641,13 @@ func _hermes_execute_operation_legacy_dispatch(op: String, args: Dictionary) -> 
 			return {"ok": false, "error": HermesProtocol.make_error("UNKNOWN_OPERATION", "No registered operation: " + op)}
 
 func _execute_terminal_command(command: String, state: Dictionary) -> Dictionary:
-	var clean := command.strip_edges()
-	var parts := clean.split(" ", false)
-	if parts.is_empty():
-		return {"stdout": "", "stderr": "", "exit_code": 0, "cwd": str(state.get("cwd", _fs.home_path()))}
-	var cmd := parts[0].to_lower()
-	var stdout := ""
-	var stderr := ""
-	var exit_code := 0
-	match cmd:
-		"help":
-			stdout = "help\nls [path]\ncat <path>\ntouch <path>\nwrite <path> <text>\nrm <path>\nclear\napps\nopen <app_id>\nstate\npwd\ncd [path]"
-		"pwd":
-			stdout = str(state.get("cwd", _fs.home_path()))
-		"cd":
-			var destination := _fs.home_path()
-			if parts.size() >= 2:
-				destination = _fs.resolve_path(parts[1], str(state.get("cwd", _fs.home_path())))
-			if not _fs.is_dir(destination):
-				exit_code = 1
-				stderr = "Folder not found: " + destination
-			elif not _fs.can_list_dir(destination):
-				exit_code = 1
-				stderr = "Permission denied: " + destination
-			else:
-				state["cwd"] = destination
-				stdout = destination
-		"ls":
-			var list_path := str(state.get("cwd", _fs.home_path()))
-			if parts.size() >= 2:
-				list_path = _fs.resolve_path(parts[1], str(state.get("cwd", _fs.home_path())))
-			if not _fs.is_dir(list_path):
-				exit_code = 1
-				stderr = "Folder not found: " + list_path
-			else:
-				var names: Array[String] = []
-				for entry in _fs.list_dir(list_path):
-					var item: Dictionary = entry
-					var name := str(item.get("name", ""))
-					if str(item.get("type", "")) == "dir":
-						name += "/"
-					names.append(name)
-				stdout = "\n".join(names)
-		"cat", "read":
-			if parts.size() < 2:
-				exit_code = 1
-				stderr = "Usage: cat <path>"
-			else:
-				var target := _fs.resolve_path(parts[1], str(state.get("cwd", _fs.home_path())))
-				var read_result := _fs.read_file_result(target)
-				if not bool(read_result.get("ok", false)):
-					exit_code = 1
-					stderr = str(read_result.get("error", "Could not read file"))
-				else:
-					stdout = str(read_result.get("content", ""))
-		"touch":
-			if parts.size() < 2:
-				exit_code = 1
-				stderr = "Usage: touch <path>"
-			else:
-				var target := _fs.resolve_path(parts[1], str(state.get("cwd", _fs.home_path())))
-				var message := _fs.write_file(target, "")
-				if message != "":
-					exit_code = 1
-					stderr = message
-				else:
-					stdout = "File created"
-		"write":
-			if parts.size() < 3:
-				exit_code = 1
-				stderr = "Usage: write <path> <text>"
-			else:
-				var target_path := parts[1]
-				var marker_position := clean.find(target_path) + target_path.length()
-				var text := clean.substr(marker_position).strip_edges()
-				var target := _fs.resolve_path(target_path, str(state.get("cwd", _fs.home_path())))
-				var message := _fs.write_file(target, text)
-				if message != "":
-					exit_code = 1
-					stderr = message
-				else:
-					stdout = "Saved"
-		"rm":
-			if parts.size() < 2:
-				exit_code = 1
-				stderr = "Usage: rm <path>"
-			else:
-				var target := _fs.resolve_path(parts[1], str(state.get("cwd", _fs.home_path())))
-				var message := _fs.delete_path(target)
-				if message != "":
-					exit_code = 1
-					stderr = message
-				else:
-					stdout = "Deleted"
-		"apps":
-			stdout = _apps_text()
-		"open":
-			if parts.size() < 2:
-				exit_code = 1
-				stderr = "Usage: open <app_id>"
-			else:
-				var app_id := parts[1]
-				if launch_app(app_id) == null:
-					exit_code = 1
-					stderr = "Unknown app: " + app_id
-				else:
-					stdout = "Opened " + app_id
-		"state":
-			stdout = JSON.stringify(hermes_get_state({"include_apps": true, "include_windows": true, "include_filesystem": false}), "\t")
-		"clear":
-			stdout = ""
-		_:
-			exit_code = 1
-			stderr = "Unknown command: " + cmd
+	var backend := _create_terminal_backend(state)
+	var result: Dictionary = backend.run_command(command)
 	return {
-		"stdout": stdout,
-		"stderr": stderr,
-		"exit_code": exit_code,
-		"cwd": str(state.get("cwd", _fs.home_path()))
+		"stdout": str(result.get("stdout", "")),
+		"stderr": str(result.get("stderr", "")),
+		"exit_code": int(result.get("exit_code", 0)),
+		"cwd": str(result.get("cwd", state.get("cwd", _fs.home_path())))
 	}
 
 func _color_from_variant(value: Variant, fallback: Color) -> Color:

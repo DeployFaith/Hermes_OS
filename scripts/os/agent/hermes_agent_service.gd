@@ -214,8 +214,11 @@ func _on_gateway_response_received(payload: Dictionary) -> void:
 	_last_error.clear()
 	_busy = false
 	var assistant_text := str(payload.get("assistant_text", "")).strip_edges()
+	var payload_context: Dictionary = payload.get("context", {}) if payload.get("context", {}) is Dictionary else {}
+	var terminal_context: Dictionary = payload_context.get("terminal", {}) if payload_context.get("terminal", {}) is Dictionary else {}
+	var terminal_session_id := str(terminal_context.get("terminal_session_id", ""))
 	if _shell != null and _shell.has_method("_append_hermes_terminal_output"):
-		_shell.call("_append_hermes_terminal_output", assistant_text if assistant_text != "" else "(no output)", "Hermes Gateway")
+		_shell.call("_append_hermes_terminal_output", assistant_text if assistant_text != "" else "(no output)", "Hermes Gateway", terminal_session_id)
 	_emit_service_event(OSEventBus.AGENT_RESPONSE_RECEIVED, payload)
 	_emit_status_changed()
 
@@ -223,8 +226,11 @@ func _on_gateway_error_received(message: String, details: Dictionary) -> void:
 	_last_error = details.duplicate(true)
 	_last_error["message"] = message
 	_busy = false
+	var terminal_session_id := ""
+	var last_terminal: Dictionary = _last_context.get("terminal", {}) if _last_context.get("terminal", {}) is Dictionary else {}
+	terminal_session_id = str(last_terminal.get("terminal_session_id", ""))
 	if _shell != null and _shell.has_method("_append_hermes_terminal_output"):
-		_shell.call("_append_hermes_terminal_output", message, "Hermes Gateway Error")
+		_shell.call("_append_hermes_terminal_output", message, "Hermes Gateway Error", terminal_session_id)
 	_emit_service_event(OSEventBus.AGENT_ERROR, _last_error)
 	_emit_status_changed()
 
