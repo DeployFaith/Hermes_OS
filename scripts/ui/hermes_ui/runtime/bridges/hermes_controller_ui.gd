@@ -78,9 +78,9 @@ func focus(target_id: String) -> bool:
 	control.grab_focus()
 	return true
 
-func add_class(target_id: String, class_name: String) -> bool:
+func add_class(target_id: String, class_value: String) -> bool:
 	var element = _element_by_id(target_id)
-	var clean: String = class_name.strip_edges()
+	var clean: String = class_value.strip_edges()
 	if element == null or clean == "":
 		return false
 	if not element.classes.has(clean):
@@ -88,9 +88,9 @@ func add_class(target_id: String, class_name: String) -> bool:
 	_apply_styles()
 	return true
 
-func remove_class(target_id: String, class_name: String) -> bool:
+func remove_class(target_id: String, class_value: String) -> bool:
 	var element = _element_by_id(target_id)
-	var clean: String = class_name.strip_edges()
+	var clean: String = class_value.strip_edges()
 	if element == null or clean == "":
 		return false
 	element.classes.erase(clean)
