@@ -1,278 +1,315 @@
-# HermesUI v0.1
+# HermesUI v0.2
 
-HermesUI is the new native Godot app-authoring layer for Hermes_OS.
+HermesUI is the official native Godot UI framework for Hermes_OS.
 
-It is not a second shell theme and not a React-style runtime.
-It is a bridge over the existing Hermes_OS UI foundation:
-- `scripts/os/design_tokens.gd`
-- `scripts/os/style_factory.gd`
-- existing `OSShell` helper styling patterns
-- existing `AppManifest` / `AppRegistry`
-- existing `os_app_*` lifecycle hooks
+It is not just an app framework.
+It is the OS-wide UI framework for:
+- shell chrome
+- windows and titlebars
+- taskbar / dock surfaces
+- launcher / start menu surfaces
+- desktop icons
+- notifications / toasts
+- context menus
+- modals and status surfaces
+- app layouts and components
+- agent/MCP-visible UI metadata
 
-New apps should use HermesUI.
-Existing apps can migrate gradually.
+HermesApp is one layer inside HermesUI, not the whole thing.
 
-## Design principles
+## Philosophy
 
-1. Native Godot only
+HermesUI should make development feel like:
+- “I compose HermesUI components and wire behavior.”
+
+Not:
+- “I hand-roll Godot nodes and manually style everything.”
+
+HermesUI is native Godot only:
 - GDScript + Control nodes
-- no WebView app runtime
-- no JavaScript/HTML/CSS runtime
+- no React
+- no WebView runtime
+- no JavaScript/HTML/CSS app runtime
 - no virtual DOM
 
-2. Bridge, do not fork
-- HermesTheme maps to current Hermes_OS palette first
-- HermesUI does not replace shell chrome colors in v0
-- DesignTokens/StyleFactory stay as the low-level foundation
+## Layered model
 
-3. Boring and extendable
-- clean Linux-style desktop app surfaces
-- dark-mode-first
-- readable, practical, calm
-- easy for game developers and agents to extend
+1. Theme and tokens
+- HermesTheme
+- token aliases over existing DesignTokens / StyleFactory
+- spacing, radius, typography, motion, density helpers
+- hybrid Godot Theme resource + component override approach
 
-4. Consistency first
-- spacing scale instead of arbitrary gaps
-- shared button/input/panel styles
-- standard app layouts with visible status feedback
+2. Primitives
+- label
+- button
+- icon_button
+- input
+- text_area
+- badge
+- spacer
+- divider
 
-## Bridge strategy
+3. Containers
+- vbox
+- hbox
+- flow_row
+- scroll_container
+- split_view
 
-HermesUI token aliases intentionally map onto the current Hermes_OS palette.
+4. Surfaces and compositions
+- panel
+- card
+- toolbar
+- sidebar
+- status_bar
+- tabs
+- list_view
+- message_item
+- settings_row
+- form_group
+- section_header
+- empty_state
+- alert
+- loading_indicator
+- progress_bar
 
-Current source mapping:
+5. Shell chrome components
+- taskbar
+- taskbar_item
+- launcher_menu
+- launcher_grid
+- tray
+- notification_toast
+- context_menu
+- desktop_icon
+- window_titlebar
+- window_controls
+
+6. App framework
+- HermesApp
+- lifecycle bridge
+- app layouts
+- state sanitization
+- status handling
+- app-level MCP/action metadata
+
+7. Agent/MCP metadata
+- refs
+- roles
+- actions
+- visible/enabled state
+- future UI-tree export path
+
+## Preferred API convention
+
+Preferred call style:
+- content components: component(content, options := {})
+- container components: component(children := [], options := {})
+- controls: component(content/value, options := {})
+
+Examples:
+```gdscript
+ui.label("Gateway online", {"variant": "muted"})
+ui.button("Send", {"variant": "primary", "on_pressed": Callable(self, "_send")})
+ui.input({"value": text, "placeholder": "Message Hermes...", "on_submit": Callable(self, "_send")})
+ui.panel([child_a, child_b], {"padding": "md"})
+ui.card([row], {"variant": "elevated"})
+```
+
+Compatibility overloads still exist in some places, but current consumers should prefer the options-driven API.
+
+## Visual clarity pass (v0.2.1)
+
+In v0.2.1 HermesUI increased layer contrast, added shadow depth, improved
+primary button readability, and fixed invisible borders. Key changes:
+
+- BORDER darkened → visible at ~1.7:1 on panels (was ~1.3:1, effectively invisible)
+- ACCENT darkened → primary button text now readable
+- ON_ACCENT added → dark text token for accent-colored surfaces
+- FOCUS separated from ACCENT → focus rings are now a distinct, brighter blue
+- TEXT_DISABLED lightened → disabled text stays readable on active surfaces
+- Layer steps widened: BG → PANEL → SURFACE → SURFACE_ACTIVE
+- Shadows added: cards use small shadow, elevated panels use medium, popups/menus use large
+- Status bar uses bg_elevated (darker) to separate from toolbar
+
+### Contrast targets
+
+| Pair                     | Before | After | Notes                          |
+|--------------------------|--------|-------|--------------------------------|
+| BORDER on PANEL          | 1.3:1  | 1.7:1 | Borders now visible            |
+| TEXT on ACCENT (primary) | 2.3:1  | 3.3:1 | Passes WCAG AA large text      |
+| TEXT on ON_ACCENT        | —      | 15.9:1 | Primary buttons use dark text  |
+| TEXT_DISABLED on active  | 2.0:1  | 2.7:1 | Improved, still below AA       |
+| FOCUS vs ACCENT          | 1.0:1  | 1.9:1 | Focus rings now distinct       |
+
+### Shadows / elevation
+
+- `panel_style` supports `elevation` option (0=none, 1=small, 2=medium, 3=large)
+- `card_style` supports `elevation` option (0=none, default=0 for subtle depth)
+- `elevated_style` → medium shadow for popups/dialogs
+- `context_menu_style` → large shadow for floating menus
+- Shadows use existing `DesignTokens.shadow_small/medium/large()` through `StyleFactory`
+
+## Theme bridge strategy
+
+HermesUI does not create a competing palette.
+It bridges the existing Hermes_OS palette:
+- `scripts/os/design_tokens.gd`
+- `scripts/os/style_factory.gd`
+
+Current mapping examples:
 - `bg` -> `DesignTokens.BG`
-- `bg_elevated` -> `DesignTokens.BG_ELEVATED`
 - `surface` -> `DesignTokens.PANEL`
 - `surface_2` -> `DesignTokens.SURFACE`
 - `surface_3` -> `DesignTokens.SURFACE_ACTIVE`
-- `border` -> `DesignTokens.BORDER_ACTIVE`
-- `border_soft` -> `DesignTokens.BORDER`
-- `focus_ring` -> `DesignTokens.FOCUS`
-- `text` -> `DesignTokens.TEXT`
-- `text_muted` -> `DesignTokens.TEXT_MUTED`
-- `text_disabled` -> `DesignTokens.TEXT_DISABLED`
 - `accent` -> `DesignTokens.ACCENT`
-- `accent_hover` -> `DesignTokens.ACCENT_HOVER`
+- `on_accent` -> `DesignTokens.ON_ACCENT`
 - `success` -> `DesignTokens.SUCCESS`
 - `warning` -> `DesignTokens.WARNING`
 - `danger` -> `DesignTokens.ERROR`
 
-Synthesized v0 tokens are only used where the old system has no exact match:
-- `text_faint`
-- `accent_pressed`
-- `accent_soft`
-- `info`
-- terminal-specific aliases
+Synthetic tokens are only used where the old system lacks a clean equivalent.
 
-## Color token aliases
+## Theme hybrid approach
 
-Background:
-- bg
-- bg_elevated
-- surface
-- surface_2
-- surface_3
+Current HermesUI theme model is hybrid:
+- `HermesTheme.build_theme()` builds a real Godot `Theme`
+- `HermesTheme.apply_to(control)` applies it
+- component factories still use explicit StyleBox overrides for variants and composed surfaces
 
-Borders:
-- border
-- border_soft
-- focus_ring
+Target direction:
+- Theme resource first
+- component-level overrides only for variants/special cases
 
-Text:
-- text
-- text_muted
-- text_faint
-- text_disabled
+That full migration is not finished in v0.2, but the framework now documents and structures toward it.
 
-Accent:
-- accent
-- accent_hover
-- accent_pressed
-- accent_soft
+## HermesTheme API
 
-Semantic:
-- success
-- warning
-- danger
-- info
-
-Terminal:
-- terminal_bg
-- terminal_text
-- terminal_prompt
-- terminal_muted
-- terminal_error
-- terminal_success
-
-## Spacing tokens
-
-- space_0 = 0
-- space_1 = 4
-- space_2 = 8
-- space_3 = 12
-- space_4 = 16
-- space_5 = 20
-- space_6 = 24
-- space_8 = 32
-- space_10 = 40
-- space_12 = 48
-- space_16 = 64
-
-Recommended usage:
-- app outer padding: 16
-- panel padding: 14-16
-- card padding: 14
-- toolbar gap: 8
-- form row gap: 10
-- section gap: 16
-- major layout gap: 20-24
-
-## Radius tokens
-
-- radius_sm = 6
-- radius_md = 10
-- radius_lg = 14
-- radius_xl = 18
-- radius_pill = 999
-
-Recommended usage:
-- buttons: radius_md
-- inputs: radius_md
-- cards/panels: radius_lg
-- badges: radius_pill
-
-## Typography tokens
-
-Using Godot default project font in v0.
-
-Sizes:
-- text_xs = 11
-- text_sm = 12
-- text_base = 14
-- text_md = 15
-- text_lg = 18
-- text_xl = 22
-- text_title = 26
-
-Recommended usage:
-- app title: 20-22
-- toolbar title: 16-18
-- section heading: 15-18
-- body text: 14
-- helper/status text: 12-13
-- terminal monospace-like usage: 13
-
-## Theme API
-
-`hermes_theme.gd`
-
-Methods:
-- `color(name: String) -> Color`
-- `spacing(name_or_value) -> int`
-- `radius(name_or_value) -> int`
-- `font_size(name_or_value) -> int`
-- `duration(name: String) -> float`
-- `easing(name: String) -> int`
-- `build_theme() -> Theme`
-- `apply_to(control: Control) -> void`
+Core helpers:
+- `color(name)`
+- `spacing(name_or_value)`
+- `radius(name_or_value)`
+- `font_size(name_or_value)`
+- `duration(name)`
+- `easing(name)`
+- `kind_color(kind)`
+- `kind_text_color(kind)`
+- `component_size(component, size := "md")`
+- `size(name)`
+- `refresh()`
+- `build_theme()`
+- `apply_to(control)`
 
 Style helpers:
 - `panel_style(options := {})`
 - `card_style(options := {})`
+- `elevated_style(options := {})` — panel + medium shadow
+- `context_menu_style(options := {})` — panel + large shadow
 - `button_style(variant := "secondary", state := "normal", options := {})`
 - `input_style(state := "normal", options := {})`
 - `text_area_style(state := "normal", options := {})`
 - `list_row_style(state := "normal", options := {})`
 - `badge_style(kind := "info", options := {})`
 
-Status:
-- HermesTheme builds and applies a real Godot `Theme`
-- HermesUI still uses explicit `StyleBoxFlat` helpers for boring, predictable v0 styling
+Unknown token behavior:
+- warns with `push_warning`
+- returns safe debug fallback instead of crashing
 
 ## Component list
 
-`hermes_component_factory.gd`
-
-Layout:
+Layout / container:
 - `vbox(children := [], gap := -1, options := {})`
 - `hbox(children := [], gap := -1, options := {})`
+- `flow_row(children := [], options := {})`
 - `spacer(size := 8, vertical := false)`
+- `divider(options := {})`
+- `scroll_container(content := null, options := {})`
 - `split_view(left, right, sidebar_width := -1, options := {})`
 
-Surfaces:
+Surfaces / composition:
 - `panel(children := [], padding := -1, variant := "base", options := {})`
 - `card(children := [], padding := -1, options := {})`
-
-Text:
-- `label(text := "", variant := "body", options := {})`
-- `badge(text := "", kind := "info", options := {})`
-- `message_item(sender := "", text := "", kind := "user", options := {})`
-
-Controls:
-- `button(...)`
-- `icon_button(...)`
-- `input(...)`
-- `text_area(...)`
-
-App structure:
 - `toolbar(children := [], options := {})`
 - `sidebar(children := [], width := -1, options := {})`
 - `status_bar(text := "", kind := "info", options := {})`
-- `list(items := [], selected_id := "", on_select := Callable(), options := {})`
-  - Supports standard text rows and custom rows via `{ "node": <Control> }` entries for advanced content (e.g., chat message cards).
-- `tabs(tabs := [], active_id := "", on_change := Callable(), options := {})`
+- `section_header(title := "", body := "", options := {})`
+- `settings_row(label := "", control := null, options := {})`
+- `form_group(title := "", rows := [], options := {})`
+- `empty_state(title := "", body := "", options := {})`
+- `alert(message := "", options := {})`
+- `loading_indicator(options := {})`
+- `progress_bar(options := {})`
 
-Interactive components store MCP-friendly metadata fields:
-- ref
-- role
-- label
-- actions
-- enabled
-- visible
+Controls:
+- `label(text := "", options := {})`
+- `badge(text := "", options := {})`
+- `button(text := "", options := {})`
+- `icon_button(icon := "", options := {})`
+- `input(options := {})`
+- `text_area(options := {})`
+- `dropdown(items := [], options := {})`
+- `slider(options := {})`
+- `toggle(text := "", options := {})`
+- `radio_group(items := [], options := {})`
+- `tabs(items := [], options := {})`
+- `list_view(items := [], options := {})`
+- `list(...)` compatibility alias
+- `message_item(sender := "", text := "", options := {})`
 
-## Layout templates
+## scroll_container vs list_view
 
-`hermes_layout.gd`
+Use `scroll_container` when:
+- you already own the child column/container
+- you want custom message feeds or arbitrary layouts
+- you want incremental manual rendering
 
-- `basic_app(toolbar, content, status, options := {})`
-- `sidebar_app(toolbar, sidebar, content, status, options := {})`
-- `chat_app(toolbar, message_list, composer, status, options := {})`
+Use `list_view` when:
+- you want a managed scrollable row list
+- rows are simple selectable items
+- you want list-style interaction/state
 
-These standardize:
-- toolbar/status sizing
-- split view wiring
-- expand flags
-- top-to-bottom app composition
+Hermes Chat should prefer `scroll_container` for message feeds.
 
-## Example button/input usage
+## Shell chrome component APIs
 
-```gdscript
-var ui := HermesComponentFactory.new()
-var search := ui.input("", "Search files…")
-var save := ui.button("Save", Callable(self, "_save"), "primary")
-var row := ui.hbox([search, save], 8)
-```
+Scaffolded in HermesUI now:
+- `taskbar(options := {})`
+- `taskbar_item(app_id, title, icon, options := {})`
+- `launcher_menu(options := {})`
+- `launcher_grid(apps := [], options := {})`
+- `tray(options := {})`
+- `notification_toast(message := "", options := {})`
+- `context_menu(items := [], options := {})`
+- `desktop_icon(label := "", icon := "", options := {})`
+- `window_titlebar(title := "", options := {})`
+- `window_controls(options := {})`
 
-## Example app layout
+These are framework-level shell building blocks.
+They are not a full shell migration yet.
 
-```gdscript
-var toolbar := ui.toolbar([
-    ui.label("Notes", "heading"),
-])
-var body := ui.panel([
-    ui.text_area("", "Write here…", Callable(self, "_on_change"), {"expand_v": true})
-], 16)
-var status := ui.status_bar("Ready", "info")
-var root := layout.basic_app(toolbar, body, status)
-```
+## Child/body helpers
 
-## HermesApp framework
+To avoid fragile `find_child("HermesCardBody")` patterns, HermesUI now provides:
+- `body_of(container)`
+- `add(control, child)`
+- `add_many(control, children)`
+- `clear_children(control)`
 
-`hermes_app.gd`
+Panel/card/toolbar/list containers attach internal body metadata so app code can target the intended body cleanly.
 
-Existing Hermes_OS lifecycle is preserved:
+## Stateful helpers
+
+Current helpers:
+- `get_active_tab(tab_control)`
+- `set_active_tab(tab_control, id)`
+- `get_selected_id(list_control)`
+- `set_selected_id(list_control, id)`
+- `rebuild_list(list_control, items, options := {})`
+
+## HermesApp lifecycle
+
+HermesApp preserves Hermes_OS lifecycle hooks:
 - `os_app_init(context)`
 - `os_app_focus()`
 - `os_app_blur()`
@@ -281,9 +318,10 @@ Existing Hermes_OS lifecycle is preserved:
 - `os_app_restore_state(state)`
 - `os_app_handle_agent_action(action, args)`
 
-HermesApp bridges these to nicer overrides:
+Nicer override surface:
 - `setup(context)`
 - `render()`
+- `refresh()`
 - `on_focus()`
 - `on_blur()`
 - `on_close_requested()`
@@ -292,77 +330,81 @@ HermesApp bridges these to nicer overrides:
 - `get_mcp_actions()`
 - `handle_mcp_action(action, args)`
 
-Important rule:
-- `render()` builds once during init
-- updates should modify existing nodes imperatively
-- do not rebuild the entire UI on every keystroke
-
-Status helpers:
+Additional helpers:
+- `clear_root()`
+- `set_root(control)`
 - `set_status(text, kind := "info")`
 - `get_status()`
-- optional status-bar control binding through `set_status_control(control)`
+- `set_status_control(control)`
+- `find_by_ref(ref)`
+- `register_control_ref(control, ref, meta := {})`
+- `get_serializable_state()`
+- `on_event(event_name, callback)`
 
-## State rules
+Rules:
+- no virtual DOM
+- no rebuild-on-keystroke
+- `render()` is initial build
+- `refresh()` is explicit major rebuild only
+- state must remain serializable
 
-Allowed in app state:
-- Dictionary
-- Array
-- String
-- int
-- float
-- bool
-- null
+## Option validation behavior
 
-Do not return from `get_state()`:
-- Node
-- Control
-- Callable
-- Signal
-- Texture
-- Resource
-- Object references
+HermesComponentFactory validates option keys in debug builds:
+- unknown option keys trigger `push_warning`
+- warnings include the component name
+- unknown options do not crash the app
 
-HermesApp sanitizes state to serializable values.
+## Canonical real examples
 
-## Reference / MCP metadata
+System Settings is the canonical real HermesUI app example.
+It now demonstrates:
+- HermesApp-based lifecycle
+- HermesLayout usage
+- form components
+- Gateway + MCP status composition
+- shell callback wiring
+- preserved automation-facing control names
 
-`hermes_refs.gd`
+Hermes Chat is the chat proof.
+It demonstrates:
+- HermesApp lifecycle
+- chat layout
+- scroll_container message feed
+- message_item usage
+- Gateway-driven status handling
+- MCP-friendly refs
 
-Methods:
-- `make_ref(app_id, local_ref, window_id := "")`
-- `attach_meta(control, meta)`
-- `get_attached_meta(control)`
-- `validate_ref(ref)`
+## Escape hatches
 
-Naming note:
-- HermesRefs uses `get_attached_meta` (not `get_meta`) to avoid confusion/collision with Godot's built-in metadata APIs on `Object`.
+Use raw Godot controls only when HermesUI truly lacks the component.
+If HermesUI lacks a generally reusable component, add it to HermesUI first.
+App-specific one-offs are the exception, not the rule.
 
-Examples:
-- `hermes_chat.send`
-- `hermes_chat.composer`
-- `settings.gateway.connect`
-- `files.new_file`
+## Future shell chrome migration plan
 
-## Migration plan
-
-1. Hermes Chat
-2. System Settings
+1. System Settings
+2. Hermes Chat
 3. Notes
 4. Text Editor
 5. Files
-6. Terminal
-7. Browser last
+6. notifications/toasts
+7. taskbar items/window buttons
+8. launcher/start menu
+9. desktop icons/context menus
+10. Terminal special polish
+11. Browser last
 
-Why this order:
-- Hermes Chat is the proof-of-concept for the new layer
-- Settings/Notes/Text are ordinary Control-heavy apps and easiest to normalize
-- Files has more complex state and selection flows
-- Terminal has special rendering/input behavior
-- Browser has native surface/runtime concerns and should migrate last
+Why:
+- Settings and chat are stable framework proofs
+- Notes/Text/Files are normal app UIs next
+- notifications and shell chrome benefit from shared surfaces
+- Terminal needs special rendering polish
+- Browser remains last because of native/runtime complexity
 
-## Rules for future apps
+## Guidance for new Hermes_OS UI
 
-- New apps should use HermesUI instead of raw shell styling helpers
-- DesignTokens/StyleFactory remain the legacy-low-level foundation
-- HermesUI is the preferred authoring layer for new native apps
-- Existing apps can migrate incrementally without a big-bang re-theme
+New Hermes_OS UI should use HermesUI.
+This includes apps and OS chrome.
+Do not hand-roll raw Control trees unless HermesUI lacks the component.
+If HermesUI lacks the component, add it to HermesUI first unless the use case is truly app-specific.

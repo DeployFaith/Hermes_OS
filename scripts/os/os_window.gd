@@ -151,10 +151,10 @@ func _build(content: Control) -> void:
 	_body_host.clip_contents = true
 	_body_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_body_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_body_host.add_theme_constant_override("margin_left", 12)
-	_body_host.add_theme_constant_override("margin_right", 12)
-	_body_host.add_theme_constant_override("margin_top", 12)
-	_body_host.add_theme_constant_override("margin_bottom", 12)
+	_body_host.add_theme_constant_override("margin_left", 10)
+	_body_host.add_theme_constant_override("margin_right", 10)
+	_body_host.add_theme_constant_override("margin_top", 10)
+	_body_host.add_theme_constant_override("margin_bottom", 10)
 	frame.add_child(_body_host)
 
 	var body_panel := PanelContainer.new()
@@ -193,16 +193,10 @@ func _title_button(text_value: String, destructive := false) -> Button:
 	button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	button.add_theme_font_size_override("font_size", 14)
 	button.add_theme_color_override("font_color", Tokens.TEXT)
-	button.add_theme_stylebox_override("normal", StyleFactory.traffic_light_default())
-	if destructive:
-		button.add_theme_stylebox_override("hover", StyleFactory.traffic_light_close())
-		button.add_theme_stylebox_override("pressed", StyleFactory.traffic_light_close())
-	else:
-		# Distinguish minimize vs maximize by position, not by different hover colors here
-		# We'll use a single green hover for all non-destructive; the position gives semantic meaning
-		button.add_theme_stylebox_override("hover", StyleFactory.traffic_light_maximize())
-		button.add_theme_stylebox_override("pressed", StyleFactory.traffic_light_maximize())
-	button.add_theme_stylebox_override("focus", StyleFactory.build(Color(0, 0, 0, 0), Tokens.FOCUS, 2, 15))
+	button.add_theme_stylebox_override("normal", StyleFactory.window_control(text_value, destructive, "normal"))
+	button.add_theme_stylebox_override("hover", StyleFactory.window_control(text_value, destructive, "hover"))
+	button.add_theme_stylebox_override("pressed", StyleFactory.window_control(text_value, destructive, "pressed"))
+	button.add_theme_stylebox_override("focus", StyleFactory.window_control(text_value, destructive, "focused"))
 	return button
 
 func _on_title_bar_gui_input(event: InputEvent) -> void:

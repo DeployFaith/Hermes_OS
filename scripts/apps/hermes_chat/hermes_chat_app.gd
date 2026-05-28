@@ -30,16 +30,9 @@ func setup(context: Dictionary) -> void:
 	_agent_service = context.get("agent_service", null)
 	if _agent_service == null and _shell != null:
 		_agent_service = _shell.get("_hermes_agent_service")
-	if _event_bus != null:
-		_event_bus.subscribe(OSEventBus.AGENT_STATUS_CHANGED, self, &"_on_agent_event")
-		_event_bus.subscribe(OSEventBus.AGENT_RESPONSE_RECEIVED, self, &"_on_agent_event")
-		_event_bus.subscribe(OSEventBus.AGENT_ERROR, self, &"_on_agent_event")
-
-func _exit_tree() -> void:
-	if _event_bus != null:
-		_event_bus.unsubscribe(OSEventBus.AGENT_STATUS_CHANGED, self, &"_on_agent_event")
-		_event_bus.unsubscribe(OSEventBus.AGENT_RESPONSE_RECEIVED, self, &"_on_agent_event")
-		_event_bus.unsubscribe(OSEventBus.AGENT_ERROR, self, &"_on_agent_event")
+	on_event(OSEventBus.AGENT_STATUS_CHANGED, Callable(self, "_on_agent_event"))
+	on_event(OSEventBus.AGENT_RESPONSE_RECEIVED, Callable(self, "_on_agent_event"))
+	on_event(OSEventBus.AGENT_ERROR, Callable(self, "_on_agent_event"))
 
 func render() -> void:
 	_toolbar = _build_toolbar()
@@ -77,18 +70,8 @@ func restore_state(state: Dictionary) -> void:
 
 func get_mcp_actions() -> Array:
 	return [
-		{
-			"id": "chat.send",
-			"label": "Send chat message",
-			"description": "Send a message to Hermes Chat",
-			"args_schema": {"message": "string"}
-		},
-		{
-			"id": "chat.clear",
-			"label": "Clear chat",
-			"description": "Clear Hermes Chat history",
-			"args_schema": {}
-		}
+		{"id": "chat.send", "label": "Send chat message", "description": "Send a message to Hermes Chat", "args_schema": {"message": "string"}},
+		{"id": "chat.clear", "label": "Clear chat", "description": "Clear Hermes Chat history", "args_schema": {}}
 	]
 
 func handle_mcp_action(action: String, args: Dictionary) -> Dictionary:
@@ -106,50 +89,46 @@ func handle_mcp_action(action: String, args: Dictionary) -> Dictionary:
 			return {"ok": false, "error": "Unsupported action"}
 
 func _build_toolbar() -> Control:
-	var title: Control = ui.label("Hermes Chat", "heading", {"name": "HermesChatTitle"})
+	var title: Control = ui.label("Hermes Chat", {"variant": "heading", "name": "HermesChatTitle"})
 	var filler := Control.new()
 	filler.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_gateway_badge = ui.badge("Gateway: unknown", "muted", {"name": "HermesChatGatewayBadge"})
-	_mcp_badge = ui.badge("MCP: ready", "info", {"name": "HermesChatMcpBadge"})
-	return ui.toolbar([title, filler, _gateway_badge, _mcp_badge], {"name": "HermesChatToolbar"})
+	_gateway_badge = ui.badge("Gateway: Offline", {"kind": "danger", "name": "HermesChatGatewayStatusLabel"})
+	_mcp_badge = ui.badge("MCP: Ready", {"kind": "info", "name": "HermesChatMcpStatusLabel"})
+	var status_cluster: Control = ui.hbox([_gateway_badge, _mcp_badge], hermes_theme.spacing("space_3"), {"name": "HermesChatToolbarStatusCluster"})
+	return ui.toolbar([title, filler, status_cluster], {"name": "HermesChatToolbar"})
 
 func _build_message_panel() -> Control:
-	_message_scroll = ui.list([], "", Callable(), {
-		"name": "HermesChatMessageScroll",
-		"empty_text": "Ask Hermes to help with this OS."
-	}) as ScrollContainer
-	_message_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_message_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var rows := _find_list_rows(_message_scroll)
-	if rows != null:
-		_message_column = rows
-		_message_column.name = "HermesChatMessageColumn"
-		_message_column.add_theme_constant_override("separation", hermes_theme.spacing("space_3"))
-	else:
-		_message_column = ui.vbox([], hermes_theme.spacing("space_3"), {"name": "HermesChatMessageColumn", "expand_h": true})
-		_message_scroll.add_child(_message_column)
+	_message_column = ui.vbox([], hermes_theme.spacing("space_3"), {"name": "HermesChatMessageColumn", "expand_h": true})
+	_message_scroll = ui.scroll_container(_message_column, {"name": "HermesChatMessageScroll", "expand_h": true, "expand_v": true}) as ScrollContainer
 	return ui.panel([_message_scroll], hermes_theme.spacing("panel"), "base", {"name": "HermesChatMessagePanel", "expand_v": true})
 
 func _build_composer() -> Control:
-	_composer_input = ui.input("", "Ask Hermes to help with this OS.", Callable(), Callable(self, "_on_input_submitted"), {
+	_composer_input = ui.input({
+		"value": "",
+		"placeholder": "Ask Hermes to help with this OS…",
+		"on_submit": Callable(self, "_on_input_submitted"),
 		"name": "HermesChatComposerInput",
 		"ref": HermesRefs.make_ref("hermes_chat", "composer"),
 		"expand_h": true,
 		"mcp_role": "textbox",
 		"mcp_actions": ["type", "submit"]
 	})
-	_send_button = ui.button("Send", Callable(self, "_send_from_input"), "primary", false, {
+	_send_button = ui.button("Send", {
+		"variant": "primary",
+		"on_pressed": Callable(self, "_send_from_input"),
 		"name": "HermesChatSendButton",
 		"ref": HermesRefs.make_ref("hermes_chat", "send"),
 		"mcp_actions": ["press"]
 	})
-	_clear_button = ui.button("Clear", Callable(self, "_clear_messages"), "ghost", false, {
+	_clear_button = ui.button("Clear", {
+		"variant": "ghost",
+		"on_pressed": Callable(self, "_clear_messages"),
 		"name": "HermesChatClearButton",
 		"ref": HermesRefs.make_ref("hermes_chat", "clear"),
 		"mcp_actions": ["press"]
 	})
 	var row: Control = ui.hbox([_composer_input, _send_button, _clear_button], hermes_theme.spacing("space_2"), {"name": "HermesChatComposerRow"})
-	return ui.card([row], hermes_theme.spacing("card"), {"name": "HermesChatComposerCard"})
+	return ui.card([row], hermes_theme.spacing("card"), {"name": "HermesChatComposerCard", "elevation": 0})
 
 func _send_from_input() -> void:
 	if _composer_input == null:
@@ -175,6 +154,7 @@ func _send_message(message: String) -> void:
 	_awaiting_response = true
 	_set_composer_enabled(false)
 	set_status("Sending to Hermes Gateway…", "busy")
+	_refresh_gateway_status()
 	if _composer_input != null:
 		_composer_input.text = ""
 	var result: Variant = (_agent_service as Object).call("send_user_message", clean, {"source": "hermes_chat"})
@@ -198,14 +178,13 @@ func _append_message(sender: String, text: String, kind: String) -> void:
 func _render_messages() -> void:
 	if _message_column == null:
 		return
-	for child in _message_column.get_children():
-		child.queue_free()
+	ui.clear_children(_message_column)
 	if _messages.is_empty():
-		_message_column.add_child(ui.label("Ask Hermes to help with this OS.", "muted", {"name": "HermesChatEmpty", "autowrap": true}))
+		ui.add(_message_column, ui.empty_state("Hermes Chat", "Ask Hermes to help with this OS.", {"name": "HermesChatEmpty"}))
 	else:
 		for item in _messages:
 			var message := item as Dictionary
-			_message_column.add_child(ui.message_item(str(message.get("sender", "")), str(message.get("text", "")), str(message.get("kind", "hermes")), {"name": "HermesChatMessage"}))
+			ui.add(_message_column, ui.message_item(str(message.get("sender", "")), str(message.get("text", "")), {"kind": str(message.get("kind", "hermes")), "name": "HermesChatMessage"}))
 	call_deferred("_scroll_messages_to_bottom")
 
 func _scroll_messages_to_bottom() -> void:
@@ -213,37 +192,44 @@ func _scroll_messages_to_bottom() -> void:
 		return
 	_message_scroll.scroll_vertical = 1000000
 
-func _find_list_rows(list_scroll: ScrollContainer) -> VBoxContainer:
-	if list_scroll == null:
-		return null
-	var rows := list_scroll.find_child("HermesListRows", true, false)
-	if rows != null and rows is VBoxContainer:
-		return rows as VBoxContainer
-	return null
-
 func _refresh_gateway_status() -> void:
 	var gateway_state := _gateway_state()
 	var configured := bool(gateway_state.get("configured", false))
-	var busy := bool(gateway_state.get("busy", false))
+	var busy := bool(gateway_state.get("busy", false)) or _awaiting_response
 	var gateway_kind := "success" if configured else "danger"
+	var gateway_text := "Gateway: Offline"
 	if busy:
 		gateway_kind = "busy"
-	var endpoint := str(gateway_state.get("endpoint", ""))
-	var model := str(gateway_state.get("model", ""))
-	var key_present := bool(gateway_state.get("api_key_present", false))
-	_update_badge(_gateway_badge, "Gateway: " + ("busy" if busy else "ready" if configured else "offline"), gateway_kind)
-	_update_badge(_mcp_badge, "MCP: placeholder", "muted")
-	set_status("endpoint=%s | model=%s | key=%s" % [endpoint if endpoint != "" else "n/a", model if model != "" else "n/a", "yes" if key_present else "no"], "info")
+		gateway_text = "Gateway: Checking"
+	elif configured:
+		gateway_text = "Gateway: Online"
+	_update_badge(_gateway_badge, gateway_text, gateway_kind)
+	_update_badge(_mcp_badge, "MCP: Ready", "info")
+	# Status bar: show gateway state, not hardcoded profile labels
+	var model_name := _display_model_name(gateway_state)
+	var status_text := "Gateway online"
+	if model_name != "":
+		status_text = "model: %s" % model_name
+	if busy:
+		status_text = "Sending…"
+	elif not configured:
+		status_text = "Gateway offline"
+	set_status(status_text, "busy" if busy else "info")
 
 func _update_badge(control: Control, text: String, kind: String) -> void:
 	if control == null:
+		return
+	if control is Label:
+		var label := control as Label
+		label.text = text
+		label.add_theme_color_override("font_color", hermes_theme.kind_text_color(kind))
 		return
 	if control is PanelContainer:
 		(control as PanelContainer).add_theme_stylebox_override("panel", hermes_theme.badge_style(kind))
 	var label_node := control.find_child("HermesBadgeLabel", true, false)
 	if label_node != null and label_node is Label:
 		(label_node as Label).text = text
-		(label_node as Label).add_theme_color_override("font_color", hermes_theme.color("text"))
+		(label_node as Label).add_theme_color_override("font_color", hermes_theme.kind_text_color(kind))
 
 func _gateway_state() -> Dictionary:
 	if _agent_service != null and (_agent_service is Object) and (_agent_service as Object).has_method("get_status"):
@@ -252,13 +238,13 @@ func _gateway_state() -> Dictionary:
 			var gateway: Variant = (state as Dictionary).get("gateway", {})
 			if gateway is Dictionary:
 				return (gateway as Dictionary).duplicate(true)
-	return {
-		"configured": false,
-		"busy": false,
-		"endpoint": "",
-		"model": "",
-		"api_key_present": false
-	}
+	return {"configured": false, "busy": false, "endpoint": "", "model": "", "api_key_present": false}
+
+func _display_model_name(gateway_state: Dictionary) -> String:
+	var model_name: String = str(gateway_state.get("model", "")).strip_edges()
+	if model_name.to_lower() == "hermesos":
+		return ""
+	return model_name
 
 func _set_composer_enabled(enabled: bool) -> void:
 	if _composer_input != null:

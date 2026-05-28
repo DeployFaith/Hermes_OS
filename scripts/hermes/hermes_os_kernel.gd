@@ -101,7 +101,52 @@ func get_declared_operations() -> Dictionary:
 	return declared
 
 func is_operation_declared(op: String) -> bool:
-	return get_declared_operations().has(op)
+	var normalized: Dictionary = _normalize_declared_operation(op, {})
+	var normalized_op: String = str(normalized.get("op", op)).strip_edges()
+	if normalized_op == "":
+		return false
+	return get_declared_operations().has(normalized_op)
+
+func is_operation_supported(op: String, args: Dictionary = {}) -> bool:
+	if _shell == null or not _shell.has_method("hermes_supported_operations"):
+		return false
+	var normalized: Dictionary = _normalize_declared_operation(op, args)
+	var normalized_op: String = str(normalized.get("op", op)).strip_edges()
+	if normalized_op == "":
+		return false
+	var supported_value: Variant = _shell.call("hermes_supported_operations")
+	if not (supported_value is Array):
+		return false
+	for entry in (supported_value as Array):
+		if str(entry).strip_edges() == normalized_op:
+			return true
+	return false
+
+func should_allow_undeclared_operation(op: String, args: Dictionary = {}) -> bool:
+	if not is_dev_operation_mode():
+		return false
+	return is_operation_supported(op, args)
+
+func is_dev_operation_mode() -> bool:
+	var policy: String = OS.get_environment("HERMESOS_BRIDGE_POLICY").strip_edges().to_lower()
+	if policy == "dev":
+		return true
+	var allow_mutations: String = OS.get_environment("HERMESOS_ALLOW_MUTATIONS").strip_edges().to_lower()
+	return _is_truthy_env(allow_mutations)
+
+func _is_truthy_env(value: String) -> bool:
+	match value:
+		"1", "true", "yes", "on":
+			return true
+		_:
+			return false
+
+func _normalize_declared_operation(op: String, args: Dictionary) -> Dictionary:
+	if _shell != null and _shell.has_method("_normalize_v1_operation"):
+		var normalized_value: Variant = _shell.call("_normalize_v1_operation", op, args.duplicate(true))
+		if normalized_value is Dictionary:
+			return normalized_value as Dictionary
+	return {"op": op.strip_edges(), "args": args.duplicate(true)}
 
 func get_bridge_state() -> Dictionary:
 	return {
@@ -265,6 +310,8 @@ func _on_bridge_message_received(message: Dictionary) -> void:
 	match message_type:
 		"operation":
 			_handle_operation_message(message)
+		"operation_batch":
+			_handle_operation_batch_message(message)
 		"request":
 			_handle_request_message(message)
 		"ping":
@@ -287,6 +334,64 @@ func _handle_operation_message(message: Dictionary) -> void:
 		emit_os_event("operation.failed", {"id": operation_id, "op": op, "error": error_data})
 		_operation_results_sent += 1
 		_send_bridge_message(HermesProtocol.make_operation_result(operation_id, false, {}, error_data))
+
+func _handle_operation_batch_message(message: Dictionary) -> void:
+	var batch_id := str(message.get("id", ""))
+	var operations: Array = message.get("operations", []) if message.get("operations", []) is Array else []
+	var stop_on_error := bool(message.get("stop_on_error", true))
+	var results: Array = []
+	var halted_at := -1
+	var batch_ok := true
+	for index in range(operations.size()):
+		var item: Variant = operations[index]
+		if not (item is Dictionary):
+			batch_ok = false
+			halted_at = index
+			results.append({
+				"index": index,
+				"ok": false,
+				"error": HermesProtocol.make_error("INVALID_BATCH_ITEM", "Batch operation must be a Dictionary")
+			})
+			if stop_on_error:
+				break
+			continue
+		var op_dict: Dictionary = item
+		var op_name := str(op_dict.get("op", "")).strip_edges()
+		var op_args: Dictionary = op_dict.get("args", {}) if op_dict.get("args", {}) is Dictionary else {}
+		var op_id := str(op_dict.get("id", "batch_%d" % index))
+		emit_os_event("operation.received", {"id": op_id, "op": op_name, "batch_id": batch_id})
+		var response := execute_operation(op_name, op_args, op_id)
+		if bool(response.get("ok", false)):
+			emit_os_event("operation.completed", {"id": op_id, "op": op_name, "batch_id": batch_id})
+			results.append({
+				"index": index,
+				"id": op_id,
+				"op": op_name,
+				"ok": true,
+				"result": response.get("result", {})
+			})
+		else:
+			batch_ok = false
+			halted_at = index if halted_at < 0 else halted_at
+			var error_data: Dictionary = response.get("error", HermesProtocol.make_error("OPERATION_FAILED", "Operation failed"))
+			emit_os_event("operation.failed", {"id": op_id, "op": op_name, "error": error_data, "batch_id": batch_id})
+			results.append({
+				"index": index,
+				"id": op_id,
+				"op": op_name,
+				"ok": false,
+				"error": error_data
+			})
+			if stop_on_error:
+				break
+	_operation_results_sent += results.size()
+	_send_bridge_message({
+		"type": "operation_batch_result",
+		"id": batch_id,
+		"ok": batch_ok,
+		"halted_at": halted_at,
+		"results": results
+	})
 
 func _handle_request_message(message: Dictionary) -> void:
 	var request_id := str(message.get("id", ""))

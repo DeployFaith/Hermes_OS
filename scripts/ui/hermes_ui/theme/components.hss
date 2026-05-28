@@ -1,0 +1,122 @@
+Window {
+  background: var(--surface-1);
+  border-color: var(--border-muted);
+  border-width: 1px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+
+Column {
+  gap: var(--space-3);
+}
+
+Row {
+  gap: var(--space-2);
+  align-items: center;
+}
+
+ScrollView {
+  background: var(--surface-1);
+  border-color: var(--border-muted);
+  border-width: 1px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+}
+
+Grid {
+  gap: var(--space-3);
+}
+
+Panel,
+Card {
+  background: var(--surface-2);
+  border-color: var(--border-muted);
+  border-width: 1px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+
+Text {
+  color: var(--text);
+  font-size: var(--font-md);
+}
+
+Title {
+  color: var(--text);
+  font-size: var(--font-xl);
+  font-weight: 700;
+}
+
+Button {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--border-muted);
+  border-width: 1px;
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+}
+
+Button:hover {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+
+Button:disabled {
+  background: var(--surface-0);
+  color: var(--text-faint);
+  border-color: var(--border-muted);
+  opacity: 0.65;
+}
+
+Button[variant="primary"] {
+  background: var(--accent);
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+Button[variant="primary"]:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+TextInput {
+  background: var(--surface-0);
+  color: var(--text);
+  border-color: var(--border-muted);
+  border-width: 1px;
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  min-height: 36px;
+}
+
+TextInput:focus {
+  border-color: var(--accent);
+}
+
+Badge {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border-color: var(--border-muted);
+  border-width: 1px;
+  border-radius: var(--radius-pill);
+  padding: 6px;
+  font-size: var(--font-sm);
+}
+
+Badge[variant="success"] {
+  background: rgba(126, 224, 161, 0.18);
+  color: var(--success);
+  border-color: var(--success);
+}
+
+Badge[variant="warning"] {
+  background: rgba(255, 210, 126, 0.18);
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+Badge[variant="danger"] {
+  background: rgba(255, 126, 147, 0.18);
+  color: var(--danger);
+  border-color: var(--danger);
+}

@@ -21,6 +21,8 @@ const SystemSettingsApp = preload("res://scripts/apps/system_settings/system_set
 const SystemSettingsAppManifest = preload("res://scripts/apps/system_settings/system_settings_app_manifest.gd")
 const HermesChatApp = preload("res://scripts/apps/hermes_chat/hermes_chat_app.gd")
 const HermesChatAppManifest = preload("res://scripts/apps/hermes_chat/hermes_chat_app_manifest.gd")
+const AccountCenterApp = preload("res://scripts/apps/account_center/account_center_app.gd")
+const AccountCenterAppManifest = preload("res://scripts/apps/account_center/account_center_app_manifest.gd")
 const HermesProtocol = preload("res://scripts/hermes/hermes_protocol.gd")
 const HermesAgentService = preload("res://scripts/os/agent/hermes_agent_service.gd")
 const AgentOperationRouter = preload("res://scripts/os/agent/agent_operation_router.gd")
@@ -82,6 +84,7 @@ var _launcher: Panel
 var _launcher_frame: VBoxContainer
 var _launcher_header_label: Label
 var _launcher_user_label: Label
+var _avatar_icon_cache: Dictionary = {}
 var _launcher_search: LineEdit
 var _launcher_scroll: ScrollContainer
 var _launcher_list: VBoxContainer
@@ -93,6 +96,15 @@ var _launcher_buttons: Dictionary = {}
 var _launcher_selected_app_id: String = ""
 var _session_menu: Panel
 var _auth_overlay: Control
+var _boot_overlay: Control
+var _boot_video_player: VideoStreamPlayer
+var _boot_finish_timer: Timer
+var _boot_sequence_active := false
+var _boot_next_action := "show_auth"
+var _boot_target_auth_mode := "login"
+var _boot_target_auth_message := ""
+var _boot_started_on_startup := false
+var _startup_boot_route_pending := false
 var _alt_tab_overlay: Panel
 var _alt_tab_content: HBoxContainer
 var _alt_tab_selected_index: int = 0
@@ -175,6 +187,10 @@ const DESKTOP_ICON_SIZE := Vector2(118, 86)
 const DESKTOP_ICON_GAP := Vector2(14, 10)
 const DESKTOP_ICON_MARGIN := Vector2(14, 14)
 const PERSISTED_STATE_PATH := "user://hermes_os_shell_state.cfg"
+const BOOT_SPLASH_VIDEO_PATH := "res://assets/video/hermes_os_boot_splash_v4.ogv"
+const BOOT_SPLASH_DURATION := 7.6
+const BOOT_SPLASH_FALLBACK_DURATION := 2.4
+const BOOT_SPLASH_HEADLESS_DURATION := 0.05
 
 const Tokens = preload("res://scripts/os/design_tokens.gd")
 const StyleFactory = preload("res://scripts/os/style_factory.gd")
@@ -207,10 +223,11 @@ func _ready() -> void:
 	_setup_window_manager()
 	_setup_hermes_agent_service()
 	_setup_state_save_timer()
-	var restored := _load_persisted_state()
+	_startup_boot_route_pending = true
+	_load_persisted_state()
+	_startup_boot_route_pending = false
 	_update_clock()
-	if not restored:
-		_show_auth_screen("login")
+	_begin_startup_boot_sequence()
 	if has_node("/root/HermesOSKernel"):
 		var kernel := get_node("/root/HermesOSKernel")
 		if kernel and kernel.has_method("register_shell"):
@@ -223,6 +240,19 @@ func _ready() -> void:
 	add_child(clock_timer)
 
 	resized.connect(_layout)
+
+func _begin_startup_boot_sequence() -> void:
+	if _boot_started_on_startup:
+		return
+	_boot_started_on_startup = true
+	# Startup policy: always route through login/auth after boot splash.
+	# Do not auto-enter desktop from persisted session state.
+	_session_active = false
+	_begin_boot_sequence("show_auth", "login")
+
+func _should_skip_boot_splash() -> bool:
+	var value := OS.get_environment("HERMESOS_SKIP_BOOT").strip_edges().to_lower()
+	return value == "1" or value == "true" or value == "yes" or value == "on"
 
 func _setup_window_manager() -> void:
 	_window_manager = WindowManager.new()
@@ -655,6 +685,13 @@ func _capture_app_state_from_node(root: Node) -> Dictionary:
 	return {}
 
 func _unhandled_key_input(event: InputEvent) -> void:
+	if _boot_sequence_active:
+		if event is InputEventKey:
+			var boot_key_event := event as InputEventKey
+			if boot_key_event.pressed and not boot_key_event.echo:
+				_finish_boot_sequence()
+				get_viewport().set_input_as_handled()
+		return
 	if not _session_active or _auth_overlay != null:
 		return
 	if not (event is InputEventKey):
@@ -755,6 +792,8 @@ func import_state(state: Dictionary) -> String:
 	_update_clock()
 	if _session_active:
 		_hide_auth_screen()
+	elif _startup_boot_route_pending:
+		_hide_auth_screen()
 	else:
 		_show_auth_screen("login")
 	_queue_state_save()
@@ -778,7 +817,7 @@ func reset_state() -> void:
 	_apply_wallpaper()
 	_refresh_desktop_icons()
 	_update_clock()
-	_show_auth_screen("login")
+	_begin_boot_sequence("show_auth", "login")
 	_queue_state_save()
 
 func _register_apps() -> void:
@@ -790,6 +829,7 @@ func _register_apps() -> void:
 	_app_registry.register_app(TerminalAppManifest.manifest(Callable(self, "_build_console_app")))
 	_app_registry.register_app(HermesChatAppManifest.manifest(Callable(self, "_build_hermes_chat_app")))
 	_app_registry.register_app(SystemSettingsAppManifest.manifest(Callable(self, "_build_system_app")))
+	_app_registry.register_app(AccountCenterAppManifest.manifest(Callable(self, "_build_account_center_app")))
 	# TODO(redesign): remove these compatibility mirrors once launcher/taskbar/app lifecycle fully read from AppRegistry.
 	_apps = _app_registry.export_legacy_apps()
 	_app_order = _app_registry.get_app_order()
@@ -804,26 +844,36 @@ func _apply_theme_mode(mode: String, refresh_ui: bool = true) -> void:
 		Tokens.SURFACE = Color("f4f6fa")
 		Tokens.SURFACE_HOVER = Color("e7ebf2")
 		Tokens.SURFACE_ACTIVE = Color("dce3ee")
+		Tokens.WINDOW = Tokens.BG_ELEVATED
+		Tokens.INPUT_BG = Color("ffffff")
+		Tokens.BORDER_SOFT = Color("dbe2ed")
 		Tokens.BORDER = Color("c7cfdd")
 		Tokens.BORDER_ACTIVE = Color("9aa9c0")
+		Tokens.BORDER_STRONG = Color("76859c")
 		Tokens.TEXT = Color("1c2433")
 		Tokens.TEXT_MUTED = Color("5f6b7d")
+		Tokens.TEXT_FAINT = Color("7d8798")
 		Tokens.MUTED = Tokens.TEXT_MUTED
 		Tokens.TEXT_DISABLED = Color("9aa4b4")
 	else:
 		_wallpaper_colors = _dark_wallpaper_colors.duplicate()
-		Tokens.BG = Color("0d0f14")
-		Tokens.BG_ELEVATED = Color("13151c")
-		Tokens.PANEL = Color("181a22")
-		Tokens.SURFACE = Color("1e2029")
-		Tokens.SURFACE_HOVER = Color("272a36")
-		Tokens.SURFACE_ACTIVE = Color("2f3342")
-		Tokens.BORDER = Color("2d3140")
-		Tokens.BORDER_ACTIVE = Color("3f4558")
-		Tokens.TEXT = Color("e8eaf0")
-		Tokens.TEXT_MUTED = Color("8b92a8")
+		Tokens.BG = Color("0b0d12")
+		Tokens.BG_ELEVATED = Color("11141b")
+		Tokens.PANEL = Color("171a22")
+		Tokens.SURFACE = Color("1f2430")
+		Tokens.SURFACE_HOVER = Color("272d3a")
+		Tokens.SURFACE_ACTIVE = Color("303747")
+		Tokens.WINDOW = Tokens.BG_ELEVATED
+		Tokens.INPUT_BG = Color("0f131a")
+		Tokens.BORDER_SOFT = Color("252b38")
+		Tokens.BORDER = Color("3b4355")
+		Tokens.BORDER_ACTIVE = Color("4b556d")
+		Tokens.BORDER_STRONG = Color("616d88")
+		Tokens.TEXT = Color("eceff6")
+		Tokens.TEXT_MUTED = Color("9aa3b8")
+		Tokens.TEXT_FAINT = Color("737d94")
 		Tokens.MUTED = Tokens.TEXT_MUTED
-		Tokens.TEXT_DISABLED = Color("5a6075")
+		Tokens.TEXT_DISABLED = Color("5f687d")
 	if _icon_atlas != null:
 		_icon_atlas.set_icon_color(Tokens.TEXT)
 	if refresh_ui:
@@ -1009,7 +1059,8 @@ func _build_launcher() -> void:
 	_launcher.visible = false
 	_launcher.clip_contents = true
 	_launcher.size = _compute_launcher_size(get_viewport_rect().size)
-	_launcher.add_theme_stylebox_override("panel", StyleFactory.glass_panel(0.88, Tokens.alpha(Tokens.WHITE, 0.10), 1, 16))
+	# Launcher: elevated panel with visible border and strong shadow
+	_launcher.add_theme_stylebox_override("panel", StyleFactory.elevated_panel(2, 0.94, 16))
 	add_child(_launcher)
 
 	_launcher_frame = VBoxContainer.new()
@@ -1055,7 +1106,7 @@ func _build_launcher() -> void:
 	var categories_panel := Panel.new()
 	categories_panel.custom_minimum_size = Vector2(156, 0)
 	categories_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	categories_panel.add_theme_stylebox_override("panel", StyleFactory.solid_panel(Tokens.alpha(Tokens.BG, 0.5), Tokens.alpha(Tokens.WHITE, 0.05), 1, 8))
+	categories_panel.add_theme_stylebox_override("panel", StyleFactory.sidebar_panel(10))
 	content_row.add_child(categories_panel)
 
 	var categories_scroll := ScrollContainer.new()
@@ -1134,7 +1185,7 @@ func _build_session_menu() -> void:
 	_session_menu.name = "SessionMenu"
 	_session_menu.visible = false
 	_session_menu.size = Vector2(280, 264)
-	_session_menu.add_theme_stylebox_override("panel", StyleFactory.glass_panel(0.92, Tokens.alpha(Tokens.WHITE, 0.10), 1, 12))
+	_session_menu.add_theme_stylebox_override("panel", StyleFactory.elevated_panel(2, 0.94, 12))
 	add_child(_session_menu)
 
 	var column := VBoxContainer.new()
@@ -1333,7 +1384,7 @@ func _build_alt_tab_overlay() -> void:
 
 	var inner := Panel.new()
 	inner.custom_minimum_size = Vector2(420, 130)
-	inner.add_theme_stylebox_override("panel", StyleFactory.glass_panel(0.88, Tokens.alpha(Tokens.WHITE, 0.10), 1, 14))
+	inner.add_theme_stylebox_override("panel", StyleFactory.elevated_panel(1, 0.92, 14))
 	center.add_child(inner)
 
 	_alt_tab_content = HBoxContainer.new()
@@ -1351,7 +1402,7 @@ func _build_notification_history_panel() -> void:
 	_notification_history_panel.name = "NotificationHistory"
 	_notification_history_panel.visible = false
 	_notification_history_panel.size = Vector2(352, 320)
-	_notification_history_panel.add_theme_stylebox_override("panel", StyleFactory.glass_panel(0.92, Tokens.alpha(Tokens.WHITE, 0.10), 1, 12))
+	_notification_history_panel.add_theme_stylebox_override("panel", StyleFactory.elevated_panel(2, 0.94, 12))
 	add_child(_notification_history_panel)
 
 	var column := VBoxContainer.new()
@@ -2134,14 +2185,38 @@ func _category_icon(category_name: String) -> Texture2D:
 		_:
 			return _start_menu_icon("placeholder")
 
+func _user_avatar_icon(username: String) -> Texture2D:
+	if _fs == null:
+		return _start_menu_icon("user")
+	var cache_key := "avatar::" + username
+	if _avatar_icon_cache.has(cache_key):
+		var cached: Variant = _avatar_icon_cache[cache_key]
+		if cached is Texture2D:
+			return cached as Texture2D
+	var texture: Texture2D = null
+	if _fs.has_method("get_user_avatar"):
+		var avatar: Variant = _fs.get_user_avatar(username)
+		if avatar is Dictionary:
+			var avatar_dict: Dictionary = avatar
+			var avatar_type := str(avatar_dict.get("type", "initials"))
+			var avatar_value := str(avatar_dict.get("value", "")).strip_edges()
+			if avatar_type == "asset" and avatar_value.begins_with("res://"):
+				var loaded := load(avatar_value)
+				if loaded is Texture2D:
+					texture = loaded as Texture2D
+	if texture == null:
+		texture = _start_menu_icon("user")
+	_avatar_icon_cache[cache_key] = texture
+	return texture
+
 func _open_account_settings() -> void:
 	_hide_launcher()
-	launch_app("system")
+	launch_app("accounts")
 	notify({
-		"title": "Account",
-		"body": "Open System > Account details to manage profile and password.",
+		"title": "Account Center",
+		"body": "Manage accounts, passwords, and profile pictures.",
 		"level": "info",
-		"app_id": "system"
+		"app_id": "accounts"
 	})
 
 func _power_action(action: String) -> void:
@@ -2152,7 +2227,7 @@ func _power_action(action: String) -> void:
 		"reboot":
 			_close_all_windows()
 			_session_active = false
-			_show_auth_screen("login", "System rebooted")
+			_begin_boot_sequence("show_auth", "login", "System rebooted")
 			_queue_state_save()
 		"lock":
 			lock_session()
@@ -2230,9 +2305,11 @@ func _update_launcher_selection_visuals() -> void:
 		if not is_instance_valid(button):
 			continue
 		if app_id == _launcher_selected_app_id:
-			button.add_theme_stylebox_override("normal", _style(Tokens.SURFACE_HOVER, Tokens.FOCUS, 1, 6))
+			button.add_theme_stylebox_override("normal", StyleFactory.button_selected(8))
+			button.add_theme_color_override("font_color", Tokens.TEXT)
 		else:
-			button.add_theme_stylebox_override("normal", _style(Tokens.SURFACE, Tokens.BORDER, 1, 6))
+			button.add_theme_stylebox_override("normal", StyleFactory.list_row("normal", 8))
+			button.add_theme_color_override("font_color", Tokens.MUTED)
 
 func _launcher_select_relative(delta: int) -> void:
 	var ids: Array[String] = []
@@ -2457,10 +2534,10 @@ func _update_task_button(app_id: String, active: bool) -> void:
 	if not is_instance_valid(button):
 		return
 	if active:
-		button.add_theme_stylebox_override("normal", _style(Tokens.SURFACE_HOVER, Tokens.FOCUS, 1, 6))
+		button.add_theme_stylebox_override("normal", StyleFactory.button_selected(8))
 		button.add_theme_color_override("font_color", Tokens.TEXT)
 	else:
-		button.add_theme_stylebox_override("normal", _style(Tokens.SURFACE, Tokens.BORDER, 1, 6))
+		button.add_theme_stylebox_override("normal", StyleFactory.icon_button_normal(8))
 		button.add_theme_color_override("font_color", Tokens.MUTED)
 
 func _update_taskbar_indicators() -> void:
@@ -2669,7 +2746,142 @@ func logout_session() -> void:
 	_show_auth_screen("login", "Signed out")
 	_queue_state_save()
 
+func _route_after_boot() -> void:
+	if _boot_next_action == "show_desktop" and _session_active:
+		_hide_auth_screen()
+		_hide_desktop_context_menu()
+		if _launcher:
+			_launcher.visible = false
+		if _session_menu:
+			_session_menu.visible = false
+		if _notification_history_panel:
+			_notification_history_panel.visible = false
+		return
+	_show_auth_screen(_boot_target_auth_mode, _boot_target_auth_message)
+
+func _begin_boot_sequence(next_action: String = "show_auth", auth_mode: String = "login", auth_message := "") -> void:
+	_boot_next_action = next_action
+	_boot_target_auth_mode = auth_mode
+	_boot_target_auth_message = auth_message
+	_hide_auth_screen()
+	_hide_boot_sequence()
+	if DisplayServer.get_name() == "headless" or _should_skip_boot_splash():
+		_route_after_boot()
+		return
+	_boot_sequence_active = true
+	_hide_desktop_context_menu()
+	if _launcher:
+		_launcher.visible = false
+	if _session_menu:
+		_session_menu.visible = false
+	if _notification_history_panel:
+		_notification_history_panel.visible = false
+
+	_boot_overlay = Control.new()
+	_boot_overlay.name = "BootOverlay"
+	_boot_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_boot_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_boot_overlay.focus_mode = Control.FOCUS_ALL
+	_boot_overlay.gui_input.connect(_on_boot_overlay_gui_input)
+	add_child(_boot_overlay)
+	_boot_overlay.move_to_front()
+
+	var backdrop := ColorRect.new()
+	backdrop.color = Color("080a0f")
+	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_boot_overlay.add_child(backdrop)
+
+	var stream := load(BOOT_SPLASH_VIDEO_PATH) as VideoStream
+	if stream != null:
+		_boot_video_player = VideoStreamPlayer.new()
+		_boot_video_player.name = "BootVideo"
+		_boot_video_player.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_boot_video_player.expand = true
+		_boot_video_player.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_boot_video_player.stream = stream
+		_boot_video_player.finished.connect(_finish_boot_sequence)
+		_boot_overlay.add_child(_boot_video_player)
+		_boot_video_player.play()
+	else:
+		push_warning("HermesOS boot splash video not found at %s" % BOOT_SPLASH_VIDEO_PATH)
+
+	var vignette := ColorRect.new()
+	vignette.color = Color(0.02, 0.03, 0.05, 0.34)
+	vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_boot_overlay.add_child(vignette)
+
+	var safe_area := MarginContainer.new()
+	safe_area.set_anchors_preset(Control.PRESET_FULL_RECT)
+	safe_area.add_theme_constant_override("margin_left", 28)
+	safe_area.add_theme_constant_override("margin_right", 28)
+	safe_area.add_theme_constant_override("margin_top", 28)
+	safe_area.add_theme_constant_override("margin_bottom", 28)
+	_boot_overlay.add_child(safe_area)
+
+	var frame := VBoxContainer.new()
+	frame.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	frame.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	frame.alignment = BoxContainer.ALIGNMENT_END
+	frame.add_theme_constant_override("separation", 14)
+	safe_area.add_child(frame)
+
+	var boot_card := Panel.new()
+	boot_card.custom_minimum_size = Vector2(460, 0)
+	boot_card.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	boot_card.add_theme_stylebox_override("panel", StyleFactory.glass_panel(0.86, Tokens.alpha(Tokens.WHITE, 0.12), 1, 18))
+	frame.add_child(boot_card)
+
+	var boot_column := VBoxContainer.new()
+	boot_column.set_anchors_preset(Control.PRESET_FULL_RECT)
+	boot_column.offset_left = 20
+	boot_column.offset_right = -20
+	boot_column.offset_top = 18
+	boot_column.offset_bottom = -18
+	boot_column.add_theme_constant_override("separation", 8)
+	boot_card.add_child(boot_column)
+
+	boot_column.add_child(_label("HermesOS", 24, Tokens.TEXT))
+	boot_column.add_child(_label("Booting native shell services", 13, Tokens.MUTED))
+	boot_column.add_child(_label("Press any key or click to continue", 12, Tokens.alpha(Tokens.TEXT, 0.78)))
+
+	_boot_finish_timer = Timer.new()
+	_boot_finish_timer.one_shot = true
+	_boot_finish_timer.wait_time = BOOT_SPLASH_DURATION if stream != null else BOOT_SPLASH_FALLBACK_DURATION
+	_boot_finish_timer.timeout.connect(_finish_boot_sequence)
+	_boot_overlay.add_child(_boot_finish_timer)
+	_boot_finish_timer.start()
+	_boot_overlay.grab_focus()
+
+func _on_boot_overlay_gui_input(event: InputEvent) -> void:
+	if not _boot_sequence_active:
+		return
+	if event is InputEventMouseButton:
+		var mouse_event := event as InputEventMouseButton
+		if mouse_event.pressed:
+			_finish_boot_sequence()
+			get_viewport().set_input_as_handled()
+
+func _finish_boot_sequence() -> void:
+	if not _boot_sequence_active and _boot_overlay == null:
+		return
+	_hide_boot_sequence()
+	_route_after_boot()
+
+func _hide_boot_sequence() -> void:
+	_boot_sequence_active = false
+	if _boot_finish_timer and is_instance_valid(_boot_finish_timer):
+		_boot_finish_timer.stop()
+	if _boot_video_player and is_instance_valid(_boot_video_player):
+		_boot_video_player.stop()
+	if _boot_overlay and is_instance_valid(_boot_overlay):
+		_boot_overlay.queue_free()
+	_boot_overlay = null
+	_boot_video_player = null
+	_boot_finish_timer = null
+
 func _show_auth_screen(mode: String, message := "") -> void:
+	_hide_boot_sequence()
 	_hide_auth_screen()
 	_hide_desktop_context_menu()
 	if _launcher:
@@ -2687,7 +2899,7 @@ func _show_auth_screen(mode: String, message := "") -> void:
 	_auth_overlay.move_to_front()
 
 	var dim := ColorRect.new()
-	dim.color = Color(0.04, 0.045, 0.055, 0.94)
+	dim.color = Color(0.035, 0.04, 0.05, 0.95)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_auth_overlay.add_child(dim)
 
@@ -2700,28 +2912,28 @@ func _show_auth_screen(mode: String, message := "") -> void:
 	_auth_overlay.add_child(center)
 
 	var card := Panel.new()
-	card.custom_minimum_size = Vector2(440, 430)
-	card.add_theme_stylebox_override("panel", StyleFactory.glass_panel(0.90, Tokens.alpha(Tokens.WHITE, 0.12), 1, 14))
+	card.custom_minimum_size = Vector2(860, 520)
+	card.add_theme_stylebox_override("panel", StyleFactory.elevated_panel(3, 0.96, 14))
 	center.add_child(card)
 	if DisplayServer.get_name() != "headless":
 		var animator := UIAnimator.new()
 		animator.scale_in(card, Tokens.TIME["slow"])
 
-	var column := VBoxContainer.new()
-	column.set_anchors_preset(Control.PRESET_FULL_RECT)
-	column.offset_left = 22
-	column.offset_right = -22
-	column.offset_top = 22
-	column.offset_bottom = -22
-	column.add_theme_constant_override("separation", 10)
-	card.add_child(column)
+	var root := VBoxContainer.new()
+	root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	root.offset_left = 18
+	root.offset_right = -18
+	root.offset_top = 18
+	root.offset_bottom = -18
+	root.add_theme_constant_override("separation", 12)
+	card.add_child(root)
 
 	var title_text := "Sign in"
 	if mode == "locked":
 		title_text = "Session locked"
 	elif mode == "switch":
 		title_text = "Switch user"
-	column.add_child(_label(title_text, 22, Tokens.TEXT))
+	root.add_child(_label(title_text, 22, Tokens.TEXT))
 
 	var subtitle := _label("Choose an account and enter its password.", 13, Tokens.MUTED)
 	if mode == "login":
@@ -2730,59 +2942,164 @@ func _show_auth_screen(mode: String, message := "") -> void:
 		subtitle.text = "Unlock the current session, or sign in as another user."
 	elif mode == "switch":
 		subtitle.text = "Sign in as another user. Switching users closes the current user's app windows."
-	column.add_child(subtitle)
+	root.add_child(subtitle)
+
+	var split := HSplitContainer.new()
+	split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	split.split_offset = 320
+	root.add_child(split)
+
+	var left := VBoxContainer.new()
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	left.add_theme_constant_override("separation", 8)
+	split.add_child(left)
+
+	left.add_child(_label("Accounts", 14, Tokens.TEXT))
+	left.add_child(_label("Visible login profiles", 12, Tokens.MUTED))
 
 	var users := ItemList.new()
-	users.custom_minimum_size = Vector2(0, 120)
+	users.name = "AuthUsersList"
+	users.custom_minimum_size = Vector2(0, 260)
 	users.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	users.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	users.select_mode = ItemList.SELECT_SINGLE
 	_style_item_list(users)
-	column.add_child(users)
+	left.add_child(users)
 
-	for username in _fs.get_users():
-		users.add_item(username + "  " + _fs.home_path(username))
-		users.set_item_metadata(users.item_count - 1, username)
+	var right := VBoxContainer.new()
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	right.add_theme_constant_override("separation", 10)
+	split.add_child(right)
+
+	var selected_avatar := TextureRect.new()
+	selected_avatar.name = "AuthSelectedAvatar"
+	selected_avatar.custom_minimum_size = Vector2(72, 72)
+	selected_avatar.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	selected_avatar.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	right.add_child(selected_avatar)
+
+	var selected_name := _label("No account selected", 18, Tokens.TEXT)
+	selected_name.name = "AuthSelectedName"
+	right.add_child(selected_name)
+
+	var selected_username := _label("", 12, Tokens.MUTED)
+	selected_username.name = "AuthSelectedUsername"
+	right.add_child(selected_username)
+
+	var selected_home := _label("", 11, Tokens.MUTED)
+	selected_home.name = "AuthSelectedHome"
+	right.add_child(selected_home)
+
+	var selected_state := _label("", 11, Tokens.MUTED)
+	selected_state.name = "AuthSelectedState"
+	right.add_child(selected_state)
 
 	var username_input := LineEdit.new()
 	username_input.placeholder_text = "username"
-	username_input.text = _fs.current_user()
+	username_input.editable = false
 	_style_line_edit(username_input)
-	column.add_child(username_input)
-
-	for index in users.item_count:
-		if str(users.get_item_metadata(index)) == _fs.current_user():
-			users.select(index)
-			break
+	right.add_child(username_input)
 
 	var password_input := LineEdit.new()
 	password_input.placeholder_text = "password"
 	password_input.secret = true
 	_style_line_edit(password_input)
-	column.add_child(password_input)
+	right.add_child(password_input)
 
 	var status := _label(message, 12, Tokens.MUTED)
-	column.add_child(status)
+	right.add_child(status)
 
 	var buttons := HFlowContainer.new()
 	buttons.add_theme_constant_override("separation", 8)
 	buttons.add_theme_constant_override("h_separation", 8)
 	buttons.add_theme_constant_override("v_separation", 8)
-	column.add_child(buttons)
+	right.add_child(buttons)
 
-	var sign_in_button := _button("Sign in", Vector2(110, 36))
+	var sign_in_button := _button("Sign in", Vector2(120, 36))
 	buttons.add_child(sign_in_button)
 
 	if mode == "switch" and _session_active:
-		var cancel_button := _button("Cancel", Vector2(90, 36))
+		var cancel_button := _button("Cancel", Vector2(96, 36))
 		cancel_button.pressed.connect(_hide_auth_screen)
 		buttons.add_child(cancel_button)
 
 	if mode != "login":
-		var logout_button := _button("Log out", Vector2(90, 36))
+		var logout_button := _button("Log out", Vector2(96, 36))
 		logout_button.pressed.connect(logout_session)
 		buttons.add_child(logout_button)
 
+	var login_users: Array = []
+	if _fs.has_method("list_login_users"):
+		login_users = _fs.list_login_users()
+	else:
+		for fallback_username in _fs.get_users():
+			if fallback_username == "root":
+				continue
+			login_users.append({
+				"username": fallback_username,
+				"display_name": fallback_username,
+				"home": _fs.home_path(fallback_username),
+				"locked": false
+			})
+
+	var account_by_username: Dictionary = {}
+	for account_item in login_users:
+		if not (account_item is Dictionary):
+			continue
+		var account_dict: Dictionary = account_item
+		var username_text := str(account_dict.get("username", "")).strip_edges()
+		if username_text == "":
+			continue
+		account_by_username[username_text] = account_dict.duplicate(true)
+		var display_name := str(account_dict.get("display_name", username_text)).strip_edges()
+		var home_path := str(account_dict.get("home", _fs.home_path(username_text))).strip_edges()
+		users.add_item("%s  @%s\n%s" % [display_name, username_text, home_path])
+		users.set_item_metadata(users.item_count - 1, username_text)
+		var avatar_icon := _user_avatar_icon(username_text)
+		if avatar_icon != null:
+			users.set_item_icon(users.item_count - 1, avatar_icon)
+
+	if users.item_count == 0:
+		_set_status(status, "No login-visible accounts found. Create an account first.", true)
+		sign_in_button.disabled = true
+		password_input.editable = false
+		selected_name.text = "No login accounts"
+		selected_username.text = ""
+		selected_home.text = ""
+		selected_state.text = ""
+		selected_avatar.texture = _start_menu_icon("user")
+
+	var update_selected := func(selected_user: String) -> void:
+		var username_text := selected_user.strip_edges()
+		if username_text == "":
+			return
+		username_input.text = username_text
+		var account: Dictionary = account_by_username.get(username_text, {})
+		var display_name := str(account.get("display_name", username_text)).strip_edges()
+		var home_path := str(account.get("home", _fs.home_path(username_text))).strip_edges()
+		var locked := bool(account.get("locked", false))
+		selected_name.text = display_name
+		selected_username.text = "@" + username_text
+		selected_home.text = home_path
+		selected_state.text = "Locked account" if locked else "Ready to sign in"
+		selected_state.modulate = Tokens.WARNING if locked else Tokens.MUTED
+		selected_avatar.texture = _user_avatar_icon(username_text)
+
+	for index in users.item_count:
+		if str(users.get_item_metadata(index)) == _fs.current_user():
+			users.select(index)
+			update_selected.call(str(users.get_item_metadata(index)))
+			break
+	if users.get_selected_items().is_empty() and users.item_count > 0:
+		users.select(0)
+		update_selected.call(str(users.get_item_metadata(0)))
+
 	users.item_selected.connect(func(index: int) -> void:
-		username_input.text = str(users.get_item_metadata(index))
+		var selected_user := str(users.get_item_metadata(index))
+		update_selected.call(selected_user)
 		password_input.grab_focus()
 	)
 
@@ -3169,6 +3486,12 @@ func _build_system_app() -> Control:
 	system_app.name = "SystemSettingsApp"
 	system_app.os_app_init({"shell": self, "filesystem": _fs})
 	return system_app
+
+func _build_account_center_app() -> Control:
+	var account_app := AccountCenterApp.new()
+	account_app.name = "AccountCenterApp"
+	account_app.os_app_init({"shell": self, "filesystem": _fs})
+	return account_app
 
 func _apps_text() -> String:
 	var lines: Array[String] = []
@@ -3713,6 +4036,9 @@ func _button(text_value: String, min_size: Vector2) -> Button:
 	button.text = text_value
 	button.custom_minimum_size = min_size
 	button.add_theme_color_override("font_color", Tokens.TEXT)
+	button.add_theme_color_override("font_hover_color", Tokens.TEXT)
+	button.add_theme_color_override("font_pressed_color", Tokens.TEXT)
+	button.add_theme_color_override("font_disabled_color", Tokens.TEXT_DISABLED)
 	button.add_theme_stylebox_override("normal", StyleFactory.button_normal(8))
 	button.add_theme_stylebox_override("hover", StyleFactory.button_hover(8))
 	button.add_theme_stylebox_override("pressed", StyleFactory.button_pressed(8))
@@ -3751,10 +4077,10 @@ func _icon_button(icon_name: String, min_size: Vector2) -> Button:
 	button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	button.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
 	button.add_theme_color_override("font_color", Tokens.TEXT)
-	button.add_theme_stylebox_override("normal", StyleFactory.build(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 8))
-	button.add_theme_stylebox_override("hover", StyleFactory.build(Tokens.alpha(Tokens.WHITE, 0.08), Color(0, 0, 0, 0), 0, 8))
-	button.add_theme_stylebox_override("pressed", StyleFactory.build(Tokens.alpha(Tokens.WHITE, 0.12), Color(0, 0, 0, 0), 0, 8))
-	button.add_theme_stylebox_override("focus", StyleFactory.build(Color(0, 0, 0, 0), Tokens.FOCUS, 2, 8))
+	button.add_theme_stylebox_override("normal", StyleFactory.icon_button_normal(8))
+	button.add_theme_stylebox_override("hover", StyleFactory.icon_button_hover(8))
+	button.add_theme_stylebox_override("pressed", StyleFactory.icon_button_pressed(8))
+	button.add_theme_stylebox_override("focus", StyleFactory.icon_button_focus(8))
 	# Smooth hover scale (disabled in headless)
 	if DisplayServer.get_name() != "headless":
 		button.mouse_entered.connect(func() -> void:

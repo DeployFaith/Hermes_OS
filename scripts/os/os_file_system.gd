@@ -5,6 +5,20 @@ const SAVE_PATH := "user://hermes_os_files.json"
 const ROOT_USER := "root"
 const DEFAULT_USERNAME := "user"
 const DEFAULT_UID := 1000
+const BUILTIN_AVATARS: Array[String] = [
+	"res://assets/avatars/avatar_01.svg",
+	"res://assets/avatars/avatar_02.svg",
+	"res://assets/avatars/avatar_03.svg",
+	"res://assets/avatars/avatar_04.svg",
+	"res://assets/avatars/avatar_05.svg",
+	"res://assets/avatars/avatar_06.svg",
+	"res://assets/avatars/avatar_07.svg",
+	"res://assets/avatars/avatar_08.svg",
+	"res://assets/avatars/avatar_09.svg",
+	"res://assets/avatars/avatar_10.svg",
+	"res://assets/avatars/avatar_11.svg",
+	"res://assets/avatars/avatar_12.svg"
+]
 
 var _state: Dictionary = {}
 var _tree: Dictionary = {}
@@ -87,6 +101,10 @@ func authenticate_user(username: String, password: String) -> Dictionary:
 		return {"ok": false, "error": "Unknown user"}
 	var users: Dictionary = _state.get("users", {})
 	var account: Dictionary = users[clean]
+	if bool(account.get("locked", false)):
+		return {"ok": false, "error": "Account is locked"}
+	if clean == ROOT_USER and not bool(account.get("login_visible", false)):
+		return {"ok": false, "error": "Account is not available for login"}
 	var expected := str(account.get("password_hash", _password_hash("")))
 	if expected != _password_hash(password):
 		return {"ok": false, "error": "Incorrect password"}
@@ -122,32 +140,7 @@ func user_exists(username: String) -> bool:
 	return users.has(username)
 
 func add_user(username: String) -> String:
-	if current_user() != ROOT_USER:
-		return "Permission denied: useradd requires root"
-	var clean := clean_username(username)
-	if clean == "":
-		return "Username must contain only letters, numbers, '_' or '-'"
-	if user_exists(clean):
-		return "User already exists: " + clean
-	var users: Dictionary = _state.get("users", {})
-	var next_uid := DEFAULT_UID
-	for key in users.keys():
-		var account: Dictionary = users[key]
-		next_uid = maxi(next_uid, int(account.get("uid", DEFAULT_UID)) + 1)
-	users[clean] = {
-		"uid": next_uid,
-		"gid": next_uid,
-		"group": clean,
-		"home": "/home/" + clean,
-		"shell": "/bin/sh",
-		"groups": [clean],
-		"password_hash": _password_hash("")
-	}
-	_state["users"] = users
-	_force_dir("/home/" + clean, clean, clean, "0755")
-	_sync_system_files()
-	save()
-	return ""
+	return create_user_account(username, username, "")
 
 func get_users() -> Array[String]:
 	var users: Dictionary = _state.get("users", {})
@@ -156,6 +149,307 @@ func get_users() -> Array[String]:
 		result.append(str(key))
 	result.sort()
 	return result
+
+func list_builtin_avatars() -> Array[String]:
+	return BUILTIN_AVATARS.duplicate()
+
+func list_login_users() -> Array[Dictionary]:
+	var users: Dictionary = _state.get("users", {})
+	var output: Array[Dictionary] = []
+	for username in get_users():
+		if username == ROOT_USER:
+			continue
+		if not users.has(username):
+			continue
+		var account: Dictionary = users[username]
+		if not bool(account.get("login_visible", true)):
+			continue
+		output.append({
+			"username": username,
+			"display_name": str(account.get("display_name", username)),
+			"home": str(account.get("home", "/home/" + username)),
+			"locked": bool(account.get("locked", false)),
+			"login_visible": true,
+			"avatar": get_user_avatar(username)
+		})
+	return output
+
+func create_user_account(username: String, display_name: String, password: String) -> String:
+	if current_user() != ROOT_USER:
+		return "Permission denied: creating accounts requires root"
+	var clean := clean_username(username)
+	if clean == "":
+		return "Username must contain only letters, numbers, '_' or '-'"
+	if clean == ROOT_USER:
+		return "Cannot create another root account"
+	if user_exists(clean):
+		return "User already exists: " + clean
+	var users: Dictionary = _state.get("users", {})
+	var next_uid := DEFAULT_UID
+	for key in users.keys():
+		var account_scan: Dictionary = users[key]
+		next_uid = maxi(next_uid, int(account_scan.get("uid", DEFAULT_UID)) + 1)
+	var final_display := display_name.strip_edges()
+	if final_display == "":
+		final_display = clean
+	users[clean] = {
+		"uid": next_uid,
+		"gid": next_uid,
+		"group": clean,
+		"home": "/home/" + clean,
+		"shell": "/bin/sh",
+		"groups": [clean],
+		"password_hash": _password_hash(password),
+		"display_name": final_display,
+		"login_visible": true,
+		"locked": false,
+		"created_at": Time.get_unix_time_from_system(),
+		"avatar_type": "initials",
+		"avatar_value": ""
+	}
+	_state["users"] = users
+	_force_dir("/home/" + clean, clean, clean, "0755")
+	_sync_system_files()
+	save()
+	return ""
+
+func delete_user_account(username: String, remove_home := false) -> String:
+	if current_user() != ROOT_USER:
+		return "Permission denied: deleting accounts requires root"
+	var clean := clean_username(username)
+	if clean == "" or not user_exists(clean):
+		return "Unknown user: " + username
+	if clean == ROOT_USER:
+		return "Cannot delete root"
+	if clean == current_user():
+		return "Cannot delete currently active user"
+	var users: Dictionary = _state.get("users", {})
+	users.erase(clean)
+	_state["users"] = users
+	if bool(remove_home):
+		var previous_user := current_user()
+		_state["current_user"] = ROOT_USER
+		delete_path("/home/" + clean)
+		_state["current_user"] = previous_user
+	_sync_system_files()
+	save()
+	return ""
+
+func rename_user_account(old_username: String, new_username: String) -> String:
+	if current_user() != ROOT_USER:
+		return "Permission denied: renaming accounts requires root"
+	var source := clean_username(old_username)
+	var target := clean_username(new_username)
+	if source == "" or not user_exists(source):
+		return "Unknown user: " + old_username
+	if target == "":
+		return "Username must contain only letters, numbers, '_' or '-'"
+	if source == ROOT_USER:
+		return "Cannot rename root"
+	if source == current_user():
+		return "Cannot rename currently active user"
+	if source == target:
+		return ""
+	if user_exists(target):
+		return "User already exists: " + target
+	var users: Dictionary = _state.get("users", {})
+	var account: Dictionary = users[source]
+	users.erase(source)
+	account["group"] = target
+	account["home"] = "/home/" + target
+	account["groups"] = [target]
+	if str(account.get("display_name", "")).strip_edges() == "" or str(account.get("display_name", "")) == source:
+		account["display_name"] = target
+	if str(account.get("avatar_type", "initials")) == "custom_file":
+		var avatar_path := str(account.get("avatar_value", ""))
+		if avatar_path == "/home/%s/.config/hermesos/avatar.png" % source:
+			account["avatar_value"] = "/home/%s/.config/hermesos/avatar.png" % target
+	users[target] = account
+	_state["users"] = users
+	var previous_user := current_user()
+	_state["current_user"] = ROOT_USER
+	var source_home := "/home/" + source
+	var target_home := "/home/" + target
+	if exists(source_home):
+		var move_error := move_path(source_home, target_home)
+		if move_error != "":
+			_state["current_user"] = previous_user
+			return move_error
+		var home_node := get_node_at(target_home)
+		if not home_node.is_empty():
+			_reassign_node_owner_recursive(home_node, target, target)
+	_state["current_user"] = previous_user
+	_sync_system_files()
+	save()
+	return ""
+
+func duplicate_user_account(source_username: String, target_username: String, display_name := "") -> String:
+	if current_user() != ROOT_USER:
+		return "Permission denied: duplicating accounts requires root"
+	var source := clean_username(source_username)
+	var target := clean_username(target_username)
+	if source == "" or not user_exists(source):
+		return "Unknown user: " + source_username
+	if source == ROOT_USER:
+		return "Cannot duplicate root"
+	if target == "":
+		return "Username must contain only letters, numbers, '_' or '-'"
+	if user_exists(target):
+		return "User already exists: " + target
+	var users: Dictionary = _state.get("users", {})
+	var source_account: Dictionary = users[source]
+	var create_error := create_user_account(target, display_name, "")
+	if create_error != "":
+		return create_error
+	users = _state.get("users", {})
+	var target_account: Dictionary = users[target]
+	target_account["locked"] = bool(source_account.get("locked", false))
+	target_account["login_visible"] = bool(source_account.get("login_visible", true))
+	target_account["avatar_type"] = str(source_account.get("avatar_type", "initials"))
+	target_account["avatar_value"] = str(source_account.get("avatar_value", ""))
+	target_account["password_hash"] = str(source_account.get("password_hash", _password_hash("")))
+	if str(display_name).strip_edges() == "":
+		target_account["display_name"] = "%s (copy)" % str(source_account.get("display_name", source))
+	users[target] = target_account
+	_state["users"] = users
+	var previous_user := current_user()
+	_state["current_user"] = ROOT_USER
+	var source_home := "/home/" + source
+	var target_home := "/home/" + target
+	if exists(source_home):
+		if exists(target_home):
+			delete_path(target_home)
+		var copy_error := copy_path(source_home, target_home)
+		if copy_error != "":
+			_state["current_user"] = previous_user
+			return copy_error
+		var copied_home := get_node_at(target_home)
+		if not copied_home.is_empty():
+			_reassign_node_owner_recursive(copied_home, target, target)
+	_state["current_user"] = previous_user
+	_sync_system_files()
+	save()
+	return ""
+
+func set_user_display_name(username: String, display_name: String) -> String:
+	var clean := clean_username(username)
+	if clean == "" or not user_exists(clean):
+		return "Unknown user: " + username
+	if current_user() != ROOT_USER and clean != current_user():
+		return "Permission denied: can only edit your own profile"
+	var users: Dictionary = _state.get("users", {})
+	var account: Dictionary = users[clean]
+	var value := display_name.strip_edges()
+	if value == "":
+		value = clean
+	account["display_name"] = value
+	users[clean] = account
+	_state["users"] = users
+	save()
+	return ""
+
+func set_user_login_visible(username: String, visible: bool) -> String:
+	if current_user() != ROOT_USER:
+		return "Permission denied: changing login visibility requires root"
+	var clean := clean_username(username)
+	if clean == "" or not user_exists(clean):
+		return "Unknown user: " + username
+	if clean == ROOT_USER:
+		return "Cannot change root login visibility"
+	var users: Dictionary = _state.get("users", {})
+	var account: Dictionary = users[clean]
+	account["login_visible"] = visible
+	users[clean] = account
+	_state["users"] = users
+	save()
+	return ""
+
+func set_user_locked(username: String, locked: bool) -> String:
+	if current_user() != ROOT_USER:
+		return "Permission denied: locking accounts requires root"
+	var clean := clean_username(username)
+	if clean == "" or not user_exists(clean):
+		return "Unknown user: " + username
+	if clean == ROOT_USER:
+		return "Cannot lock root"
+	var users: Dictionary = _state.get("users", {})
+	var account: Dictionary = users[clean]
+	account["locked"] = locked
+	users[clean] = account
+	_state["users"] = users
+	save()
+	return ""
+
+func get_user_avatar(username: String) -> Dictionary:
+	var clean := clean_username(username)
+	if clean == "" or not user_exists(clean):
+		return {"type": "initials", "value": ""}
+	var users: Dictionary = _state.get("users", {})
+	var account: Dictionary = users[clean]
+	var avatar_type := str(account.get("avatar_type", "initials")).strip_edges()
+	var avatar_value := str(account.get("avatar_value", "")).strip_edges()
+	if avatar_type == "asset" and not BUILTIN_AVATARS.has(avatar_value):
+		avatar_type = "initials"
+		avatar_value = ""
+	if avatar_type == "custom_file" and avatar_value != "" and not exists(avatar_value):
+		avatar_type = "initials"
+		avatar_value = ""
+	if avatar_type == "":
+		avatar_type = "initials"
+	return {"type": avatar_type, "value": avatar_value}
+
+func set_user_avatar_asset(username: String, asset_path: String) -> String:
+	var clean := clean_username(username)
+	if clean == "" or not user_exists(clean):
+		return "Unknown user: " + username
+	if current_user() != ROOT_USER and clean != current_user():
+		return "Permission denied: can only edit your own profile"
+	var value := asset_path.strip_edges()
+	if not BUILTIN_AVATARS.has(value):
+		return "Unknown avatar asset"
+	var users: Dictionary = _state.get("users", {})
+	var account: Dictionary = users[clean]
+	account["avatar_type"] = "asset"
+	account["avatar_value"] = value
+	users[clean] = account
+	_state["users"] = users
+	save()
+	return ""
+
+func set_user_avatar_file(username: String, file_path: String) -> String:
+	var clean := clean_username(username)
+	if clean == "" or not user_exists(clean):
+		return "Unknown user: " + username
+	if current_user() != ROOT_USER and clean != current_user():
+		return "Permission denied: can only edit your own profile"
+	var normalized := normalize_path(file_path)
+	if not exists(normalized) or not is_file(normalized):
+		return "Avatar file not found: " + normalized
+	if not _is_supported_avatar_path(normalized):
+		return "Unsupported avatar format. Use png, jpg, jpeg, webp, or svg"
+	var users: Dictionary = _state.get("users", {})
+	var account: Dictionary = users[clean]
+	account["avatar_type"] = "custom_file"
+	account["avatar_value"] = normalized
+	users[clean] = account
+	_state["users"] = users
+	save()
+	return ""
+
+func clear_user_avatar(username: String) -> String:
+	var clean := clean_username(username)
+	if clean == "" or not user_exists(clean):
+		return "Unknown user: " + username
+	if current_user() != ROOT_USER and clean != current_user():
+		return "Permission denied: can only edit your own profile"
+	var users: Dictionary = _state.get("users", {})
+	var account: Dictionary = users[clean]
+	account["avatar_type"] = "initials"
+	account["avatar_value"] = ""
+	users[clean] = account
+	_state["users"] = users
+	save()
+	return ""
 
 func home_path(username := "") -> String:
 	var target := username if username != "" else current_user()
@@ -607,8 +901,8 @@ func _empty_state() -> Dictionary:
 		"tree": _dir_node(ROOT_USER, ROOT_USER, "0755")
 	}
 	state["users"] = {
-		ROOT_USER: {"uid": 0, "gid": 0, "group": ROOT_USER, "home": "/root", "shell": "/bin/sh", "groups": [ROOT_USER], "password_hash": _password_hash("")},
-		DEFAULT_USERNAME: {"uid": DEFAULT_UID, "gid": DEFAULT_UID, "group": DEFAULT_USERNAME, "home": "/home/" + DEFAULT_USERNAME, "shell": "/bin/sh", "groups": [DEFAULT_USERNAME], "password_hash": _password_hash("")}
+		ROOT_USER: _default_account_record(ROOT_USER, 0, false),
+		DEFAULT_USERNAME: _default_account_record(DEFAULT_USERNAME, DEFAULT_UID, true)
 	}
 	return state
 
@@ -649,13 +943,12 @@ func _ensure_system_layout() -> void:
 		_state["users"] = _empty_state()["users"]
 	var users: Dictionary = _state["users"]
 	if not users.has(ROOT_USER):
-		users[ROOT_USER] = {"uid": 0, "gid": 0, "group": ROOT_USER, "home": "/root", "shell": "/bin/sh", "groups": [ROOT_USER], "password_hash": _password_hash("")}
+		users[ROOT_USER] = _default_account_record(ROOT_USER, 0, false)
 	if not users.has(DEFAULT_USERNAME):
-		users[DEFAULT_USERNAME] = {"uid": DEFAULT_UID, "gid": DEFAULT_UID, "group": DEFAULT_USERNAME, "home": "/home/" + DEFAULT_USERNAME, "shell": "/bin/sh", "groups": [DEFAULT_USERNAME], "password_hash": _password_hash("")}
+		users[DEFAULT_USERNAME] = _default_account_record(DEFAULT_USERNAME, DEFAULT_UID, true)
 	for key in users.keys():
 		var account: Dictionary = users[key]
-		if not account.has("password_hash"):
-			account["password_hash"] = _password_hash("")
+		_apply_account_defaults(account, str(key), int(account.get("uid", 0)))
 		users[key] = account
 	_state["users"] = users
 	_force_dir("/home", ROOT_USER, ROOT_USER, "0755")
@@ -733,6 +1026,72 @@ func _shadow_text() -> String:
 		var account: Dictionary = users[username]
 		lines.append("%s:%s:0:0:99999:7:::" % [username, str(account.get("password_hash", _password_hash("")))])
 	return "\n".join(lines) + "\n"
+
+func _default_account_record(username: String, uid: int, login_visible: bool) -> Dictionary:
+	var clean := clean_username(username)
+	if clean == "":
+		clean = DEFAULT_USERNAME
+	var root := clean == ROOT_USER
+	return {
+		"uid": 0 if root else uid,
+		"gid": 0 if root else uid,
+		"group": ROOT_USER if root else clean,
+		"home": "/root" if root else "/home/" + clean,
+		"shell": "/bin/sh",
+		"groups": [ROOT_USER] if root else [clean],
+		"password_hash": _password_hash(""),
+		"display_name": "Root" if root else clean,
+		"login_visible": false if root else login_visible,
+		"locked": false,
+		"created_at": Time.get_unix_time_from_system(),
+		"avatar_type": "initials",
+		"avatar_value": ""
+	}
+
+func _apply_account_defaults(account: Dictionary, username: String, uid_hint: int) -> void:
+	var root := username == ROOT_USER
+	if not account.has("uid"):
+		account["uid"] = 0 if root else uid_hint
+	if not account.has("gid"):
+		account["gid"] = 0 if root else int(account.get("uid", uid_hint))
+	if not account.has("group") or str(account.get("group", "")).strip_edges() == "":
+		account["group"] = ROOT_USER if root else username
+	if not account.has("home") or str(account.get("home", "")).strip_edges() == "":
+		account["home"] = "/root" if root else "/home/" + username
+	if not account.has("shell"):
+		account["shell"] = "/bin/sh"
+	if not account.has("groups") or not (account["groups"] is Array):
+		account["groups"] = [ROOT_USER] if root else [username]
+	if not account.has("password_hash"):
+		account["password_hash"] = _password_hash("")
+	if not account.has("display_name") or str(account.get("display_name", "")).strip_edges() == "":
+		account["display_name"] = "Root" if root else username
+	if not account.has("login_visible"):
+		account["login_visible"] = not root
+	if root:
+		account["login_visible"] = false
+	if not account.has("locked"):
+		account["locked"] = false
+	if not account.has("created_at"):
+		account["created_at"] = Time.get_unix_time_from_system()
+	if not account.has("avatar_type"):
+		account["avatar_type"] = "initials"
+	if not account.has("avatar_value"):
+		account["avatar_value"] = ""
+
+func _is_supported_avatar_path(path: String) -> bool:
+	var lower := path.to_lower()
+	return lower.ends_with(".png") or lower.ends_with(".jpg") or lower.ends_with(".jpeg") or lower.ends_with(".webp") or lower.ends_with(".svg")
+
+func _reassign_node_owner_recursive(node: Dictionary, owner: String, group: String) -> void:
+	node["owner"] = owner
+	node["group"] = group
+	if str(node.get("type", "")) != "dir":
+		return
+	var children: Dictionary = node.get("children", {})
+	for key in children.keys():
+		if children[key] is Dictionary:
+			_reassign_node_owner_recursive(children[key], owner, group)
 
 func _password_hash(password: String) -> String:
 	return password.sha256_text()
