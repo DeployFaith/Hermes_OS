@@ -19,6 +19,8 @@ const NotesApp = preload("res://scripts/apps/notes/notes_app.gd")
 const NotesAppManifest = preload("res://scripts/apps/notes/notes_app_manifest.gd")
 const SystemSettingsApp = preload("res://scripts/apps/system_settings/system_settings_app.gd")
 const SystemSettingsAppManifest = preload("res://scripts/apps/system_settings/system_settings_app_manifest.gd")
+const HermesChatApp = preload("res://scripts/apps/hermes_chat/hermes_chat_app.gd")
+const HermesChatAppManifest = preload("res://scripts/apps/hermes_chat/hermes_chat_app_manifest.gd")
 const HermesProtocol = preload("res://scripts/hermes/hermes_protocol.gd")
 const HermesAgentService = preload("res://scripts/os/agent/hermes_agent_service.gd")
 const AgentOperationRouter = preload("res://scripts/os/agent/agent_operation_router.gd")
@@ -786,6 +788,7 @@ func _register_apps() -> void:
 	_app_registry.register_app(TextEditorAppManifest.manifest(Callable(self, "_build_text_app")))
 	_app_registry.register_app({"id": &"browser", "title": "Browser", "name": "Browser", "description": "Web and local pages.", "subtitle": "Web and local pages", "keywords": "web internet", "category": "Internet", "pinned": true, "single_instance": true, "agent_visible": true, "agent_actions": ["browser.navigate", "browser.get_current_page"], "builder": Callable(self, "_build_browser_app")})
 	_app_registry.register_app(TerminalAppManifest.manifest(Callable(self, "_build_console_app")))
+	_app_registry.register_app(HermesChatAppManifest.manifest(Callable(self, "_build_hermes_chat_app")))
 	_app_registry.register_app(SystemSettingsAppManifest.manifest(Callable(self, "_build_system_app")))
 	# TODO(redesign): remove these compatibility mirrors once launcher/taskbar/app lifecycle fully read from AppRegistry.
 	_apps = _app_registry.export_legacy_apps()
@@ -2287,6 +2290,8 @@ func _default_window_size(app_id: String) -> Vector2:
 			return Vector2(860, 560)
 		"console":
 			return Vector2(680, 430)
+		"hermes_chat":
+			return Vector2(780, 540)
 		"system":
 			return Vector2(860, 620)
 		_:
@@ -2982,6 +2987,22 @@ func _build_console_app() -> Control:
 	_terminal_sessions[session_id] = state
 	terminal.os_app_init({"shell": self, "filesystem": _fs, "state": state, "session_id": session_id})
 	return terminal
+
+func _build_hermes_chat_app() -> Control:
+	var chat := HermesChatApp.new()
+	chat.name = "HermesChatApp"
+	chat.os_app_init({
+		"app_id": "hermes_chat",
+		"shell": self,
+		"filesystem": _fs,
+		"event_bus": _event_bus,
+		"window_manager": _window_manager,
+		"app_registry": _app_registry,
+		"notification_center": _notification_center,
+		"agent_service": _hermes_agent_service
+	})
+	chat.set_meta("window_min_size", Vector2(640, 420))
+	return chat
 
 func _build_browser_app() -> Control:
 	var browser := BrowserApp.new()
