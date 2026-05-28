@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR="~/Nextcloud/Create/repos/hermes-agent/HermesOS"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$REPO_DIR/docker-compose.hermes.yml"
 ENV_FILE="$REPO_DIR/runtime/live_bridge/compose.env"
 PROJECT="hermesos"

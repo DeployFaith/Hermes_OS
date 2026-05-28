@@ -1,6 +1,8 @@
 class_name HermesAppInstance
 extends RefCounted
 
+const HermesSemanticTree = preload("res://scripts/ui/hermes_ui/semantic/hermes_semantic_tree.gd")
+
 var manifest = null
 var controller = null
 var root_control: Control = null
@@ -31,3 +33,6 @@ func find_element_by_id(target_id: String):
 	if renderer == null or root_element == null:
 		return null
 	return renderer.find_by_id(root_element, target_id)
+
+func get_semantic_tree() -> Dictionary:
+	return HermesSemanticTree.new().build(self).to_dictionary()

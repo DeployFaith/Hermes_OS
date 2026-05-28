@@ -45,6 +45,8 @@ func render_element(element) -> Control:
 	control.set_meta("hermes_tag", element.tag)
 	if element.id != "":
 		control.set_meta("hermes_id", element.id)
+	if component != null and str(component.semantic_role).strip_edges() != "":
+		element.merge_semantic_metadata({"role": str(component.semantic_role).strip_edges()})
 	if component != null and bool(component.render_children):
 		for child in element.children:
 			var child_control: Control = render_element(child)
