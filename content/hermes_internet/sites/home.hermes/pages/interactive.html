@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hermes_OS — Interactive JS</title>
+  <style>{{site_css}}</style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="eyebrow">Hermes Internet</div>
+      <h1>Interactive JS Demo</h1>
+      <p class="subtitle">A local JavaScript page running entirely from bundled files.</p>
+      <div class="actions">
+        <a href="/">Home</a>
+        <a href="/games">Games</a>
+      </div>
+    </section>
+
+    <section class="card js-demo">
+      <h2>Status panel</h2>
+      <p id="demo-status">Waiting for script…</p>
+      <div class="actions">
+        <a href="#" id="increment-btn">Increment counter</a>
+        <a href="#" id="theme-btn">Toggle accent glow</a>
+      </div>
+      <p>Counter: <strong id="counter-value">0</strong></p>
+    </section>
+  </main>
+  <script src="../scripts/interactive_demo.js"></script>
+</body>
+</html>

@@ -119,3 +119,24 @@ code {
   padding: 1px 5px;
 }
 .footer { margin-top: 16px; background: var(--panel-2); }
+
+.js-demo,
+.snake-card {
+  margin-top: 16px;
+}
+
+#snake-canvas {
+  display: block;
+  width: min(100%, 480px);
+  height: auto;
+  margin-top: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #0c111b;
+}
+
+body.js-glow .hero {
+  border-color: rgba(103, 212, 255, 0.55);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.38), 0 0 0 1px rgba(103, 212, 255, 0.18), inset 0 1px 0 rgba(255,255,255,0.06);
+}
+

@@ -10,7 +10,10 @@
       "root": "res://content/hermes_internet/sites/home.hermes",
       "entry": "/",
       "routes": {
-        "/": "pages/index.html"
+        "/": "pages/index.html",
+        "/interactive": "pages/interactive.html",
+        "/games": "pages/games.html",
+        "/games/snake": "pages/games_snake.html"
       },
       "agent_visible": true
     }

@@ -5,6 +5,8 @@ const HermesInternetRegistry = preload("res://scripts/os/hermes_internet/hermes_
 const HermesInternetResolver = preload("res://scripts/os/hermes_internet/hermes_internet_resolver.gd")
 
 const NOT_FOUND_TEMPLATE := "res://content/hermes_internet/system/not_found.html"
+const SCRIPT_SRC_PATTERN := "(?is)<script\\b([^>]*)\\bsrc\\s*=\\s*([\"'])([^\"']+)\\2([^>]*)></script>"
+const BLOCKED_SCRIPT_TOKENS := ["http://", "https://", "localhost", "127.0.0.1"]
 
 var registry: HermesInternetRegistry
 var resolver: HermesInternetResolver
@@ -43,7 +45,7 @@ func _load_site_document(resolved: Dictionary) -> Dictionary:
 	if not FileAccess.file_exists(document_path):
 		return _document_error(resolved, "Hermes Internet document missing: %s" % document_path, site)
 	var html: String = FileAccess.get_file_as_string(document_path)
-	html = _inject_site_assets(html, site)
+	var injected: Dictionary = _inject_site_assets(html, site, document_path)
 	return {
 		"ok": true,
 		"status_code": 200,
@@ -54,7 +56,9 @@ func _load_site_document(resolved: Dictionary) -> Dictionary:
 		"local_url": str(resolved.get("local_url", "")),
 		"title": str(site.get("title", domain)),
 		"description": str(site.get("description", "")),
-		"html": html,
+		"html": str(injected.get("html", html)),
+		"inline_script_count": int(injected.get("inline_script_count", 0)),
+		"blocked_script_count": int(injected.get("blocked_script_count", 0)),
 		"content_type": "text/html; charset=utf-8",
 		"source_path": document_path
 	}
@@ -131,11 +135,91 @@ func _document_error(resolved: Dictionary, message: String, site: Dictionary = {
 		"content_type": "text/html; charset=utf-8"
 	}
 
-func _inject_site_assets(html: String, site: Dictionary) -> String:
+func _inject_site_assets(html: String, site: Dictionary, document_path: String) -> Dictionary:
 	var root_path: String = str(site.get("root", ""))
 	var css_path: String = _join_path(root_path, "styles/site.css")
 	var css: String = FileAccess.get_file_as_string(css_path) if FileAccess.file_exists(css_path) else ""
-	return html.replace("{{site_css}}", css)
+	var with_css: String = html.replace("{{site_css}}", css)
+	return _inline_local_scripts(with_css, root_path, document_path)
+
+func _inline_local_scripts(html: String, site_root: String, document_path: String) -> Dictionary:
+	var regex := RegEx.new()
+	if regex.compile(SCRIPT_SRC_PATTERN) != OK:
+		return {"html": html, "inline_script_count": 0, "blocked_script_count": 0}
+
+	var matches: Array[RegExMatch] = regex.search_all(html)
+	if matches.is_empty():
+		return {"html": html, "inline_script_count": 0, "blocked_script_count": 0}
+
+	var out := ""
+	var cursor := 0
+	var inline_count := 0
+	var blocked_count := 0
+	for match in matches:
+		var start: int = match.get_start()
+		var end: int = match.get_end()
+		out += html.substr(cursor, start - cursor)
+		cursor = end
+
+		var script_src: String = str(match.get_string(3)).strip_edges()
+		var script_path: String = _resolve_local_script_path(script_src, site_root, document_path)
+		if script_path == "":
+			blocked_count += 1
+			out += "<script>console.warn('Hermes Internet blocked non-local script source.');</script>"
+			continue
+
+		var script_body: String = FileAccess.get_file_as_string(script_path)
+		inline_count += 1
+		out += "<script data-hermes-inline-src=\"%s\">\n%s\n</script>" % [_html_escape(script_src), script_body]
+
+	out += html.substr(cursor)
+	return {"html": out, "inline_script_count": inline_count, "blocked_script_count": blocked_count}
+
+func _resolve_local_script_path(script_src: String, site_root: String, document_path: String) -> String:
+	if script_src == "":
+		return ""
+	var src_lower: String = script_src.to_lower()
+	for token in BLOCKED_SCRIPT_TOKENS:
+		if src_lower.find(token) >= 0:
+			return ""
+	if src_lower.begins_with("//"):
+		return ""
+	if _has_uri_scheme(src_lower):
+		return ""
+
+	var path_only: String = script_src
+	var query_index := path_only.find("?")
+	if query_index >= 0:
+		path_only = path_only.substr(0, query_index)
+	var hash_index := path_only.find("#")
+	if hash_index >= 0:
+		path_only = path_only.substr(0, hash_index)
+	if path_only == "":
+		return ""
+
+	var candidate: String = ""
+	if path_only.begins_with("/"):
+		candidate = _join_path(site_root, path_only)
+	else:
+		candidate = _join_path(document_path.get_base_dir(), path_only)
+
+	if not _is_path_within(site_root, candidate):
+		return ""
+	if not FileAccess.file_exists(candidate):
+		return ""
+	return candidate
+
+func _has_uri_scheme(value: String) -> bool:
+	var colon_index := value.find(":")
+	if colon_index <= 0:
+		return false
+	var slash_index := value.find("/")
+	return slash_index < 0 or colon_index < slash_index
+
+func _is_path_within(base_path: String, candidate_path: String) -> bool:
+	var base_global := ProjectSettings.globalize_path(base_path).rstrip("/")
+	var candidate_global := ProjectSettings.globalize_path(candidate_path)
+	return candidate_global == base_global or candidate_global.begins_with(base_global + "/")
 
 func _path_without_query(path: String) -> String:
 	var q: int = path.find("?")
