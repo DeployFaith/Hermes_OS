@@ -1,29 +1,30 @@
 <App id="system-settings-app" label="System Settings">
   <Window id="system-settings-window" class="system-settings-window" label="System Settings window">
-    <Column id="system-settings-root" class="system-settings-root" label="System Settings content">
-      <Toolbar id="SystemSettingsToolbar" class="system-settings-toolbar" label="System Settings toolbar">
+    <AppShell id="system-settings-root" class="system-settings-root" label="System Settings content">
+      <AppHeader id="SystemSettingsToolbar" class="system-settings-toolbar" label="System Settings toolbar">
         <Column id="system-settings-title-block" class="system-settings-title-block">
           <Title id="SystemSettingsTitle">System Settings</Title>
           <Text id="SystemSettingsSubtitle">System diagnostics, Hermes Gateway, and MCP controls</Text>
         </Column>
         <Text id="SystemSettingsToolbarGatewayStatusLabel" class="system-settings-toolbar-status" label="Gateway status">{gateway_toolbar_label}</Text>
         <Text id="SystemSettingsToolbarMcpStatusLabel" class="system-settings-toolbar-status" label="MCP status">{mcp_toolbar_label}</Text>
-      </Toolbar>
+      </AppHeader>
 
-      <Row id="system-settings-main" class="system-settings-main" label="Settings workspace">
-        <Sidebar id="SystemSettingsSidebar" class="system-settings-sidebar" width="220" label="Settings sections">
-          <List id="SystemSettingsSidebarList" class="system-settings-sidebar-list" label="Settings sections">
-            <ListItem id="system-settings-nav-system" value="system" selected="{active_tab == 'system'}" on:select="select_section">System</ListItem>
-            <ListItem id="system-settings-nav-appearance" value="appearance" selected="{active_tab == 'appearance'}" on:select="select_section">Appearance</ListItem>
-          </List>
-        </Sidebar>
+      <AppBody id="system-settings-main" class="system-settings-main" label="Settings workspace">
+        <Row id="system-settings-workspace" class="system-settings-workspace" label="Settings workspace body">
+          <Sidebar id="SystemSettingsSidebar" class="system-settings-sidebar" width="220" label="Settings sections">
+            <List id="SystemSettingsSidebarList" class="system-settings-sidebar-list" label="Settings sections">
+              <ListItem id="system-settings-nav-system" value="system" selected="{active_tab == 'system'}" on:select="select_section">System</ListItem>
+              <ListItem id="system-settings-nav-appearance" value="appearance" selected="{active_tab == 'appearance'}" on:select="select_section">Appearance</ListItem>
+            </List>
+          </Sidebar>
 
-        <ScrollView id="SystemSettingsContentScroll" class="system-settings-content-scroll" label="Settings content">
-          <Column id="SystemSettingsPages" class="system-settings-pages">
-            <SettingsPage id="SystemSettingsSystemPage" class="system-settings-page" label="System settings page" hidden="{!system_visible}">
-              <SettingsSection id="SystemSettingsInfoCard" title="System Overview">
-                <Text id="SystemSettingsInfoLabel" class="system-settings-info" label="System overview">{system_info}</Text>
-              </SettingsSection>
+          <ScrollView id="SystemSettingsContentScroll" class="system-settings-content-scroll" label="Settings content">
+            <Column id="SystemSettingsPages" class="system-settings-pages">
+              <SettingsPage id="SystemSettingsSystemPage" class="system-settings-page" label="System settings page" hidden="{!system_visible}">
+                <SettingsSection id="SystemSettingsInfoCard" title="System Overview">
+                  <Text id="SystemSettingsInfoLabel" class="system-settings-info" label="System overview">{system_info}</Text>
+                </SettingsSection>
 
               <SettingsSection id="SystemSettingsGatewayPanel" title="Hermes Gateway" subtitle="Primary chat and Terminal transport via Docker gateway">
                 <Text id="SystemSettingsGatewayStatus" class="system-settings-status" label="Gateway status">Gateway: {gateway_label}</Text>
@@ -53,8 +54,8 @@
               </SettingsSection>
             </SettingsPage>
 
-            <SettingsPage id="SystemSettingsAppearancePage" class="system-settings-page appearance-page" label="Appearance settings page" hidden="{!appearance_visible}">
-              <SettingsSection id="SystemSettingsAppearanceCard" title="Desktop appearance" subtitle="Theme, wallpaper, selection and drag highlight">
+              <SettingsPage id="SystemSettingsAppearancePage" class="system-settings-page appearance-page" label="Appearance settings page" hidden="{!appearance_visible}">
+                <SettingsSection id="SystemSettingsAppearanceCard" title="Desktop appearance" subtitle="Theme, wallpaper, selection and drag highlight">
                 <SettingsRow id="SystemSettingsThemeModeRow" label="Mode">
                   <Select id="SystemSettingsThemeMode" label="Theme mode" value="{theme_mode}" options="dark:Dark|light:Light" on:change="theme_mode_changed" />
                 </SettingsRow>
@@ -70,13 +71,16 @@
                   <Button id="SystemSettingsResetIconLayout" label="Reset icon layout" variant="secondary" on:click="reset_icon_layout">Reset icon layout</Button>
                   <Button id="SystemSettingsResetHighlight" label="Reset highlight" variant="ghost" on:click="reset_highlight">Reset highlight</Button>
                 </FlowRow>
-              </SettingsSection>
-            </SettingsPage>
-          </Column>
-        </ScrollView>
-      </Row>
+                </SettingsSection>
+              </SettingsPage>
+            </Column>
+          </ScrollView>
+        </Row>
+      </AppBody>
 
-      <StatusBar id="SystemSettingsStatusBar" label="System settings status">{status}</StatusBar>
-    </Column>
+      <AppFooter id="SystemSettingsStatusBar" class="system-settings-statusbar" label="System settings status">
+        <Text id="SystemSettingsStatusText" class="system-settings-status-text">{status}</Text>
+      </AppFooter>
+    </AppShell>
   </Window>
 </App>

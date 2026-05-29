@@ -1,6 +1,8 @@
 extends "res://scripts/ui/hermes_ui/runtime/hermes_app_controller.gd"
 
 const OSFileSystem = preload("res://scripts/os/os_file_system.gd")
+const GATEWAY_TEST_TIMEOUT_MS := 900
+const MCP_TEST_TIMEOUT_MS := 700
 
 var _shell: Node
 var _fs: Object
@@ -103,7 +105,22 @@ func reset_highlight(_event = null) -> void:
 
 func test_gateway(_event = null) -> void:
 	_set_status("Testing Hermes Gateway status…", false)
-	_refresh_gateway_mcp_status()
+	var gateway_state: Dictionary = _gateway_state()
+	var endpoint: String = str(gateway_state.get("endpoint", "http://127.0.0.1:8643/v1/chat/completions")).strip_edges()
+	var host_port: Dictionary = _endpoint_host_port(endpoint, str(gateway_state.get("host", "127.0.0.1")), int(gateway_state.get("port", 8643)))
+	var host: String = str(host_port.get("host", "127.0.0.1"))
+	var port: int = int(host_port.get("port", 8643))
+	var probe: Dictionary = _probe_tcp(host, port, GATEWAY_TEST_TIMEOUT_MS)
+	if state != null:
+		state.set_many({
+			"gateway_label": "Online" if bool(probe.get("ok", false)) else "Offline",
+			"gateway_toolbar_label": "Gateway: " + ("Online" if bool(probe.get("ok", false)) else "Offline")
+		})
+	if bool(probe.get("ok", false)):
+		_set_status("Gateway reachable at %s" % endpoint, false)
+	else:
+		_set_status("Gateway unavailable at %s (%s)" % [endpoint, str(probe.get("error", "connect_failed"))], true)
+	_refresh_system_info()
 
 func reload_gateway_config(_event = null) -> void:
 	if _shell == null or _shell.get("_hermes_agent_service") == null:
@@ -125,32 +142,104 @@ func reload_gateway_config(_event = null) -> void:
 func test_mcp(_event = null) -> void:
 	_set_status("Testing MCP endpoint…", false)
 	var mcp_result: Dictionary = {"kind": "checking", "label": "checking", "endpoint": "127.0.0.1:9090", "ok": false}
-	var peer := StreamPeerTCP.new()
-	var err: int = peer.connect_to_host("127.0.0.1", 9090)
-	if err != OK:
+	var probe: Dictionary = _probe_tcp("127.0.0.1", 9090, MCP_TEST_TIMEOUT_MS)
+	if not bool(probe.get("ok", false)):
 		mcp_result["kind"] = "unavailable"
 		mcp_result["label"] = "unavailable"
-		mcp_result["error"] = "connect_failed"
-		_set_status("MCP endpoint unavailable", true)
+		mcp_result["error"] = str(probe.get("error", "connect_failed"))
+		_set_status("MCP endpoint unavailable (%s)" % str(mcp_result.get("error", "connect_failed")), true)
 	else:
-		mcp_result["kind"] = "available"
-		mcp_result["label"] = "available"
-		mcp_result["ok"] = true
-		peer.put_data((JSON.stringify({"command": "get_ui_elements", "params": {}}) + "\n").to_utf8_buffer())
-		var started_msec: int = Time.get_ticks_msec()
-		var has_response: bool = false
-		while Time.get_ticks_msec() - started_msec < 450:
-			peer.poll()
-			if peer.get_available_bytes() > 0:
-				has_response = true
-				break
-			OS.delay_msec(10)
+		var peer: StreamPeerTCP = probe.get("peer", null) as StreamPeerTCP
+		mcp_result["tcp_reachable"] = true
+		var protocol_probe: Dictionary = _probe_mcp_protocol(peer)
+		var has_response: bool = bool(protocol_probe.get("response_seen", false))
+		var protocol_verified: bool = bool(protocol_probe.get("ok", false))
+		if peer != null:
+			peer.disconnect_from_host()
+		mcp_result["protocol_verified"] = protocol_verified
 		mcp_result["response_seen"] = has_response
-		_set_status("MCP endpoint reachable" if has_response else "MCP endpoint reachable (no response yet)", false)
-		peer.disconnect_from_host()
+		if protocol_verified:
+			mcp_result["kind"] = "success"
+			mcp_result["label"] = "available"
+			mcp_result["ok"] = true
+			_set_status("MCP available (os_ping verified)", false)
+		else:
+			mcp_result["kind"] = "warning"
+			mcp_result["label"] = "port reachable, protocol unverified"
+			mcp_result["ok"] = false
+			mcp_result["error"] = str(protocol_probe.get("error", "protocol_not_verified"))
+			_set_status("MCP port reachable, protocol not verified", false, "warning")
 	if state != null:
 		state.set("mcp", mcp_result)
 	_refresh_gateway_mcp_status()
+
+func _probe_mcp_protocol(peer: StreamPeerTCP) -> Dictionary:
+	if peer == null:
+		return {"ok": false, "response_seen": false, "error": "missing_peer"}
+	var put_result: int = peer.put_data((JSON.stringify({"command": "os_ping", "params": {}}) + "\n").to_utf8_buffer())
+	if put_result != OK:
+		return {"ok": false, "response_seen": false, "error": "write_failed_%d" % put_result}
+	var buffer: String = ""
+	var started_msec: int = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - started_msec < 450:
+		peer.poll()
+		var available: int = peer.get_available_bytes()
+		if available > 0:
+			var data: Array = peer.get_data(available)
+			if data.size() >= 2 and int(data[0]) == OK:
+				var bytes: PackedByteArray = data[1]
+				buffer += bytes.get_string_from_utf8()
+				var newline_pos: int = buffer.find("\n")
+				if newline_pos >= 0:
+					var line: String = buffer.substr(0, newline_pos).strip_edges()
+					var json := JSON.new()
+					if json.parse(line) != OK:
+						return {"ok": false, "response_seen": true, "error": "invalid_json_response"}
+					var response: Variant = json.data
+					if response is Dictionary and bool((response as Dictionary).get("success", false)) and bool((response as Dictionary).get("pong", false)):
+						var server: Variant = (response as Dictionary).get("server", {})
+						if server is Dictionary and str((server as Dictionary).get("name", "")) == "McpInteractionServer":
+							return {"ok": true, "response_seen": true}
+					return {"ok": false, "response_seen": true, "error": "unexpected_protocol_response"}
+		OS.delay_msec(10)
+	return {"ok": false, "response_seen": buffer.strip_edges() != "", "error": "protocol_timeout"}
+
+func _endpoint_host_port(endpoint: String, fallback_host: String, fallback_port: int) -> Dictionary:
+	var text: String = endpoint.strip_edges()
+	if text == "":
+		return {"host": fallback_host, "port": fallback_port}
+	if text.begins_with("http://"):
+		text = text.trim_prefix("http://")
+	elif text.begins_with("https://"):
+		text = text.trim_prefix("https://")
+	text = text.split("/", false, 1)[0]
+	var host: String = fallback_host
+	var port: int = fallback_port
+	if text.find(":") >= 0:
+		var parts: PackedStringArray = text.split(":", false, 1)
+		host = parts[0] if parts.size() > 0 and parts[0] != "" else fallback_host
+		port = int(parts[1]) if parts.size() > 1 and str(parts[1]).is_valid_int() else fallback_port
+	elif text != "":
+		host = text
+	return {"host": host, "port": port}
+
+func _probe_tcp(host: String, port: int, timeout_ms: int) -> Dictionary:
+	var peer := StreamPeerTCP.new()
+	var err: int = peer.connect_to_host(host, port)
+	if err != OK:
+		return {"ok": false, "error": "connect_start_failed_%d" % err}
+	var started_msec: int = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - started_msec < timeout_ms:
+		peer.poll()
+		var status: int = peer.get_status()
+		if status == StreamPeerTCP.STATUS_CONNECTED:
+			return {"ok": true, "peer": peer}
+		if status == StreamPeerTCP.STATUS_ERROR or status == StreamPeerTCP.STATUS_NONE:
+			peer.disconnect_from_host()
+			return {"ok": false, "error": "connect_failed"}
+		OS.delay_msec(10)
+	peer.disconnect_from_host()
+	return {"ok": false, "error": "timeout"}
 
 func _initialize_state() -> void:
 	if state == null:
@@ -369,11 +458,11 @@ func _mcp_state() -> Dictionary:
 			return snap
 	return {"kind": "checking", "label": "checking", "endpoint": "127.0.0.1:9090", "ok": false}
 
-func _set_status(message: String, is_error: bool = false) -> void:
+func _set_status(message: String, is_error: bool = false, variant: String = "") -> void:
 	if state != null:
 		state.set_many({
 			"status": message,
-			"status_variant": "danger" if is_error else "info"
+			"status_variant": (variant if variant != "" else ("danger" if is_error else "info"))
 		})
 
 func _apply_theme_mode(mode: String, refresh_ui: bool = true) -> void:

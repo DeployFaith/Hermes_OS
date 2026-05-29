@@ -491,7 +491,7 @@ func _apply_flex_properties(element, control: Control, computed) -> void:
 	match parent_tag:
 		"Row":
 			control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		"Column":
+		"Column", "AppShell", "AppBody":
 			control.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		"Window", "ScrollView", "Grid":
 			control.size_flags_horizontal = Control.SIZE_EXPAND_FILL

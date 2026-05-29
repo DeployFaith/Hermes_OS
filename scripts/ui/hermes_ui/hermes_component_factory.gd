@@ -39,9 +39,6 @@ func body_of(control: Control) -> Control:
 		var body: Variant = control.get_meta(BODY_META)
 		if body is Control and is_instance_valid(body):
 			return body as Control
-	for child in control.get_children():
-		if child is Control and String(child.name).begins_with("Hermes") and String(child.name).ends_with("Body"):
-			return child as Control
 	return control
 
 func add(control: Control, child: Control) -> Control:

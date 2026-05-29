@@ -2,10 +2,6 @@
   min-width: 700px;
   min-height: 440px;
   flex: 1;
-  background: #101520;
-  border-color: transparent;
-  border-width: 0px;
-  border-radius: var(--radius-lg);
   padding: 0px;
 }
 
@@ -13,21 +9,12 @@
   flex: 1;
   gap: 0px;
   align-items: stretch;
-  background: #101520;
-  border-color: transparent;
-  border-width: 0px;
   padding: 0px;
 }
 
 .system-settings-toolbar {
   gap: var(--space-3);
   align-items: center;
-  min-height: 64px;
-  background: #171d2a;
-  border-color: #28324a;
-  border-width: 1px;
-  border-radius: 0px;
-  padding: var(--space-3);
 }
 
 .system-settings-title-block {
@@ -55,11 +42,19 @@
 
 .system-settings-main {
   flex: 1;
+  min-height: 0px;
+  padding: var(--space-3);
+}
+
+.system-settings-workspace {
+  flex: 1;
+  min-height: 0px;
   gap: 0px;
   align-items: stretch;
 }
 
 .system-settings-sidebar {
+  min-height: 0px;
   min-width: 220px;
   background: #0b1018;
   border-color: #222b40;
@@ -97,16 +92,14 @@
 
 .system-settings-content-scroll {
   flex: 1;
-  background: #101520;
-  border-color: transparent;
-  border-width: 0px;
-  border-radius: 0px;
-  padding: var(--space-3);
+  min-height: 0px;
+  padding: 0px;
 }
 
 .system-settings-pages,
 .system-settings-page {
   flex: 1;
+  min-height: 0px;
   gap: var(--space-3);
   align-items: stretch;
 }
@@ -187,13 +180,11 @@
   border-color: var(--accent-hover);
 }
 
-#SystemSettingsStatusBar {
+.system-settings-statusbar {
   min-height: 30px;
-  background: #0b1018;
-  border-color: #222b40;
-  border-width: 1px;
-  border-radius: 0px;
-  padding: 7px;
+}
+
+.system-settings-status-text {
   color: #aab5ca;
   font-size: var(--font-sm);
 }
