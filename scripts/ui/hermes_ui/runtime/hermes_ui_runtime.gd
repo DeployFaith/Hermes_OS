@@ -8,6 +8,7 @@ const HermesStore = preload("res://scripts/ui/hermes_ui/bindings/hermes_store.gd
 const HermesBindingEngine = preload("res://scripts/ui/hermes_ui/bindings/hermes_binding_engine.gd")
 const HermesEventBus = preload("res://scripts/ui/hermes_ui/events/hermes_event_bus.gd")
 const HermesMarkupParser = preload("res://scripts/ui/hermes_ui/markup/hermes_markup_parser.gd")
+const HermesMarkdownParser = preload("res://scripts/ui/hermes_ui/markdown/hermes_markdown_parser.gd")
 const HermesRenderer = preload("res://scripts/ui/hermes_ui/render/hermes_renderer.gd")
 const HermesRenderContext = preload("res://scripts/ui/hermes_ui/render/hermes_render_context.gd")
 const HermesStyleParser = preload("res://scripts/ui/hermes_ui/style/hermes_style_parser.gd")
@@ -22,6 +23,7 @@ const BUILTIN_STYLES := [
 
 var loader = HermesAppLoader.new()
 var _markup_parser := HermesMarkupParser.new()
+var _markdown_parser := HermesMarkdownParser.new()
 var _style_parser := HermesStyleParser.new()
 var _os_context: Dictionary = {}
 
@@ -63,7 +65,7 @@ func mount_instance(instance, host: Control) -> Control:
 
 	_apply_window_metadata(instance, host, root, content_host)
 
-	var document = _markup_parser.parse_file(instance.manifest.entry_path if instance.manifest != null else "")
+	var document = _load_markup_document(instance.manifest.entry_path if instance.manifest != null else "")
 	var render_context = HermesRenderContext.new()
 	render_context.stylesheets = _load_stylesheets(instance.manifest)
 	render_context.state = instance.state
@@ -184,6 +186,32 @@ func _document_error_text(document) -> String:
 	if line_value >= 0:
 		return "%s (line %d)" % [message, line_value]
 	return message
+
+func _load_markup_document(entry_path: String):
+	if entry_path.strip_edges() == "":
+		var empty_document = _markup_parser.parse_text("", "")
+		empty_document.errors.clear()
+		empty_document.add_error("Markup file not found", -1)
+		return empty_document
+	if entry_path.to_lower().ends_with(".hmd"):
+		var markdown_document = _markdown_parser.parse_file(entry_path)
+		if markdown_document == null:
+			var failed_document = _markup_parser.parse_text("", entry_path)
+			failed_document.errors.clear()
+			failed_document.add_error("Markdown file could not be parsed", -1)
+			return failed_document
+		if markdown_document.has_errors():
+			var diagnostic_message := "HermesMarkdown parse error"
+			var diagnostic_line := -1
+			if not markdown_document.diagnostics.is_empty() and markdown_document.diagnostics[0] != null:
+				diagnostic_message = str(markdown_document.diagnostics[0].message)
+				diagnostic_line = int(markdown_document.diagnostics[0].line)
+			var invalid_document = _markup_parser.parse_text("", entry_path)
+			invalid_document.errors.clear()
+			invalid_document.add_error(diagnostic_message, diagnostic_line)
+			return invalid_document
+		return _markup_parser.parse_text(str(markdown_document.generated_hml), entry_path + ".generated.hml")
+	return _markup_parser.parse_file(entry_path)
 
 func _apply_window_metadata(instance, host: Control, root: Control, content_host: Control) -> void:
 	if instance == null or instance.manifest == null:

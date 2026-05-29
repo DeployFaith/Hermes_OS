@@ -3,7 +3,7 @@
   "name": "Text",
   "version": "0.1.0",
   "hermes_ui": "0.1",
-  "entry": "main.hml",
+  "entry": "main.hmd",
   "styles": ["main.hss"],
   "controller": "main.gd",
   "surface": "window",

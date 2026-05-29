@@ -65,6 +65,10 @@ func parse_text(text: String, source_path: String = ""):
 					if not _apply_prop_line(current_node, trimmed, line_number, document):
 						document.add_diagnostic("Malformed prop line", line_number)
 					continue
+		if not stack.is_empty() and trimmed.begins_with("= "):
+			stack[stack.size() - 1]["accepting_block_props"] = false
+			stack[stack.size() - 1]["children"].append({"kind": "text", "value": trimmed.substr(2).strip_edges()})
+			continue
 		var converted_node = _parse_markdown_line(trimmed)
 		if stack.is_empty():
 			nodes.append(converted_node)
