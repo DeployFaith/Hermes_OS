@@ -1,0 +1,23 @@
+{
+  "id": "files",
+  "name": "Files",
+  "version": "0.1.0",
+  "hermes_ui": "0.1",
+  "entry": "main.hml",
+  "styles": ["main.hss"],
+  "controller": "main.gd",
+  "surface": "window",
+  "window": {
+    "title": "Files",
+    "default_width": 1100,
+    "default_height": 680,
+    "min_width": 820,
+    "min_height": 520,
+    "resizable": true,
+    "chromed": true
+  },
+  "permissions": [
+    "files.read",
+    "files.write"
+  ]
+}

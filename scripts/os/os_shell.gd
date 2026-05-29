@@ -6,6 +6,7 @@ const OSFileSystem = preload("res://scripts/os/os_file_system.gd")
 const OSEventBus = preload("res://scripts/os/core/os_event_bus.gd")
 const NotificationCenter = preload("res://scripts/os/core/notification_center.gd")
 const AppRegistry = preload("res://scripts/os/core/app_registry.gd")
+const OSActionRegistry = preload("res://scripts/os/core/os_action_registry.gd")
 const AppInstance = preload("res://scripts/os/core/app_instance.gd")
 const WindowManager = preload("res://scripts/os/core/window_manager.gd")
 const FilesApp = preload("res://scripts/apps/files/files_app.gd")
@@ -19,10 +20,12 @@ const NotesApp = preload("res://scripts/apps/notes/notes_app.gd")
 const NotesAppManifest = preload("res://scripts/apps/notes/notes_app_manifest.gd")
 const SystemSettingsApp = preload("res://scripts/apps/system_settings/system_settings_app.gd")
 const SystemSettingsAppManifest = preload("res://scripts/apps/system_settings/system_settings_app_manifest.gd")
-const HermesChatApp = preload("res://scripts/apps/hermes_chat/hermes_chat_app.gd")
-const HermesChatAppManifest = preload("res://scripts/apps/hermes_chat/hermes_chat_app_manifest.gd")
+const HermesChatManifest = preload("res://scripts/apps/hermes_chat/hermes_chat_app_manifest.gd")
+const HermesUIRuntime = preload("res://scripts/ui/hermes_ui/runtime/hermes_ui_runtime.gd")
 const AccountCenterApp = preload("res://scripts/apps/account_center/account_center_app.gd")
 const AccountCenterAppManifest = preload("res://scripts/apps/account_center/account_center_app_manifest.gd")
+const CommandPaletteApp = preload("res://scripts/apps/command_palette/command_palette_app.gd")
+const CommandPaletteAppManifest = preload("res://scripts/apps/command_palette/command_palette_app_manifest.gd")
 const HermesProtocol = preload("res://scripts/hermes/hermes_protocol.gd")
 const HermesAgentService = preload("res://scripts/os/agent/hermes_agent_service.gd")
 const AgentOperationRouter = preload("res://scripts/os/agent/agent_operation_router.gd")
@@ -36,6 +39,7 @@ signal hermes_event(event_name: String, payload: Dictionary)
 var _apps: Dictionary = {}
 var _app_order: Array[String] = []
 var _app_registry: AppRegistry
+var _os_action_registry: OSActionRegistry
 var _app_instances: Dictionary = {}
 var _app_instances_by_app: Dictionary = {}
 var _app_instance_by_app: Dictionary = {} # TODO(redesign): compatibility mirror; stores most recent instance id per app.
@@ -145,6 +149,7 @@ var _console_outputs: Array[TextEdit] = []
 var _console_history: Array[String] = ["Type 'help' for commands. Current user: user"]
 var _state_save_timer: Timer
 var _state_loading := false
+var _hermes_ui_window_manifest_cache: Dictionary = {}
 
 const CONSOLE_HISTORY_MAX_LINES := 400
 const HERMES_GATEWAY_CLIENT_ENV_PATH := "res://runtime/hermes_gateway/compose.env"
@@ -191,6 +196,16 @@ const BOOT_SPLASH_VIDEO_PATH := "res://assets/video/hermes_os_boot_splash_v4.ogv
 const BOOT_SPLASH_DURATION := 7.6
 const BOOT_SPLASH_FALLBACK_DURATION := 2.4
 const BOOT_SPLASH_HEADLESS_DURATION := 0.05
+const HERMES_UI_PRODUCTION_MANIFESTS := {
+	"hermes_chat": "res://scripts/apps/hermes_chat/manifest.json",
+	"text": "res://scripts/apps/text_editor/manifest.json",
+	"notes": "res://scripts/apps/notes/manifest.json",
+	"system": "res://scripts/apps/system_settings/manifest.json",
+	"files": "res://scripts/apps/files/manifest.json",
+	"browser": "res://scripts/apps/browser/manifest.json",
+	"console": "res://scripts/apps/terminal/manifest.json",
+	"command_palette": "res://scripts/apps/command_palette/manifest.json"
+}
 
 const Tokens = preload("res://scripts/os/design_tokens.gd")
 const StyleFactory = preload("res://scripts/os/style_factory.gd")
@@ -219,6 +234,7 @@ func _ready() -> void:
 	_apply_theme_mode(_theme_mode, false)
 	_console_history = ["Type 'help' for commands. Current user: " + _fs.current_user()]
 	_register_apps()
+	_setup_action_registry()
 	_build_ui()
 	_setup_window_manager()
 	_setup_hermes_agent_service()
@@ -281,6 +297,28 @@ func hermes_agent_service() -> HermesAgentService:
 
 func hermes_operation_router() -> AgentOperationRouter:
 	return _agent_operation_router
+
+func _setup_action_registry() -> void:
+	_os_action_registry = OSActionRegistry.new()
+	_os_action_registry.setup({
+		"shell": self,
+		"app_registry": _app_registry
+	})
+
+func command_action_registry() -> OSActionRegistry:
+	if _os_action_registry == null:
+		_setup_action_registry()
+	return _os_action_registry
+
+func list_command_actions(query: String = "") -> Array:
+	if command_action_registry() == null:
+		return []
+	return command_action_registry().list_actions(query)
+
+func invoke_command_action(action_id: String) -> Dictionary:
+	if command_action_registry() == null:
+		return {"ok": false, "error": {"code": "ACTION_REGISTRY_UNAVAILABLE", "message": "Action registry unavailable", "details": {}}}
+	return command_action_registry().invoke(action_id)
 
 func _hermes_gateway_config() -> Dictionary:
 	var gateway_env := _read_gateway_client_env(HERMES_GATEWAY_CLIENT_ENV_PATH)
@@ -505,14 +543,19 @@ func launch_app(app_id: String) -> OSWindow:
 	var app_instance := _create_app_instance(app_id, {})
 	var builder := app["builder"] as Callable
 	var content := builder.call() as Control
+	if content == null:
+		_remove_app_instance(app_id, app_instance.instance_id if app_instance != null else 0)
+		push_warning("App builder returned null content for: %s" % app_id)
+		return null
+	var window_options := _resolve_window_launch_options(app_id, app, content)
 	var window: OSWindow
 	if _window_manager != null:
-		window = _window_manager.create_window(StringName(app_id), str(app["title"]), content, {"size": _default_window_size(app_id)})
+		window = _window_manager.create_window(StringName(app_id), str(app["title"]), content, window_options)
 	else:
 		window = OSWindow.new()
 		_window_layer.add_child(window)
 		window.setup(app_id, str(app["title"]), content)
-		window.set_window_size(_default_window_size(app_id))
+		window.set_window_size(window_options.get("size", _default_window_size(app_id)))
 		window.position = _center_window_position(window)
 		_clamp_window_to_layer(window)
 		window.close_requested.connect(_on_window_close_requested)
@@ -827,12 +870,15 @@ func _register_apps() -> void:
 	_app_registry.register_app(TextEditorAppManifest.manifest(Callable(self, "_build_text_app")))
 	_app_registry.register_app({"id": &"browser", "title": "Browser", "name": "Browser", "description": "Web and local pages.", "subtitle": "Web and local pages", "keywords": "web internet", "category": "Internet", "pinned": true, "single_instance": true, "agent_visible": true, "agent_actions": ["browser.navigate", "browser.get_current_page"], "builder": Callable(self, "_build_browser_app")})
 	_app_registry.register_app(TerminalAppManifest.manifest(Callable(self, "_build_console_app")))
-	_app_registry.register_app(HermesChatAppManifest.manifest(Callable(self, "_build_hermes_chat_app")))
+	_app_registry.register_app(HermesChatManifest.manifest(Callable(self, "_build_hermes_chat_app")))
 	_app_registry.register_app(SystemSettingsAppManifest.manifest(Callable(self, "_build_system_app")))
 	_app_registry.register_app(AccountCenterAppManifest.manifest(Callable(self, "_build_account_center_app")))
+	_app_registry.register_app(CommandPaletteAppManifest.manifest(Callable(self, "_build_command_palette_app")))
 	# TODO(redesign): remove these compatibility mirrors once launcher/taskbar/app lifecycle fully read from AppRegistry.
 	_apps = _app_registry.export_legacy_apps()
 	_app_order = _app_registry.get_app_order()
+	if _os_action_registry != null:
+		_os_action_registry.setup({"shell": self, "app_registry": _app_registry})
 
 func _apply_theme_mode(mode: String, refresh_ui: bool = true) -> void:
 	_theme_mode = "light" if mode.to_lower() == "light" else "dark"
@@ -2359,20 +2405,92 @@ func _layout() -> void:
 		if is_instance_valid(window) and window.visible:
 			_clamp_window_to_layer(window)
 
-func _default_window_size(app_id: String) -> Vector2:
+func _resolve_window_launch_options(app_id: String, app: Dictionary, content: Control) -> Dictionary:
+	var default_size := _default_window_size(app_id, app, content)
+	var min_size := _resolve_window_min_size(app_id, app, content)
+	if content != null:
+		if default_size != Vector2.ZERO:
+			content.set_meta("window_default_size", default_size)
+		if min_size != Vector2.ZERO:
+			content.set_meta("window_min_size", min_size)
+	return {"size": default_size}
+
+func _default_window_size(app_id: String, app: Dictionary = {}, content: Control = null) -> Vector2:
+	if content != null and content.has_meta("window_default_size"):
+		var meta_size: Variant = content.get_meta("window_default_size")
+		if meta_size is Vector2:
+			return meta_size
+	var manifest_window := _window_config_for_app(app_id, app)
+	var manifest_size := _window_size_from_config(manifest_window, "default_width", "default_height")
+	if manifest_size != Vector2.ZERO:
+		return manifest_size
 	match app_id:
 		"files":
-			return Vector2(820, 520)
+			return Vector2(1100, 680)
 		"browser":
 			return Vector2(860, 560)
 		"console":
-			return Vector2(680, 430)
+			return Vector2(900, 560)
 		"hermes_chat":
-			return Vector2(780, 540)
+			return Vector2(760, 560)
 		"system":
+			return Vector2(980, 640)
+		"text":
 			return Vector2(860, 620)
+		"notes":
+			return Vector2(900, 620)
 		_:
 			return Vector2(560, 380)
+
+func _resolve_window_min_size(app_id: String, app: Dictionary, content: Control) -> Vector2:
+	if content != null and content.has_meta("window_min_size"):
+		var meta_size: Variant = content.get_meta("window_min_size")
+		if meta_size is Vector2:
+			return meta_size
+	var manifest_window := _window_config_for_app(app_id, app)
+	var manifest_size := _window_size_from_config(manifest_window, "min_width", "min_height")
+	if manifest_size != Vector2.ZERO:
+		return manifest_size
+	return Vector2.ZERO
+
+func _window_config_for_app(app_id: String, app: Dictionary) -> Dictionary:
+	if app.has("window") and app["window"] is Dictionary:
+		return (app["window"] as Dictionary).duplicate(true)
+	return _load_hermes_ui_window_config(app_id)
+
+func _load_hermes_ui_window_config(app_id: String) -> Dictionary:
+	if _hermes_ui_window_manifest_cache.has(app_id):
+		return (_hermes_ui_window_manifest_cache[app_id] as Dictionary).duplicate(true)
+	if not HERMES_UI_PRODUCTION_MANIFESTS.has(app_id):
+		_hermes_ui_window_manifest_cache[app_id] = {}
+		return {}
+	var manifest_path: String = str(HERMES_UI_PRODUCTION_MANIFESTS[app_id])
+	if not FileAccess.file_exists(manifest_path):
+		_hermes_ui_window_manifest_cache[app_id] = {}
+		return {}
+	var file := FileAccess.open(manifest_path, FileAccess.READ)
+	if file == null:
+		_hermes_ui_window_manifest_cache[app_id] = {}
+		return {}
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	if not (parsed is Dictionary):
+		_hermes_ui_window_manifest_cache[app_id] = {}
+		return {}
+	var window_config: Dictionary = {}
+	var parsed_dict := parsed as Dictionary
+	if parsed_dict.has("window") and parsed_dict["window"] is Dictionary:
+		window_config = (parsed_dict["window"] as Dictionary).duplicate(true)
+	_hermes_ui_window_manifest_cache[app_id] = window_config
+	return window_config.duplicate(true)
+
+func _window_size_from_config(window_config: Dictionary, width_key: String, height_key: String) -> Vector2:
+	if window_config.is_empty():
+		return Vector2.ZERO
+	var width := float(window_config.get(width_key, 0))
+	var height := float(window_config.get(height_key, 0))
+	if width <= 0.0 or height <= 0.0:
+		return Vector2.ZERO
+	return Vector2(width, height)
 
 func _center_window_position(window: OSWindow) -> Vector2:
 	if not _window_layer:
@@ -3306,10 +3424,12 @@ func _build_console_app() -> Control:
 	return terminal
 
 func _build_hermes_chat_app() -> Control:
-	var chat := HermesChatApp.new()
-	chat.name = "HermesChatApp"
-	chat.os_app_init({
-		"app_id": "hermes_chat",
+	var host := Control.new()
+	host.name = "HermesChatHost"
+	host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	host.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var runtime := HermesUIRuntime.new()
+	runtime.set_os_context({
 		"shell": self,
 		"filesystem": _fs,
 		"event_bus": _event_bus,
@@ -3318,15 +3438,38 @@ func _build_hermes_chat_app() -> Control:
 		"notification_center": _notification_center,
 		"agent_service": _hermes_agent_service
 	})
-	chat.set_meta("window_min_size", Vector2(640, 420))
-	return chat
+	var instance = runtime.create_app_instance("res://scripts/apps/hermes_chat/manifest.json")
+	host.set_meta("hermes_ui_runtime", runtime)
+	host.set_meta("hermes_ui_instance", instance)
+	if instance == null:
+		var error_label := Label.new()
+		error_label.name = "HermesChatManifestError"
+		error_label.text = "Hermes Chat manifest failed to load."
+		error_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		error_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		host.add_child(error_label)
+		return host
+	var mounted: Control = runtime.mount_instance(instance, host)
+	if mounted == null:
+		var mount_error := Label.new()
+		mount_error.name = "HermesChatMountError"
+		mount_error.text = "Hermes Chat runtime failed to mount."
+		mount_error.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		mount_error.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		host.add_child(mount_error)
+	host.tree_exiting.connect(func() -> void:
+		if runtime != null and instance != null:
+			runtime.unmount_instance(instance)
+	)
+	return host
 
 func _build_browser_app() -> Control:
 	var browser := BrowserApp.new()
 	browser.name = "BrowserApp"
 	browser.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	browser.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	browser.set_meta("window_min_size", Vector2(720, 520))
+	browser.set_meta("window_min_size", Vector2(760, 520))
+	browser.os_app_init({"shell": self, "filesystem": _fs})
 	return browser
 
 func _browser_instance() -> BrowserApp:
@@ -3343,7 +3486,7 @@ func _browser_instance() -> BrowserApp:
 func _open_browser_url(url: String) -> Dictionary:
 	var clean_url := url.strip_edges()
 	if clean_url == "":
-		clean_url = "http://news.grid/"
+		clean_url = "http://home.hermes/"
 	var window := launch_app("browser")
 	if window == null:
 		return {"ok": false, "error": HermesProtocol.make_error("OPEN_FAILED", "Could not open browser")}
@@ -3492,6 +3635,12 @@ func _build_account_center_app() -> Control:
 	account_app.name = "AccountCenterApp"
 	account_app.os_app_init({"shell": self, "filesystem": _fs})
 	return account_app
+
+func _build_command_palette_app() -> Control:
+	var command_palette_app := CommandPaletteApp.new()
+	command_palette_app.name = "CommandPaletteApp"
+	command_palette_app.os_app_init({"shell": self, "filesystem": _fs})
+	return command_palette_app
 
 func _apps_text() -> String:
 	var lines: Array[String] = []

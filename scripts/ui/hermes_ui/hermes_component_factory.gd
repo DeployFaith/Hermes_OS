@@ -4,6 +4,8 @@ extends RefCounted
 const HermesThemeScript = preload("res://scripts/ui/hermes_ui/hermes_theme.gd")
 const HermesRefsScript = preload("res://scripts/ui/hermes_ui/hermes_refs.gd")
 const DesignTokens = preload("res://scripts/os/design_tokens.gd")
+const TerminalViewScript = preload("res://scripts/apps/terminal/terminal_view.gd")
+const BrowserContentSurfaceScript = preload("res://scripts/apps/browser/browser_content.gd")
 
 const BODY_META := "hermes_ui_body"
 const SELECTED_META := "hermes_ui_selected_id"
@@ -17,7 +19,7 @@ const COMMON_OPTIONS: Array[String] = [
 	"items", "value", "placeholder", "text", "title", "body", "id", "state", "icon", "app_id", "category", "timestamp",
 	"left", "center", "right", "footer", "search", "apps", "actions", "separator", "checked", "pressed", "max", "min", "step",
 	"mcp_label", "mcp_enabled", "meta", "vertical", "v_gap", "label_width", "selected", "size", "elevation",
-	"content", "subtitle", "description", "align", "dense"
+	"content", "subtitle", "description", "align", "dense", "type", "path", "modified"
 ]
 
 var theme = null
@@ -236,6 +238,20 @@ func badge(text: String = "", kind: Variant = "info", options: Dictionary = {}) 
 	_apply_common_options(holder, options)
 	return holder
 
+func path_breadcrumb(path: String = "", options: Dictionary = {}) -> Label:
+	_validate_options("path_breadcrumb", options)
+	var opts: Dictionary = options.duplicate(true)
+	opts["text"] = path
+	if not opts.has("name"):
+		opts["name"] = "HermesPathBreadcrumb"
+	if not opts.has("expand_h"):
+		opts["expand_h"] = true
+	var node: Label = label("", "body", opts)
+	node.autowrap_mode = TextServer.AUTOWRAP_OFF
+	node.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	node.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	return node
+
 func button(text: String = "", on_pressed: Variant = Callable(), variant: String = "secondary", disabled: bool = false, options: Dictionary = {}) -> Button:
 	if on_pressed is Dictionary:
 		options = (on_pressed as Dictionary).duplicate(true)
@@ -374,6 +390,31 @@ func text_area(value: Variant = "", placeholder: String = "", on_change: Variant
 	_attach_interactive_meta(node, placeholder if placeholder != "" else "text area", "text_area", options)
 	_apply_common_options(node, options)
 	return node
+
+func terminal_surface(options: Dictionary = {}) -> Control:
+	_validate_options("terminal_surface", options)
+	var surface = TerminalViewScript.new()
+	surface.terminal_view_init({"shell": options.get("shell", null)})
+	surface.name = str(options.get("name", "HermesTerminalSurface"))
+	_apply_common_options(surface, options)
+	if surface.size_flags_horizontal == Control.SIZE_FILL:
+		surface.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if surface.size_flags_vertical == Control.SIZE_FILL:
+		surface.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	return surface
+
+func browser_surface(options: Dictionary = {}) -> Control:
+	_validate_options("browser_surface", options)
+	var surface = BrowserContentSurfaceScript.new()
+	surface.name = str(options.get("name", "HermesBrowserSurface"))
+	if surface.has_method("set_chrome_visible"):
+		surface.call("set_chrome_visible", false)
+	_apply_common_options(surface, options)
+	if surface.size_flags_horizontal == Control.SIZE_FILL:
+		surface.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if surface.size_flags_vertical == Control.SIZE_FILL:
+		surface.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	return surface
 
 # -----------------------------------------------------------------------------
 # Form controls
@@ -656,6 +697,30 @@ func list(items: Array = [], selected_id: String = "", on_select: Callable = Cal
 	opts["selected_id"] = selected_id
 	opts["on_select"] = on_select
 	return list_view(items, opts)
+
+func file_list(options: Dictionary = {}) -> ScrollContainer:
+	_validate_options("file_list", options)
+	var scroll := scroll_container(null, {"name": str(options.get("name", "HermesFileList")), "expand_h": true, "expand_v": true})
+	var rows := vbox([], int(options.get("gap", 4)), {"name": "HermesFileListRows", "expand_h": true})
+	scroll.add_child(rows)
+	scroll.set_meta(BODY_META, rows)
+	scroll.add_theme_stylebox_override("panel", theme.panel_style({"bg": theme.color("surface"), "border": theme.color("border_soft"), "radius": theme.radius("lg"), "padding": 0}))
+	_apply_common_options(scroll, options)
+	return scroll
+
+func file_row(options: Dictionary = {}) -> Button:
+	_validate_options("file_row", options)
+	# `name` in factory options is reserved for the control node name (e.g. HermesRenderFileRow).
+	# Visible file/folder text must come from bound row data, never the control name.
+	var entry_name_text: String = str(options.get("text", options.get("label", options.get("id", ""))))
+	var modified_text: String = str(options.get("modified", "—"))
+	var size_text: String = str(options.get("size", ""))
+	var combined_text: String = "%s  |  %s  |  %s" % [entry_name_text, modified_text, size_text]
+	var row_options: Dictionary = options.duplicate(true)
+	row_options["text"] = combined_text
+	row_options["height"] = int(options.get("height", theme.size("list_row_height")))
+	row_options["mcp_role"] = str(options.get("mcp_role", "file" if str(options.get("type", "file")) == "file" else "folder"))
+	return list_item(row_options)
 
 func rebuild_list(list_control: Control, items: Array, options: Dictionary = {}) -> void:
 	var rows: Control = body_of(list_control)

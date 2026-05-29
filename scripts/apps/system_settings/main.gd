@@ -1,0 +1,407 @@
+extends "res://scripts/ui/hermes_ui/runtime/hermes_app_controller.gd"
+
+const OSFileSystem = preload("res://scripts/os/os_file_system.gd")
+
+var _shell: Node
+var _fs: Object
+
+func _app_ready() -> void:
+	_shell = os.context.get("shell", null) as Node if os != null else null
+	_fs = os.context.get("filesystem", null) as Object if os != null else null
+	if _fs == null and _shell != null:
+		_fs = _shell.get("_fs") as Object
+	_initialize_state()
+	refresh_settings()
+
+func refresh_settings() -> void:
+	_refresh_page_visibility()
+	_refresh_gateway_mcp_status()
+	_refresh_appearance_state()
+	_refresh_system_info()
+
+func get_settings_state() -> Dictionary:
+	if state == null:
+		return {}
+	return {
+		"theme_mode": _theme_mode(),
+		"wallpaper_index": _wallpaper_index(),
+		"desktop_highlight_color": [_desktop_highlight_color().r, _desktop_highlight_color().g, _desktop_highlight_color().b, _desktop_highlight_color().a],
+		"gateway": _gateway_state(),
+		"mcp": _mcp_state(),
+		"active_tab": state.get_string("active_tab", "system")
+	}
+
+func restore_settings_state(saved_state: Dictionary) -> void:
+	if state == null:
+		return
+	var active: String = str(saved_state.get("active_tab", state.get_string("active_tab", "system")))
+	if active != "system" and active != "appearance":
+		active = "system"
+	state.set("active_tab", active)
+	_refresh_page_visibility()
+	refresh_settings()
+
+func select_section(event) -> void:
+	if state == null:
+		return
+	var selected_id: String = str(event.value if event != null else "")
+	if selected_id != "system" and selected_id != "appearance":
+		return
+	state.set("active_tab", selected_id)
+	_refresh_page_visibility()
+	_refresh_system_info()
+
+func theme_mode_changed(event) -> void:
+	var selected_id: String = str(event.value if event != null else "")
+	if selected_id != "dark" and selected_id != "light":
+		return
+	_apply_theme_mode(selected_id, true)
+	if state != null:
+		state.set("theme_mode", _theme_mode())
+	_set_desktop_context_status("Light mode enabled" if _theme_mode() == "light" else "Dark mode enabled")
+	_refresh_system_info()
+
+func highlight_preset_changed(event) -> void:
+	var selected_label: String = str(event.value if event != null else "")
+	for preset in _desktop_highlight_presets():
+		if str(preset.get("label", "")) == selected_label:
+			var color: Color = preset.get("color", _desktop_highlight_color())
+			var current: Color = _desktop_highlight_color()
+			_set_desktop_highlight_color(Color(color.r, color.g, color.b, current.a))
+			_set_desktop_context_status("Desktop highlight color updated")
+			_refresh_appearance_state()
+			_refresh_system_info()
+			return
+
+func highlight_alpha_changed(event) -> void:
+	var value: float = str(event.value if event != null else _desktop_highlight_color().a).to_float()
+	var current: Color = _desktop_highlight_color()
+	_set_desktop_highlight_color(Color(current.r, current.g, current.b, value))
+	_refresh_appearance_state()
+
+func cycle_wallpaper(_event = null) -> void:
+	_cycle_wallpaper()
+	_set_status("Wallpaper cycled", false)
+	_refresh_system_info()
+
+func reset_icon_layout(_event = null) -> void:
+	if _shell != null:
+		var positions: Variant = _shell.get("_desktop_icon_positions")
+		if positions is Dictionary:
+			(positions as Dictionary).clear()
+	_refresh_desktop_icons()
+	_set_desktop_context_status("Desktop icon layout reset")
+	_set_status("Desktop icon layout reset", false)
+	_refresh_system_info()
+
+func reset_highlight(_event = null) -> void:
+	_set_desktop_highlight_color(Color(0.34, 0.45, 0.62, 0.32))
+	_set_desktop_context_status("Desktop highlight color reset")
+	_set_status("Desktop highlight color reset", false)
+	_refresh_appearance_state()
+	_refresh_system_info()
+
+func test_gateway(_event = null) -> void:
+	_set_status("Testing Hermes Gateway status…", false)
+	_refresh_gateway_mcp_status()
+
+func reload_gateway_config(_event = null) -> void:
+	if _shell == null or _shell.get("_hermes_agent_service") == null:
+		_set_status("Hermes agent service unavailable", true)
+		return
+	if not _shell.has_method("_hermes_gateway_config"):
+		_set_status("Gateway config loader unavailable", true)
+		return
+	var config: Dictionary = _shell.call("_hermes_gateway_config") as Dictionary
+	var service: Object = _shell.get("_hermes_agent_service")
+	var gateway_client: Variant = service.get("_gateway_client") if service != null else null
+	if gateway_client == null or not gateway_client.has_method("configure"):
+		_set_status("Gateway client unavailable", true)
+		return
+	gateway_client.call("configure", config)
+	_set_status("Gateway config reloaded", false)
+	_refresh_gateway_mcp_status()
+
+func test_mcp(_event = null) -> void:
+	_set_status("Testing MCP endpoint…", false)
+	var mcp_result: Dictionary = {"kind": "checking", "label": "checking", "endpoint": "127.0.0.1:9090", "ok": false}
+	var peer := StreamPeerTCP.new()
+	var err: int = peer.connect_to_host("127.0.0.1", 9090)
+	if err != OK:
+		mcp_result["kind"] = "unavailable"
+		mcp_result["label"] = "unavailable"
+		mcp_result["error"] = "connect_failed"
+		_set_status("MCP endpoint unavailable", true)
+	else:
+		mcp_result["kind"] = "available"
+		mcp_result["label"] = "available"
+		mcp_result["ok"] = true
+		peer.put_data((JSON.stringify({"command": "get_ui_elements", "params": {}}) + "\n").to_utf8_buffer())
+		var started_msec: int = Time.get_ticks_msec()
+		var has_response: bool = false
+		while Time.get_ticks_msec() - started_msec < 450:
+			peer.poll()
+			if peer.get_available_bytes() > 0:
+				has_response = true
+				break
+			OS.delay_msec(10)
+		mcp_result["response_seen"] = has_response
+		_set_status("MCP endpoint reachable" if has_response else "MCP endpoint reachable (no response yet)", false)
+		peer.disconnect_from_host()
+	if state != null:
+		state.set("mcp", mcp_result)
+	_refresh_gateway_mcp_status()
+
+func _initialize_state() -> void:
+	if state == null:
+		return
+	state.set_many({
+		"active_tab": "system",
+		"system_visible": true,
+		"appearance_visible": false,
+		"system_info": "Loading system information…",
+		"status": "System settings ready.",
+		"status_variant": "info",
+		"gateway_label": "Checking",
+		"gateway_toolbar_label": "Gateway: Checking",
+		"gateway_variant": "busy",
+		"gateway_model": "Unknown",
+		"gateway_source": "runtime/hermes_gateway/compose.env",
+		"mcp_label": "Checking",
+		"mcp_toolbar_label": "MCP: Checking",
+		"mcp_variant": "busy",
+		"mcp_endpoint": "127.0.0.1:9090",
+		"theme_mode": _theme_mode(),
+		"highlight_preset": _current_highlight_preset(),
+		"highlight_alpha": _desktop_highlight_color().a,
+		"highlight_alpha_label": _alpha_label(_desktop_highlight_color().a),
+		"mcp": _mcp_state()
+	})
+
+func _refresh_page_visibility() -> void:
+	if state == null:
+		return
+	var active: String = state.get_string("active_tab", "system")
+	state.set_many({
+		"system_visible": active == "system",
+		"appearance_visible": active == "appearance"
+	})
+
+func _refresh_appearance_state() -> void:
+	if state == null:
+		return
+	var highlight: Color = _desktop_highlight_color()
+	state.set_many({
+		"theme_mode": _theme_mode(),
+		"highlight_preset": _current_highlight_preset(),
+		"highlight_alpha": highlight.a,
+		"highlight_alpha_label": _alpha_label(highlight.a)
+	})
+
+func _refresh_gateway_mcp_status() -> void:
+	if state == null:
+		return
+	var gateway_state: Dictionary = _gateway_state()
+	var gateway_kind: String = _gateway_kind(gateway_state)
+	var gateway_label: String = _gateway_label(gateway_kind).capitalize()
+	var display_model: String = _display_model_name(gateway_state)
+	var mcp_state: Dictionary = _mcp_state()
+	var mcp_kind: String = str(mcp_state.get("kind", "unavailable"))
+	var mcp_label: String = str(mcp_state.get("label", "unavailable")).capitalize()
+	state.set_many({
+		"gateway_label": gateway_label,
+		"gateway_toolbar_label": "Gateway: " + gateway_label,
+		"gateway_variant": gateway_kind,
+		"gateway_model": display_model if display_model != "" else "Unknown",
+		"gateway_source": _gateway_source_path(gateway_state),
+		"mcp_label": mcp_label,
+		"mcp_toolbar_label": "MCP: " + mcp_label,
+		"mcp_variant": mcp_kind,
+		"mcp_endpoint": str(mcp_state.get("endpoint", "127.0.0.1:9090"))
+	})
+	_refresh_system_info()
+
+func _refresh_system_info() -> void:
+	if state == null or _shell == null or _fs == null:
+		return
+	var viewport_size: Vector2 = _shell.get_viewport_rect().size if _shell != null else Vector2.ZERO
+	var window_size: Vector2i = DisplayServer.window_get_size()
+	var mode: int = DisplayServer.window_get_mode()
+	var gateway: Dictionary = _gateway_state()
+	var gateway_kind: String = _gateway_kind(gateway)
+	var mcp_state: Dictionary = _mcp_state()
+	state.set("system_info", "Viewport: %s\nGame window: %s\nWindow mode: %s\nCurrent user: %s\nHome: %s\nUsers: %s\nFilesystem save: %s\nApps: %s\nOpen windows: %s\nGateway status: %s\nGateway endpoint: %s\nGateway model: %s\nMCP status: %s\nMCP endpoint: %s" % [
+		str(viewport_size),
+		str(window_size),
+		str(mode),
+		str(_fs.call("current_user")),
+		str(_fs.call("home_path")),
+		", ".join(_fs.call("get_users")),
+		OSFileSystem.SAVE_PATH,
+		_app_ids_text(),
+		_windows_text(),
+		_gateway_label(gateway_kind),
+		str(gateway.get("endpoint", "http://127.0.0.1:8643/v1/chat/completions")),
+		(_display_model_name(gateway) if _display_model_name(gateway) != "" else "Unknown"),
+		str(mcp_state.get("label", "unavailable")),
+		str(mcp_state.get("endpoint", "127.0.0.1:9090"))
+	])
+
+func _theme_mode() -> String:
+	if _shell != null:
+		return str(_shell.get("_theme_mode"))
+	return "dark"
+
+func _wallpaper_index() -> int:
+	if _shell != null:
+		return int(_shell.get("_wallpaper_index"))
+	return 0
+
+func _desktop_highlight_color() -> Color:
+	if _shell != null:
+		var value: Variant = _shell.get("_desktop_highlight_color")
+		if value is Color:
+			return value as Color
+	return Color(0.34, 0.45, 0.62, 0.32)
+
+func _desktop_highlight_presets() -> Array[Dictionary]:
+	return [
+		{"label": "Ocean blue", "color": Color(0.34, 0.45, 0.62, 1.0)},
+		{"label": "Mint green", "color": Color(0.35, 0.63, 0.46, 1.0)},
+		{"label": "Amber", "color": Color(0.73, 0.53, 0.27, 1.0)},
+		{"label": "Rose", "color": Color(0.71, 0.39, 0.54, 1.0)}
+	]
+
+func _current_highlight_preset() -> String:
+	var current: Color = Color(_desktop_highlight_color().r, _desktop_highlight_color().g, _desktop_highlight_color().b, 1.0)
+	for preset in _desktop_highlight_presets():
+		var preset_color: Color = preset.get("color", Color.WHITE)
+		if preset_color.is_equal_approx(current):
+			return str(preset.get("label", "Ocean blue"))
+	return "Ocean blue"
+
+func _alpha_label(value: float) -> String:
+	return "%d%%" % int(round(value * 100.0))
+
+func _gateway_state() -> Dictionary:
+	var fallback: Dictionary = {
+		"configured": true,
+		"busy": false,
+		"endpoint": "http://127.0.0.1:8643/v1/chat/completions",
+		"host": "127.0.0.1",
+		"port": 8643,
+		"path": "/v1/chat/completions",
+		"model": "",
+		"profile_hint": "hermesos",
+		"api_key_present": false,
+		"last_error": {},
+		"last_response": {}
+	}
+	if _shell == null:
+		return fallback
+	var service: Variant = _shell.get("_hermes_agent_service")
+	if service != null and service.has_method("get_status"):
+		var status: Variant = service.call("get_status")
+		if status is Dictionary:
+			var gateway: Variant = (status as Dictionary).get("gateway", {})
+			if gateway is Dictionary:
+				var snapshot: Dictionary = (gateway as Dictionary).duplicate(true)
+				snapshot["source_path"] = _gateway_source_path(snapshot)
+				if str(snapshot.get("endpoint", "")).strip_edges() == "":
+					snapshot["endpoint"] = fallback["endpoint"]
+				if str(snapshot.get("model", "")).strip_edges() == "":
+					snapshot["model"] = fallback["model"]
+				return snapshot
+	return fallback
+
+func _gateway_source_path(gateway_state: Dictionary) -> String:
+	var direct: String = str(gateway_state.get("source_path", "")).strip_edges()
+	if direct != "":
+		return direct
+	if _shell != null and _shell.has_method("_hermes_gateway_config"):
+		var config: Variant = _shell.call("_hermes_gateway_config")
+		if config is Dictionary:
+			var path_text: String = str((config as Dictionary).get("gateway_config_path", "")).strip_edges()
+			if path_text != "":
+				if path_text.begins_with("res://"):
+					return path_text.trim_prefix("res://")
+				return path_text
+	return "runtime/hermes_gateway/compose.env"
+
+func _gateway_kind(gateway_state: Dictionary) -> String:
+	if bool(gateway_state.get("busy", false)):
+		return "busy"
+	var last_error: Dictionary = gateway_state.get("last_error", {}) if gateway_state.get("last_error", {}) is Dictionary else {}
+	var error_code: String = str(last_error.get("code", "")).strip_edges()
+	if error_code == "GATEWAY_UNAUTHORIZED":
+		return "warning"
+	if error_code != "":
+		return "danger"
+	if bool(gateway_state.get("configured", false)):
+		return "success" if bool(gateway_state.get("api_key_present", false)) else "warning"
+	return "muted"
+
+func _gateway_label(kind: String) -> String:
+	match kind:
+		"success": return "online"
+		"warning": return "unauthorized"
+		"danger": return "error"
+		"busy": return "checking"
+		_: return "offline"
+
+func _display_model_name(gateway_state: Dictionary) -> String:
+	var model_name: String = str(gateway_state.get("model", "")).strip_edges()
+	if model_name.to_lower() == "hermesos":
+		return ""
+	return model_name
+
+func _mcp_state() -> Dictionary:
+	if state != null:
+		var cached: Variant = state.get_value("mcp", {})
+		if cached is Dictionary and not (cached as Dictionary).is_empty():
+			var snap: Dictionary = (cached as Dictionary).duplicate(true)
+			if str(snap.get("endpoint", "")).strip_edges() == "":
+				snap["endpoint"] = "127.0.0.1:9090"
+			if str(snap.get("label", "")).strip_edges() == "":
+				snap["label"] = "checking"
+			if str(snap.get("kind", "")).strip_edges() == "":
+				snap["kind"] = "checking"
+			return snap
+	return {"kind": "checking", "label": "checking", "endpoint": "127.0.0.1:9090", "ok": false}
+
+func _set_status(message: String, is_error: bool = false) -> void:
+	if state != null:
+		state.set_many({
+			"status": message,
+			"status_variant": "danger" if is_error else "info"
+		})
+
+func _apply_theme_mode(mode: String, refresh_ui: bool = true) -> void:
+	if _shell != null and _shell.has_method("_apply_theme_mode"):
+		_shell.call("_apply_theme_mode", mode, refresh_ui)
+
+func _cycle_wallpaper() -> void:
+	if _shell != null and _shell.has_method("_cycle_wallpaper"):
+		_shell.call("_cycle_wallpaper")
+
+func _set_desktop_highlight_color(color: Color) -> void:
+	if _shell != null and _shell.has_method("_set_desktop_highlight_color"):
+		_shell.call("_set_desktop_highlight_color", color)
+
+func _refresh_desktop_icons() -> void:
+	if _shell != null and _shell.has_method("_refresh_desktop_icons"):
+		_shell.call("_refresh_desktop_icons")
+
+func _set_desktop_context_status(message: String, is_error: bool = false) -> void:
+	if _shell != null and _shell.has_method("_set_desktop_context_status"):
+		_shell.call("_set_desktop_context_status", message, is_error)
+
+func _app_ids_text() -> String:
+	if _shell != null and _shell.has_method("_app_ids_text"):
+		return str(_shell.call("_app_ids_text"))
+	return ""
+
+func _windows_text() -> String:
+	if _shell != null and _shell.has_method("_windows_text"):
+		return str(_shell.call("_windows_text"))
+	return "none"

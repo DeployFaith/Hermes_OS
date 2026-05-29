@@ -17,6 +17,13 @@ func terminal_view_init(context: Dictionary = {}) -> void:
 	_shell = context.get("shell", null) as Node
 	_build()
 
+func set_shell(shell: Node) -> void:
+	_shell = shell
+	if _output != null:
+		_style_output(_output)
+	if _input != null:
+		_style_input(_input)
+
 func focus_input() -> void:
 	if _input != null:
 		_input.grab_focus()

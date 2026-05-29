@@ -1,0 +1,19 @@
+{
+  "id": "console",
+  "name": "Terminal",
+  "version": "0.1.0",
+  "hermes_ui": "0.1",
+  "entry": "main.hml",
+  "styles": ["main.hss"],
+  "controller": "main.gd",
+  "surface": "window",
+  "window": {
+    "title": "Terminal",
+    "default_width": 900,
+    "default_height": 560,
+    "min_width": 720,
+    "min_height": 420,
+    "resizable": true,
+    "chromed": true
+  }
+}

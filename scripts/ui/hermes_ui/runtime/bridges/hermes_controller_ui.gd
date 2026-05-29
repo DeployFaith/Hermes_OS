@@ -31,8 +31,13 @@ func get_value(target_id: String):
 		return (control as TextEdit).text
 	if control is Label:
 		return (control as Label).text
-	if control is Button:
+	if control is Button and not (control is OptionButton) and not (control is CheckBox):
 		return (control as Button).text
+	if control is OptionButton:
+		var dropdown: OptionButton = control as OptionButton
+		if dropdown.selected >= 0:
+			var selected_value = dropdown.get_item_metadata(dropdown.selected)
+			return selected_value if selected_value != null else dropdown.get_item_text(dropdown.selected)
 	if control is CheckBox:
 		return (control as CheckBox).button_pressed
 	if control is BaseButton:
@@ -54,8 +59,10 @@ func set_value(target_id: String, value) -> bool:
 		(control as TextEdit).text = str(value)
 	elif control is Label:
 		(control as Label).text = str(value)
-	elif control is Button:
+	elif control is Button and not (control is OptionButton) and not (control is CheckBox):
 		(control as Button).text = str(value)
+	elif control is OptionButton:
+		_select_option_value(control as OptionButton, value)
 	elif control is CheckBox:
 		(control as CheckBox).button_pressed = _boolish(value)
 	elif control is BaseButton:
@@ -124,6 +131,11 @@ func invoke(target_id: String) -> bool:
 		var input := control as LineEdit
 		input.emit_signal("text_submitted", input.text)
 		return true
+	if control is OptionButton:
+		var dropdown := control as OptionButton
+		if dropdown.selected >= 0:
+			dropdown.emit_signal("item_selected", dropdown.selected)
+			return true
 	if control is BaseButton:
 		(control as BaseButton).emit_signal("pressed")
 		return true
@@ -152,15 +164,26 @@ func _apply_styles() -> void:
 	if context.style_resolver != null and not context.stylesheets.is_empty():
 		context.style_resolver.apply_tree(_app.root_element, context.stylesheets)
 
+func _select_option_value(dropdown: OptionButton, value) -> void:
+	if dropdown == null:
+		return
+	var desired: String = str(value)
+	for i in dropdown.item_count:
+		if str(dropdown.get_item_metadata(i)) == desired or dropdown.get_item_text(i) == desired:
+			dropdown.select(i)
+			return
+
 func _apply_prop_direct(control: Control, prop_name: String, value) -> void:
 	if control == null:
 		return
 	match prop_name:
-		"disabled":
+		"disabled", "readonly", "read-only":
 			if control is Button:
 				(control as Button).disabled = _boolish(value)
 			elif control is LineEdit:
 				(control as LineEdit).editable = not _boolish(value)
+			elif control is TextEdit:
+				(control as TextEdit).editable = not _boolish(value)
 		"value":
 			set_value(str(control.get_meta("hermes_id", "")), value)
 		"hidden":

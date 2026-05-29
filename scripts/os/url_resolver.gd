@@ -1,57 +1,47 @@
 class_name URLResolver
 extends RefCounted
 
-var backend_origin := "http://127.0.0.1:8788"
+const HermesInternetResolver = preload("res://scripts/os/hermes_internet/hermes_internet_resolver.gd")
 
-func _init(origin := "http://127.0.0.1:8788") -> void:
-	backend_origin = origin.rstrip("/")
+var _resolver: HermesInternetResolver
+
+func _init() -> void:
+	_resolver = HermesInternetResolver.new()
 
 func normalize_user_url(input_url: String) -> String:
-	var s := input_url.strip_edges()
-	if s == "":
-		return "http://news.grid/"
-	if not s.contains("://"):
-		s = "http://" + s
-	if not s.ends_with("/") and s.find("/", s.find("://") + 3) == -1:
-		s += "/"
-	return s
+	return _resolver.normalize_user_url(input_url)
 
 func resolve_to_backend(input_url: String) -> String:
-	var fake := normalize_user_url(input_url)
-	var host := _extract_host(fake)
-	if host == "":
-		host = "news.grid"
-	var path := _extract_path_and_query(fake)
-	return "%s/worldweb/%s%s" % [backend_origin, host, path]
+	return _resolver.resolve_to_backend_url(input_url)
 
 func display_url_from_backend(resolved_url: String) -> String:
-	var prefix := backend_origin + "/worldweb/"
-	if not resolved_url.begins_with(prefix):
-		return resolved_url
-	var rem := resolved_url.substr(prefix.length())
-	var slash := rem.find("/")
-	if slash < 0:
-		return "http://%s/" % rem
-	var host := rem.substr(0, slash)
-	var path := rem.substr(slash)
-	return "http://%s%s" % [host, path]
+	return _resolver.display_url_from_local(resolved_url)
 
-func _extract_host(url: String) -> String:
-	var i := url.find("://")
-	if i < 0:
-		return ""
-	var rest := url.substr(i + 3)
-	var slash := rest.find("/")
-	if slash < 0:
-		return rest
-	return rest.substr(0, slash)
+func is_hermes_internet_route(input_url: String) -> bool:
+	return _resolver.is_hermes_internet_route(input_url)
 
-func _extract_path_and_query(url: String) -> String:
-	var i := url.find("://")
-	if i < 0:
-		return "/"
-	var rest := url.substr(i + 3)
-	var slash := rest.find("/")
-	if slash < 0:
-		return "/"
-	return rest.substr(slash)
+func is_known_hermes_site(input_url: String) -> bool:
+	return _resolver.is_known_hermes_site(input_url)
+
+func is_real_internet_unavailable(input_url: String) -> bool:
+	return _resolver.is_real_internet_unavailable(input_url)
+
+func is_internal_route(input_url: String) -> bool:
+	return _resolver.normalize_user_url(input_url) == HermesInternetResolver.DEFAULT_URL
+
+func requires_local_backend(_input_url: String) -> bool:
+	return false
+
+func local_route_hint(input_url: String) -> Dictionary:
+	var display_url: String = normalize_user_url(input_url)
+	return {
+		"display_url": display_url,
+		"local_url": resolve_to_backend(display_url),
+		"service": "Hermes Internet in-process document loader"
+	}
+
+func extract_host(input_url: String) -> String:
+	return _resolver.extract_host(input_url)
+
+func extract_path_and_query(input_url: String) -> String:
+	return _resolver.extract_path_and_query(input_url)

@@ -1,0 +1,37 @@
+<App id="hermes-chat-app" label="Hermes Chat">
+  <Window id="chat-window" class="hermes-chat-window" label="Hermes Chat window">
+    <Column id="chat-root" class="chat-root" label="Hermes Chat content">
+      <Row id="chat-header" class="chat-header" label="Chat header">
+        <Column id="chat-heading" class="chat-heading">
+          <Title id="chat-title">Hermes Chat</Title>
+          <Text id="chat-subtitle">Gateway-native assistant for HermesOS.</Text>
+        </Column>
+        <Badge id="gateway-status" label="Gateway status" variant="{gateway.variant}">{gateway.label}</Badge>
+      </Row>
+
+      <ScrollView id="message-scroll" class="message-scroll" label="Messages">
+        <Column id="message-list" class="message-list" label="Message list">
+          <Column id="empty-state" class="empty-state" label="Empty state" hidden="{has_messages}">
+            <Title id="empty-title">No messages yet</Title>
+            <Text id="empty-body">Ask Hermes to inspect, explain, or operate inside this OS.</Text>
+          </Column>
+
+          <Column id="latest-user-message" class="message-card user-message" label="Latest user message" hidden="{!has_user_message}">
+            <Text id="latest-user-label">You</Text>
+            <Text id="latest-user-text">{last_user_message}</Text>
+          </Column>
+
+          <Column id="latest-gateway-message" class="message-card gateway-message" label="Latest Gateway message" hidden="{!has_gateway_message}">
+            <Text id="latest-gateway-label">Gateway</Text>
+            <Text id="latest-gateway-text">{last_gateway_message}</Text>
+          </Column>
+        </Column>
+      </ScrollView>
+
+      <Row id="composer-row" class="composer-row" label="Message composer">
+        <TextInput id="message-input" label="Message" model="draft" placeholder="Ask Hermes…" on:input="handle_input" on:submit="send_message" />
+        <Button id="send-button" label="Send message" variant="primary" disabled="{!can_send}" on:click="send_message">Send</Button>
+      </Row>
+    </Column>
+  </Window>
+</App>

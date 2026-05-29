@@ -1,0 +1,10 @@
+{
+  "domain": "home.hermes",
+  "title": "Hermes_OS",
+  "description": "The official Hermes_OS landing page for Hermes Internet.",
+  "entry": "/",
+  "routes": {
+    "/": "pages/index.html"
+  },
+  "agent_visible": true
+}

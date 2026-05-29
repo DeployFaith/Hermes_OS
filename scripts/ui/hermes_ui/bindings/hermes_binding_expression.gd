@@ -54,18 +54,24 @@ func _evaluate_token(token: String, scope):
 		return not _boolish(_resolve_path(expression.substr(1).strip_edges(), scope))
 	var equals_index: int = expression.find("==")
 	if equals_index != -1:
-		var left = _resolve_path(expression.substr(0, equals_index).strip_edges(), scope)
-		var right_text: String = expression.substr(equals_index + 2).strip_edges().trim_prefix("\"").trim_suffix("\"").trim_prefix("'").trim_suffix("'")
-		return str(left) == right_text
+		var left = _resolve_operand(expression.substr(0, equals_index).strip_edges(), scope)
+		var right = _resolve_operand(expression.substr(equals_index + 2).strip_edges(), scope)
+		return str(left) == str(right)
 	return _resolve_path(expression, scope)
+
+func _resolve_operand(text: String, scope):
+	var clean: String = text.strip_edges()
+	if (clean.begins_with("\"") and clean.ends_with("\"")) or (clean.begins_with("'") and clean.ends_with("'")):
+		return clean.substr(1, clean.length() - 2)
+	return _resolve_path(clean, scope)
 
 func _resolve_path(path: String, scope):
 	if path == "":
 		return ""
-	if scope != null and scope.has_method("get_value"):
-		return scope.call("get_value", path, null)
-	if scope != null and scope.has_method("get"):
-		return scope.call("get", path)
+	if scope != null and scope is Object and (scope as Object).has_method("get_value"):
+		return (scope as Object).call("get_value", path, null)
+	if scope != null and scope is Object and (scope as Object).has_method("get"):
+		return (scope as Object).call("get", path)
 	var current = scope
 	for part in path.split(".", false):
 		if current is Dictionary:

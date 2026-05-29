@@ -223,6 +223,8 @@ func _pseudo_matches(element, pseudo_name: String) -> bool:
 				return (element.control as Button).disabled
 			if element.control is LineEdit:
 				return not (element.control as LineEdit).editable
+			if element.control is TextEdit:
+				return not (element.control as TextEdit).editable
 			return false
 		"selected", "checked":
 			return element.is_pseudo_state(clean) or _boolish(element.props.get(clean, false))
@@ -440,6 +442,11 @@ func _apply_visual_style(control: Control, computed) -> void:
 		(control as LineEdit).add_theme_stylebox_override("focus", box)
 		(control as LineEdit).add_theme_stylebox_override("read_only", box)
 		return
+	if control is TextEdit:
+		(control as TextEdit).add_theme_stylebox_override("normal", box)
+		(control as TextEdit).add_theme_stylebox_override("focus", box)
+		(control as TextEdit).add_theme_stylebox_override("read_only", box)
+		return
 	if control is PanelContainer:
 		(control as PanelContainer).add_theme_stylebox_override("panel", box)
 
@@ -466,6 +473,12 @@ func _apply_text_style(control: Control, computed) -> void:
 			(control as LineEdit).add_theme_color_override("font_color", font_color)
 		if font_size > 0:
 			(control as LineEdit).add_theme_font_size_override("font_size", font_size)
+		return
+	if control is TextEdit:
+		if computed.has_property("color"):
+			(control as TextEdit).add_theme_color_override("font_color", font_color)
+		if font_size > 0:
+			(control as TextEdit).add_theme_font_size_override("font_size", font_size)
 
 func _apply_flex_properties(element, control: Control, computed) -> void:
 	if not computed.has_property("flex"):
@@ -480,7 +493,7 @@ func _apply_flex_properties(element, control: Control, computed) -> void:
 			control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		"Column":
 			control.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		"Grid":
+		"Window", "ScrollView", "Grid":
 			control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			control.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		_:

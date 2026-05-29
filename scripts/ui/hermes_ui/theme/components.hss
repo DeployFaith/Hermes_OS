@@ -28,12 +28,41 @@ Grid {
 }
 
 Panel,
-Card {
+Card,
+SettingsSection {
   background: var(--surface-2);
   border-color: var(--border-muted);
   border-width: 1px;
   border-radius: var(--radius-lg);
   padding: var(--space-4);
+}
+
+Toolbar {
+  background: var(--surface-2);
+  border-color: var(--border-muted);
+  border-width: 1px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+}
+
+Sidebar {
+  background: var(--surface-0);
+  border-color: var(--border-muted);
+  border-width: 1px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+}
+
+SettingsPage {
+  gap: var(--space-3);
+}
+
+SettingsRow {
+  gap: var(--space-3);
+}
+
+FlowRow {
+  gap: var(--space-2);
 }
 
 Text {
@@ -91,6 +120,88 @@ TextInput {
 
 TextInput:focus {
   border-color: var(--accent);
+}
+
+TextArea,
+Select,
+Dropdown {
+  background: var(--surface-0);
+  color: var(--text);
+  border-color: var(--border-muted);
+  border-width: 1px;
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  min-height: 36px;
+}
+
+TextArea:focus,
+Select:focus,
+Dropdown:focus {
+  border-color: var(--accent);
+}
+
+Select:disabled,
+Dropdown:disabled,
+Slider:disabled,
+Toggle:disabled {
+  opacity: 0.65;
+}
+
+Slider {
+  min-height: 28px;
+}
+
+Toggle {
+  color: var(--text);
+  min-height: 30px;
+}
+
+FileList {
+  background: var(--surface-0);
+  border-color: var(--border-muted);
+  border-width: 1px;
+  border-radius: var(--radius-md);
+  padding: var(--space-1);
+}
+
+FileRow {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--border-muted);
+  border-width: 1px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  min-height: 32px;
+}
+
+FileRow:hover {
+  background: var(--surface-3);
+}
+
+FileRow:selected {
+  background: rgba(133, 180, 255, 0.20);
+  border-color: rgba(133, 180, 255, 0.55);
+}
+
+PathBreadcrumb {
+  color: var(--text);
+  font-size: var(--font-md);
+}
+
+TerminalSurface {
+  background: var(--surface-0);
+  border-color: var(--border-muted);
+  border-width: 1px;
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+}
+
+BrowserSurface {
+  background: var(--surface-0);
+  border-color: var(--border-muted);
+  border-width: 1px;
+  border-radius: var(--radius-md);
+  padding: 0px;
 }
 
 Badge {

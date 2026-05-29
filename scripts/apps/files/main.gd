@@ -1,0 +1,849 @@
+extends "res://scripts/ui/hermes_ui/runtime/hermes_app_controller.gd"
+
+var ready_called: bool = false
+var last_event = null
+
+var _shell: Node = null
+var _open_file_callback: Callable = Callable()
+var _shortcuts_changed_callback: Callable = Callable()
+var _state_save_callback: Callable = Callable()
+
+func configure_app_context(context: Dictionary) -> void:
+	_shell = context.get("shell", null) as Node
+	var open_value: Variant = context.get("open_file_callback", Callable())
+	if open_value is Callable:
+		_open_file_callback = open_value as Callable
+	var shortcuts_value: Variant = context.get("shortcuts_changed_callback", Callable())
+	if shortcuts_value is Callable:
+		_shortcuts_changed_callback = shortcuts_value as Callable
+	var save_value: Variant = context.get("state_save_callback", Callable())
+	if save_value is Callable:
+		_state_save_callback = save_value as Callable
+	if state != null and context.has("shortcuts"):
+		state.set("shortcuts", _sanitize_shortcuts(context.get("shortcuts", []), _home_path()))
+
+func _app_ready() -> void:
+	ready_called = true
+	if state == null:
+		return
+	var home: String = _home_path()
+	var seeded_shortcuts: Array = _default_shortcuts(home)
+	var configured_shortcuts: Array = _sanitize_shortcuts(state.get_value("shortcuts", seeded_shortcuts), home)
+	state.set_many({
+		"current_path": home,
+		"path_input": home,
+		"breadcrumb": _breadcrumb(home),
+		"entries": [],
+		"selected_path": "",
+		"selected_type": "",
+		"selected_name": "",
+		"selected_label": "Selected: none",
+		"details_label": "",
+		"create_name": "",
+		"rename_name": "",
+		"clipboard_path": "",
+		"clipboard_mode": "",
+		"clipboard_label": "clip: empty",
+		"history": [home],
+		"history_index": 0,
+		"shortcuts": configured_shortcuts,
+		"shortcut_selected_path": "",
+		"show_shortcut_editor": false,
+		"shortcut_editor_mode": "add",
+		"shortcut_editor_title": "Add shortcut",
+		"shortcut_editor_index": -1,
+		"shortcut_edit_label": "",
+		"shortcut_edit_path": home,
+		"status": ""
+	})
+	_refresh(false, false)
+	_update_derived_state()
+
+func refresh_files() -> void:
+	_refresh(true, false)
+
+func get_files_state() -> Dictionary:
+	if state == null:
+		return {}
+	return {
+		"current_path": state.get_string("current_path", ""),
+		"selected_path": state.get_string("selected_path", ""),
+		"selected_type": state.get_string("selected_type", ""),
+		"clipboard_path": state.get_string("clipboard_path", ""),
+		"clipboard_mode": state.get_string("clipboard_mode", ""),
+		"history": (state.get_value("history", []) as Array).duplicate(true),
+		"history_index": int(state.get_value("history_index", 0)),
+		"shortcuts": (state.get_value("shortcuts", []) as Array).duplicate(true),
+		"shortcut_selected_path": state.get_string("shortcut_selected_path", ""),
+		"create_name": state.get_string("create_name", ""),
+		"rename_name": state.get_string("rename_name", ""),
+		"path_input": state.get_string("path_input", "")
+	}
+
+func restore_files_state(saved_state: Dictionary) -> void:
+	if state == null:
+		return
+	var home: String = _home_path()
+	var shortcuts: Array = _sanitize_shortcuts(saved_state.get("shortcuts", state.get_value("shortcuts", [])), home)
+	var current_path: String = _normalize_path(str(saved_state.get("current_path", home)))
+	if not _is_dir(current_path):
+		current_path = home
+	var history_value: Variant = saved_state.get("history", [current_path])
+	var history: Array = history_value if history_value is Array else [current_path]
+	if history.is_empty():
+		history = [current_path]
+	var history_index: int = clampi(int(saved_state.get("history_index", history.size() - 1)), 0, history.size() - 1)
+	state.set_many({
+		"current_path": current_path,
+		"path_input": current_path,
+		"history": history,
+		"history_index": history_index,
+		"shortcuts": shortcuts,
+		"shortcut_selected_path": str(saved_state.get("shortcut_selected_path", "")),
+		"clipboard_path": str(saved_state.get("clipboard_path", "")),
+		"clipboard_mode": str(saved_state.get("clipboard_mode", "")),
+		"create_name": str(saved_state.get("create_name", "")),
+		"rename_name": str(saved_state.get("rename_name", ""))
+	})
+	_refresh(false, false)
+	var selected_path: String = _normalize_path(str(saved_state.get("selected_path", "")))
+	if selected_path != "":
+		select_path(selected_path)
+	_update_derived_state()
+
+func open_path(path: String) -> void:
+	if state == null:
+		return
+	var target: String = _normalize_path(path)
+	if _is_file(target):
+		var parent_value: String = _dirname(target)
+		state.set("path_input", parent_value)
+		_refresh(false, true)
+		select_path(target)
+		return
+	state.set("path_input", target)
+	_refresh(false, true)
+
+func select_path(path: String) -> bool:
+	if state == null:
+		return false
+	var target: String = _normalize_path(path)
+	var entries: Array = state.get_value("entries", [])
+	for entry_value in entries:
+		if not (entry_value is Dictionary):
+			continue
+		var entry: Dictionary = entry_value
+		if str(entry.get("path", "")) == target:
+			_apply_selection(entry)
+			return true
+	return false
+
+func get_current_path() -> String:
+	return state.get_string("current_path", "") if state != null else ""
+
+func get_selected_path() -> String:
+	return state.get_string("selected_path", "") if state != null else ""
+
+func get_visible_entries() -> Array:
+	if state == null:
+		return []
+	return (state.get_value("entries", []) as Array).duplicate(true)
+
+func open_selected(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	var selected_path: String = state.get_string("selected_path", "")
+	if selected_path == "":
+		_set_status("Select an item first", true)
+		return
+	if state.get_string("selected_type", "") == "dir":
+		open_path(selected_path)
+		return
+	_open_text_file(selected_path)
+	_set_status("Opened in Text: " + _basename(selected_path), false)
+
+func handle_path_input(_event = null) -> void:
+	_update_derived_state()
+
+func go_path(event = null) -> void:
+	last_event = event
+	_refresh(true, true)
+
+func refresh_current(event = null) -> void:
+	last_event = event
+	_refresh(true, false)
+
+func navigate_back(event = null) -> void:
+	last_event = event
+	_navigate_history(-1)
+
+func navigate_forward(event = null) -> void:
+	last_event = event
+	_navigate_history(1)
+
+func navigate_up(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	state.set("path_input", _dirname(state.get_string("current_path", _home_path())))
+	_refresh(true, true)
+
+func select_entry(event) -> void:
+	last_event = event
+	if state == null:
+		return
+	var selected_path: String = _normalize_path(str(event.value))
+	var entries: Array = state.get_value("entries", [])
+	for entry_value in entries:
+		if not (entry_value is Dictionary):
+			continue
+		var entry: Dictionary = entry_value
+		if str(entry.get("path", "")) == selected_path:
+			_apply_selection(entry)
+			return
+
+func create_folder(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	var name: String = state.get_string("create_name", "").strip_edges()
+	if name == "":
+		_set_status("Enter a folder name", true)
+		return
+	var target: String = _join_path(state.get_string("current_path", _home_path()), name)
+	var result: Dictionary = _make_dir(target)
+	if bool(result.get("ok", false)):
+		state.set("create_name", "")
+		_set_status("Folder created", false)
+		_refresh(false, false)
+	else:
+		_set_status(_error_message(result, "Could not create folder"), true)
+	_update_derived_state()
+
+func create_file(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	var name: String = state.get_string("create_name", "").strip_edges()
+	if name == "":
+		_set_status("Enter a file name", true)
+		return
+	var target: String = _join_path(state.get_string("current_path", _home_path()), name)
+	var result: Dictionary = _write_file(target, "")
+	if bool(result.get("ok", false)):
+		state.set("create_name", "")
+		_set_status("File created", false)
+		_refresh(false, false)
+	else:
+		_set_status(_error_message(result, "Could not create file"), true)
+	_update_derived_state()
+
+func rename_selected(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	var selected_path: String = state.get_string("selected_path", "")
+	if selected_path == "":
+		_set_status("Select an item first", true)
+		return
+	var target_name: String = state.get_string("rename_name", "").strip_edges()
+	if target_name == "":
+		_set_status("Enter a new name", true)
+		return
+	var result: Dictionary = _rename_path(selected_path, target_name)
+	if bool(result.get("ok", false)):
+		state.set("rename_name", "")
+		state.set("selected_path", "")
+		state.set("selected_type", "")
+		_set_status("Renamed", false)
+		_refresh(false, false)
+	else:
+		_set_status(_error_message(result, "Could not rename item"), true)
+	_update_derived_state()
+
+func delete_selected(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	var selected_path: String = state.get_string("selected_path", "")
+	if selected_path == "":
+		_set_status("Select an item first", true)
+		return
+	var result: Dictionary = _delete_path(selected_path)
+	if bool(result.get("ok", false)):
+		state.set("selected_path", "")
+		state.set("selected_type", "")
+		_set_status("Deleted", false)
+		_refresh(false, false)
+	else:
+		_set_status(_error_message(result, "Could not delete item"), true)
+	_update_derived_state()
+
+func copy_selected(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	var selected_path: String = state.get_string("selected_path", "")
+	if selected_path == "":
+		_set_status("Select an item first", true)
+		return
+	state.set_many({"clipboard_path": selected_path, "clipboard_mode": "copy"})
+	_set_status("Copied to clipboard: " + selected_path, false)
+	_update_derived_state()
+
+func cut_selected(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	var selected_path: String = state.get_string("selected_path", "")
+	if selected_path == "":
+		_set_status("Select an item first", true)
+		return
+	state.set_many({"clipboard_path": selected_path, "clipboard_mode": "move"})
+	_set_status("Cut to clipboard: " + selected_path, false)
+	_update_derived_state()
+
+func paste_clipboard(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	var clipboard_path: String = state.get_string("clipboard_path", "")
+	var clipboard_mode: String = state.get_string("clipboard_mode", "")
+	if clipboard_path == "" or clipboard_mode == "":
+		_set_status("Clipboard is empty", true)
+		return
+	var destination: String = _paste_destination_path(clipboard_path, state.get_string("current_path", _home_path()))
+	var result: Dictionary = _move_path(clipboard_path, destination) if clipboard_mode == "move" else _copy_path(clipboard_path, destination)
+	if bool(result.get("ok", false)):
+		if clipboard_mode == "move":
+			state.set_many({"clipboard_path": "", "clipboard_mode": ""})
+		_set_status(("Moved to " if clipboard_mode == "move" else "Copied to ") + destination, false)
+		_refresh(false, false)
+	else:
+		_set_status(_error_message(result, "Paste failed"), true)
+	_update_derived_state()
+
+func handle_create_name_input(_event = null) -> void:
+	_update_derived_state()
+
+func handle_rename_name_input(_event = null) -> void:
+	_update_derived_state()
+
+func select_shortcut(event) -> void:
+	last_event = event
+	if state == null:
+		return
+	state.set("shortcut_selected_path", _normalize_path(str(event.value)))
+	_update_derived_state()
+
+func open_add_shortcut(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	state.set_many({
+		"show_shortcut_editor": true,
+		"shortcut_editor_mode": "add",
+		"shortcut_editor_title": "Add shortcut",
+		"shortcut_editor_index": -1,
+		"shortcut_edit_label": "",
+		"shortcut_edit_path": state.get_string("current_path", _home_path())
+	})
+	_update_derived_state()
+
+func open_edit_shortcut(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	var selected_path: String = state.get_string("shortcut_selected_path", "")
+	if selected_path == "":
+		_set_status("Select a shortcut first", true)
+		return
+	var shortcuts: Array = state.get_value("shortcuts", [])
+	for index in range(shortcuts.size()):
+		var shortcut_value: Variant = shortcuts[index]
+		if not (shortcut_value is Dictionary):
+			continue
+		var shortcut: Dictionary = shortcut_value
+		if _normalize_path(str(shortcut.get("path", ""))) != selected_path:
+			continue
+		state.set_many({
+			"show_shortcut_editor": true,
+			"shortcut_editor_mode": "edit",
+			"shortcut_editor_title": "Edit shortcut",
+			"shortcut_editor_index": index,
+			"shortcut_edit_label": str(shortcut.get("label", "")),
+			"shortcut_edit_path": str(shortcut.get("path", ""))
+		})
+		_update_derived_state()
+		return
+	_set_status("Select a shortcut first", true)
+
+func handle_shortcut_input(_event = null) -> void:
+	_update_derived_state()
+
+func save_shortcut_editor(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	var label_value: String = state.get_string("shortcut_edit_label", "").strip_edges()
+	var path_value: String = state.get_string("shortcut_edit_path", "").strip_edges()
+	if label_value == "" or path_value == "":
+		_set_status("Shortcut name and path are required", true)
+		_update_derived_state()
+		return
+	var shortcuts: Array = _sanitize_shortcuts(state.get_value("shortcuts", []), _home_path())
+	var clean_path: String = _normalize_path(path_value)
+	var mode: String = state.get_string("shortcut_editor_mode", "add")
+	if mode == "edit":
+		var index: int = int(state.get_value("shortcut_editor_index", -1))
+		if index < 0 or index >= shortcuts.size():
+			_set_status("Select a shortcut first", true)
+			return
+		shortcuts[index] = {"label": label_value, "path": clean_path}
+		_set_status("Shortcut updated", false)
+	else:
+		shortcuts.append({"label": label_value, "path": clean_path})
+		_set_status("Shortcut added", false)
+	state.set_many({
+		"shortcuts": shortcuts,
+		"shortcut_selected_path": clean_path,
+		"show_shortcut_editor": false,
+		"shortcut_editor_mode": "add",
+		"shortcut_editor_title": "Add shortcut",
+		"shortcut_editor_index": -1,
+		"shortcut_edit_label": "",
+		"shortcut_edit_path": state.get_string("current_path", _home_path())
+	})
+	_emit_shortcuts_changed()
+	_queue_state_save()
+	_update_derived_state()
+
+func cancel_shortcut_editor(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	state.set_many({
+		"show_shortcut_editor": false,
+		"shortcut_editor_mode": "add",
+		"shortcut_editor_title": "Add shortcut",
+		"shortcut_editor_index": -1,
+		"shortcut_edit_label": "",
+		"shortcut_edit_path": state.get_string("current_path", _home_path())
+	})
+	_update_derived_state()
+
+func delete_shortcut(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	var selected_path: String = state.get_string("shortcut_selected_path", "")
+	if selected_path == "":
+		_set_status("Select a shortcut first", true)
+		return
+	var shortcuts: Array = _sanitize_shortcuts(state.get_value("shortcuts", []), _home_path())
+	for index in range(shortcuts.size() - 1, -1, -1):
+		var shortcut_value: Variant = shortcuts[index]
+		if not (shortcut_value is Dictionary):
+			continue
+		var shortcut: Dictionary = shortcut_value
+		if _normalize_path(str(shortcut.get("path", ""))) != selected_path:
+			continue
+		shortcuts.remove_at(index)
+		break
+	state.set_many({
+		"shortcuts": shortcuts,
+		"shortcut_selected_path": ""
+	})
+	_set_status("Shortcut deleted", false)
+	_emit_shortcuts_changed()
+	_queue_state_save()
+	_update_derived_state()
+
+func move_shortcut_up(event = null) -> void:
+	last_event = event
+	_move_shortcut(-1)
+
+func move_shortcut_down(event = null) -> void:
+	last_event = event
+	_move_shortcut(1)
+
+func _move_shortcut(direction: int) -> void:
+	if state == null:
+		return
+	var selected_path: String = state.get_string("shortcut_selected_path", "")
+	if selected_path == "":
+		_set_status("Select a shortcut first", true)
+		return
+	var shortcuts: Array = _sanitize_shortcuts(state.get_value("shortcuts", []), _home_path())
+	var index: int = -1
+	for i in range(shortcuts.size()):
+		var shortcut_value: Variant = shortcuts[i]
+		if not (shortcut_value is Dictionary):
+			continue
+		if _normalize_path(str((shortcut_value as Dictionary).get("path", ""))) == selected_path:
+			index = i
+			break
+	if index < 0:
+		_set_status("Select a shortcut first", true)
+		return
+	var target_index: int = index + direction
+	if target_index < 0 or target_index >= shortcuts.size():
+		return
+	var moving: Variant = shortcuts[index]
+	shortcuts.remove_at(index)
+	shortcuts.insert(target_index, moving)
+	state.set("shortcuts", shortcuts)
+	_set_status("Shortcut order updated", false)
+	_emit_shortcuts_changed()
+	_queue_state_save()
+	_update_derived_state()
+
+func _navigate_history(direction: int) -> void:
+	if state == null:
+		return
+	var history_value: Variant = state.get_value("history", [])
+	var history: Array = history_value if history_value is Array else []
+	if history.is_empty():
+		return
+	var index: int = int(state.get_value("history_index", history.size() - 1))
+	var target_index: int = clampi(index + direction, 0, history.size() - 1)
+	if target_index == index:
+		return
+	state.set_many({"history_index": target_index, "path_input": str(history[target_index])})
+	_refresh(false, false)
+
+func _refresh(clear_status: bool, push_history: bool) -> void:
+	if state == null:
+		return
+	var target_path: String = _resolve_path(state.get_string("path_input", state.get_string("current_path", _home_path())), state.get_string("current_path", _home_path()))
+	if not _is_dir(target_path):
+		_set_status("Folder not found: " + target_path, true)
+		state.set("path_input", state.get_string("current_path", _home_path()))
+		return
+	var entries_raw: Array = _list_dir(target_path)
+	var entries: Array = []
+	for item in entries_raw:
+		if not (item is Dictionary):
+			continue
+		var entry: Dictionary = item
+		var entry_type: String = str(entry.get("type", "file"))
+		var name_text: String = str(entry.get("name", ""))
+		var path_text: String = str(entry.get("path", ""))
+		if name_text == "" or path_text == "":
+			continue
+		entries.append({
+			"name": name_text,
+			"name_label": ("📁 " if entry_type == "dir" else "📄 ") + name_text,
+			"type": entry_type,
+			"path": path_text,
+			"owner": str(entry.get("owner", "")),
+			"group": str(entry.get("group", "")),
+			"mode": str(entry.get("mode", "")),
+			"size": int(entry.get("size", 0)),
+			"modified_text": "—",
+			"size_text": _size_label(entry)
+		})
+	state.set_many({
+		"current_path": target_path,
+		"path_input": target_path,
+		"breadcrumb": _breadcrumb(target_path),
+		"entries": entries,
+		"selected_path": "",
+		"selected_type": "",
+		"selected_name": "",
+		"selected_label": "Selected: none",
+		"details_label": ""
+	})
+	if push_history:
+		_push_history(target_path)
+	if clear_status:
+		_set_status("Empty folder" if entries.is_empty() else "", false)
+	_update_derived_state()
+
+func _apply_selection(entry: Dictionary) -> void:
+	if state == null:
+		return
+	var path_value: String = str(entry.get("path", ""))
+	var type_value: String = str(entry.get("type", ""))
+	state.set_many({
+		"selected_path": path_value,
+		"selected_type": type_value,
+		"selected_name": str(entry.get("name", "")),
+		"rename_name": str(entry.get("name", "")),
+		"selected_label": "Selected: " + path_value,
+		"details_label": "Type: %s   Owner: %s:%s   Mode: %s   Size: %s" % [
+			type_value,
+			str(entry.get("owner", "")),
+			str(entry.get("group", "")),
+			str(entry.get("mode", "")),
+			str(entry.get("size_text", ""))
+		]
+	})
+	if type_value == "dir":
+		_set_status("Folder selected. Use Open to enter.", false)
+	else:
+		_set_status("", false)
+	_update_derived_state()
+
+func _update_derived_state() -> void:
+	if state == null:
+		return
+	var selected_path: String = state.get_string("selected_path", "")
+	var has_selection: bool = selected_path != ""
+	var create_name: String = state.get_string("create_name", "").strip_edges()
+	var rename_name: String = state.get_string("rename_name", "").strip_edges()
+	var clipboard_path: String = state.get_string("clipboard_path", "")
+	var clipboard_mode: String = state.get_string("clipboard_mode", "")
+	var history_value: Variant = state.get_value("history", [])
+	var history: Array = history_value if history_value is Array else []
+	var history_index: int = int(state.get_value("history_index", history.size() - 1))
+	var shortcuts: Array = _sanitize_shortcuts(state.get_value("shortcuts", []), _home_path())
+	var shortcut_selected_path: String = state.get_string("shortcut_selected_path", "")
+	var selected_shortcut_index: int = _shortcut_index(shortcuts, shortcut_selected_path)
+	var editor_label: String = state.get_string("shortcut_edit_label", "").strip_edges()
+	var editor_path: String = state.get_string("shortcut_edit_path", "").strip_edges()
+	state.set_many({
+		"can_create": create_name != "",
+		"has_selection": has_selection,
+		"can_rename": has_selection and rename_name != "",
+		"can_paste": clipboard_path != "" and clipboard_mode != "",
+		"clipboard_label": "clip: empty" if clipboard_path == "" else ("clip: " + clipboard_mode + " " + clipboard_path),
+		"can_back": history_index > 0,
+		"can_forward": history_index >= 0 and history_index < history.size() - 1,
+		"can_up": state.get_string("current_path", _home_path()) != "/",
+		"shortcuts": shortcuts,
+		"has_selected_shortcut": selected_shortcut_index >= 0,
+		"can_move_shortcut_up": selected_shortcut_index > 0,
+		"can_move_shortcut_down": selected_shortcut_index >= 0 and selected_shortcut_index < shortcuts.size() - 1,
+		"can_save_shortcut": editor_label != "" and editor_path != ""
+	})
+
+func _push_history(path: String) -> void:
+	if state == null:
+		return
+	var history_value: Variant = state.get_value("history", [])
+	var history: Array = history_value if history_value is Array else []
+	var index: int = int(state.get_value("history_index", history.size() - 1))
+	if index < history.size() - 1:
+		history = history.slice(0, index + 1)
+	if history.is_empty() or str(history[history.size() - 1]) != path:
+		history.append(path)
+		index = history.size() - 1
+	else:
+		index = history.size() - 1
+	state.set_many({"history": history, "history_index": index})
+
+func _set_status(message: String, is_error: bool) -> void:
+	if state == null:
+		return
+	state.set("status", message)
+	if is_error and message != "":
+		push_warning("Files controller: " + message)
+
+func _emit_shortcuts_changed() -> void:
+	if _shortcuts_changed_callback.is_valid() and state != null:
+		_shortcuts_changed_callback.call((state.get_value("shortcuts", []) as Array).duplicate(true))
+
+func _queue_state_save() -> void:
+	if _state_save_callback.is_valid():
+		_state_save_callback.call()
+		return
+	if _shell != null and _shell.has_method("_queue_state_save"):
+		_shell.call("_queue_state_save")
+
+func _open_text_file(path: String) -> void:
+	if _open_file_callback.is_valid():
+		_open_file_callback.call(path)
+		return
+	if _shell != null and _shell.has_method("_open_text_file"):
+		_shell.call("_open_text_file", path)
+
+func _default_shortcuts(home: String) -> Array:
+	return [
+		{"label": "Recents", "path": home},
+		{"label": "Home", "path": home},
+		{"label": "Documents", "path": _join_path(home, "Documents")},
+		{"label": "Downloads", "path": _join_path(home, "Downloads")},
+		{"label": "Music", "path": _join_path(home, "Music")},
+		{"label": "Pictures", "path": _join_path(home, "Pictures")},
+		{"label": "Videos", "path": _join_path(home, "Videos")},
+		{"label": "Create", "path": _join_path(home, "Create")},
+		{"label": "Trash", "path": home},
+		{"label": "Networks", "path": home}
+	]
+
+func _sanitize_shortcuts(value, home: String) -> Array:
+	var output: Array = []
+	if value is Array:
+		for item in value:
+			if not (item is Dictionary):
+				continue
+			var shortcut: Dictionary = item
+			var label: String = str(shortcut.get("label", "")).strip_edges()
+			var path: String = str(shortcut.get("path", "")).strip_edges()
+			if label == "" or path == "":
+				continue
+			output.append({"label": label, "path": _normalize_path(path)})
+	if output.is_empty():
+		output = _default_shortcuts(home)
+	return output
+
+func _shortcut_index(shortcuts: Array, selected_path: String) -> int:
+	if selected_path == "":
+		return -1
+	for index in range(shortcuts.size()):
+		var value: Variant = shortcuts[index]
+		if value is Dictionary and _normalize_path(str((value as Dictionary).get("path", ""))) == selected_path:
+			return index
+	return -1
+
+func _paste_destination_path(source_path: String, destination_dir: String) -> String:
+	var clean_source: String = _normalize_path(source_path)
+	var clean_destination_dir: String = _normalize_path(destination_dir)
+	var base_name: String = _basename(clean_source)
+	var stem: String = base_name.get_basename()
+	var extension: String = base_name.get_extension()
+	var candidate_name: String = base_name
+	var index: int = 1
+	while _exists(_join_path(clean_destination_dir, candidate_name)):
+		if extension == "":
+			candidate_name = "%s copy%s" % [stem, "" if index == 1 else " " + str(index)]
+		else:
+			candidate_name = "%s copy%s.%s" % [stem, "" if index == 1 else " " + str(index), extension]
+		index += 1
+	return _join_path(clean_destination_dir, candidate_name)
+
+func _breadcrumb(path: String) -> String:
+	var normalized: String = _normalize_path(path)
+	if normalized == "/":
+		return "Home"
+	var pieces: PackedStringArray = normalized.trim_prefix("/").split("/", false)
+	if pieces.is_empty():
+		return "Home"
+	if pieces.size() >= 2 and pieces[0] == "home":
+		pieces[0] = "Home"
+	return " › ".join(PackedStringArray(pieces))
+
+func _size_label(entry: Dictionary) -> String:
+	if str(entry.get("type", "")) == "dir":
+		var children: Array = _list_dir(str(entry.get("path", "")))
+		var child_count: int = children.size()
+		return "%d item%s" % [child_count, "" if child_count == 1 else "s"]
+	var size_bytes: int = int(entry.get("size", 0))
+	if size_bytes < 1024:
+		return "%d B" % size_bytes
+	var size_kb: float = float(size_bytes) / 1024.0
+	if size_kb < 1024.0:
+		return "%.1f KB" % size_kb
+	var size_mb: float = size_kb / 1024.0
+	if size_mb < 1024.0:
+		return "%.1f MB" % size_mb
+	return "%.1f GB" % (size_mb / 1024.0)
+
+func _has_file_bridge() -> bool:
+	return os != null and os.files != null
+
+func _home_path() -> String:
+	if _has_file_bridge() and os.files.has_method("home_path"):
+		return str(os.files.home_path())
+	return "/home/user"
+
+func _normalize_path(path: String) -> String:
+	if _has_file_bridge() and os.files.has_method("normalize"):
+		return str(os.files.normalize(path))
+	return path
+
+func _resolve_path(path: String, base_path: String) -> String:
+	if _has_file_bridge() and os.files.has_method("resolve"):
+		return str(os.files.resolve(path, base_path))
+	return _normalize_path(path)
+
+func _dirname(path: String) -> String:
+	if _has_file_bridge() and os.files.has_method("dirname"):
+		return str(os.files.dirname(path))
+	return _normalize_path(path.get_base_dir())
+
+func _basename(path: String) -> String:
+	if _has_file_bridge() and os.files.has_method("basename"):
+		return str(os.files.basename(path))
+	return _normalize_path(path).get_file()
+
+func _join_path(base: String, child: String) -> String:
+	if _has_file_bridge() and os.files.has_method("join_path"):
+		return str(os.files.join_path(base, child))
+	return base.rstrip("/") + "/" + child.lstrip("/")
+
+func _is_dir(path: String) -> bool:
+	if _has_file_bridge() and os.files.has_method("is_dir"):
+		return bool(os.files.is_dir(path))
+	return false
+
+func _is_file(path: String) -> bool:
+	if _has_file_bridge() and os.files.has_method("is_file"):
+		return bool(os.files.is_file(path))
+	return false
+
+func _exists(path: String) -> bool:
+	if _has_file_bridge() and os.files.has_method("exists"):
+		return bool(os.files.exists(path))
+	return false
+
+func _list_dir(path: String) -> Array:
+	if _has_file_bridge() and os.files.has_method("list_dir"):
+		var entries: Variant = os.files.list_dir(path)
+		if entries is Array:
+			return (entries as Array).duplicate(true)
+	return []
+
+func _make_dir(path: String) -> Dictionary:
+	if _has_file_bridge() and os.files.has_method("make_dir"):
+		var value: Variant = os.files.make_dir(path)
+		if value is Dictionary:
+			return (value as Dictionary).duplicate(true)
+	return {"ok": false, "error": {"message": "Filesystem mkdir unavailable"}}
+
+func _write_file(path: String, content: String) -> Dictionary:
+	if _has_file_bridge() and os.files.has_method("write"):
+		var value: Variant = os.files.write(path, content)
+		if value is Dictionary:
+			return (value as Dictionary).duplicate(true)
+	return {"ok": false, "error": {"message": "Filesystem write unavailable"}}
+
+func _rename_path(path: String, new_name: String) -> Dictionary:
+	if _has_file_bridge() and os.files.has_method("rename"):
+		var value: Variant = os.files.rename(path, new_name)
+		if value is Dictionary:
+			return (value as Dictionary).duplicate(true)
+	return {"ok": false, "error": {"message": "Filesystem rename unavailable"}}
+
+func _copy_path(source: String, destination: String) -> Dictionary:
+	if _has_file_bridge() and os.files.has_method("copy"):
+		var value: Variant = os.files.copy(source, destination)
+		if value is Dictionary:
+			return (value as Dictionary).duplicate(true)
+	return {"ok": false, "error": {"message": "Filesystem copy unavailable"}}
+
+func _move_path(source: String, destination: String) -> Dictionary:
+	if _has_file_bridge() and os.files.has_method("move"):
+		var value: Variant = os.files.move(source, destination)
+		if value is Dictionary:
+			return (value as Dictionary).duplicate(true)
+	return {"ok": false, "error": {"message": "Filesystem move unavailable"}}
+
+func _delete_path(path: String) -> Dictionary:
+	if _has_file_bridge() and os.files.has_method("delete"):
+		var value: Variant = os.files.delete(path)
+		if value is Dictionary:
+			return (value as Dictionary).duplicate(true)
+	return {"ok": false, "error": {"message": "Filesystem delete unavailable"}}
+
+func _error_message(result: Dictionary, fallback: String) -> String:
+	var error_value: Variant = result.get("error", null)
+	if error_value is Dictionary:
+		var message: String = str((error_value as Dictionary).get("message", "")).strip_edges()
+		if message != "":
+			return message
+	elif str(error_value).strip_edges() != "":
+		return str(error_value)
+	return fallback

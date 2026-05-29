@@ -14,9 +14,27 @@ const DEFAULT_ROLES := {
 	"Text": "text",
 	"Title": "heading",
 	"Badge": "status",
+	"Card": "region",
 	"ScrollView": "scrollarea",
+	"FlowRow": "group",
+	"Sidebar": "navigation",
+	"Toolbar": "toolbar",
+	"StatusBar": "status",
+	"SectionHeader": "heading",
+	"SettingsPage": "region",
+	"SettingsSection": "region",
+	"SettingsRow": "group",
+	"Select": "combobox",
+	"Dropdown": "combobox",
+	"Slider": "slider",
+	"Toggle": "checkbox",
 	"List": "list",
 	"ListItem": "listitem",
+	"FileList": "list",
+	"FileRow": "file",
+	"PathBreadcrumb": "text",
+	"TerminalSurface": "terminal",
+	"BrowserSurface": "browser",
 	"DockItem": "appbutton",
 	"AppLauncher": "application",
 	"DesktopItem": "desktopitem",
@@ -29,6 +47,11 @@ const INTERACTIVE_ROLES := [
 	"button",
 	"textbox",
 	"searchbox",
+	"listitem",
+	"option",
+	"combobox",
+	"slider",
+	"checkbox",
 	"appbutton",
 	"desktopitem",
 	"file",
@@ -63,6 +86,8 @@ func to_dictionary() -> Dictionary:
 
 func _build_element(element, current_path: String, ancestor_visible: bool):
 	if element == null:
+		return null
+	if element.props.has("for"):
 		return null
 	var role: String = _role_for_element(element)
 	var text_value: String = _text_for_element(element)
@@ -112,10 +137,12 @@ func _role_for_element(element) -> String:
 	if explicit_role != "":
 		return explicit_role
 	var tag_name: String = str(element.tag) if element != null else ""
-	if tag_name in ["Panel", "Card"] and not _has_label(element):
+	if tag_name in ["Panel", "Card", "SettingsSection", "SettingsPage", "SettingsRow"] and not _has_label(element):
 		return ""
 	if tag_name in ["Row", "Column", "Grid"] and not _has_label(element):
 		return ""
+	if tag_name == "ListItem" and (element.props.has("selected") or _has_handler(element, ["on:select"])):
+		return "option"
 	if element != null and element.has_method("get_semantic_role"):
 		var element_role: String = str(element.get_semantic_role()).strip_edges()
 		if element_role != "":
@@ -153,6 +180,15 @@ func _label_for_element(element, text_value: String) -> String:
 func _value_for_element(element, control: Control):
 	if control is LineEdit:
 		return (control as LineEdit).text
+	if control is OptionButton:
+		var dropdown := control as OptionButton
+		if dropdown.selected >= 0:
+			var selected_value = dropdown.get_item_metadata(dropdown.selected)
+			return selected_value if selected_value != null else dropdown.get_item_text(dropdown.selected)
+	if control is Range:
+		return (control as Range).value
+	if control is CheckBox:
+		return (control as CheckBox).button_pressed
 	var prop_value = _semantic_value(element, "value", null)
 	if prop_value != null:
 		return prop_value
@@ -173,10 +209,12 @@ func _actions_for_element(element, role: String) -> Array[String]:
 		var handler_name: String = str(element.props.get(key, "")).strip_edges()
 		if tag_name == "Button" and event_name == "click" and handler_name != "":
 			_add_action(result, handler_name)
-		if tag_name == "TextInput" and event_name == "input":
+		elif tag_name == "TextInput" and event_name == "input":
 			_add_action(result, "input")
 		elif tag_name in ["SearchInput", "TextArea"] and event_name == "input":
 			_add_action(result, "input")
+		elif tag_name in ["Select", "Dropdown", "Slider", "Toggle"] and event_name in ["change", "select", "value_changed", "toggled"]:
+			_add_action(result, "change")
 		else:
 			_add_action(result, event_name)
 	if tag_name in ["AppLauncher", "AppShortcut"]:
@@ -204,9 +242,10 @@ func _state_for_element(element) -> Dictionary:
 	var metadata: Dictionary = element.get_semantic_metadata() if element.has_method("get_semantic_metadata") else {}
 	if metadata.has("state") and metadata["state"] is Dictionary:
 		state_value = metadata["state"].duplicate(true)
-	for key in ["disabled", "selected", "focused", "minimized", "maximized", "tiled", "floating", "tileable"]:
+	for key in ["disabled", "readonly", "read-only", "multiline", "selected", "checked", "pressed", "focused", "min", "max", "value", "minimized", "maximized", "tiled", "floating", "tileable"]:
 		if element.props.has(key):
-			state_value[key] = element.props[key]
+			var state_key: String = "readonly" if str(key) == "read-only" else str(key)
+			state_value[state_key] = element.props[key]
 	return state_value
 
 func _visible_for_element(element, control: Control) -> bool:
@@ -224,7 +263,11 @@ func _disabled_for_element(element, control: Control) -> bool:
 	if control is LineEdit:
 		return not (control as LineEdit).editable
 	if control is TextEdit:
-		return not (control as TextEdit).editable
+		if not (control as TextEdit).editable:
+			return true
+		return _boolish(_semantic_value(element, "disabled", false)) or _boolish(_semantic_value(element, "readonly", false)) or _boolish(_semantic_value(element, "read-only", false))
+	if control is Range:
+		return not (control as Range).editable
 	return _boolish(_semantic_value(element, "disabled", false))
 
 func _semantic_value(element, key: String, default_value = null):

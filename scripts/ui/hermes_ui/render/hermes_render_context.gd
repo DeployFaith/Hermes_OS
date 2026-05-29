@@ -10,6 +10,7 @@ var ui = null
 var registry = null
 var stylesheets: Array = []
 var style_resolver = null
+var state = null
 
 func _init() -> void:
 	theme = HermesTheme.new()

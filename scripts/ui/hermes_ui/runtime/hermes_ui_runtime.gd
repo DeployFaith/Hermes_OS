@@ -61,9 +61,12 @@ func mount_instance(instance, host: Control) -> Control:
 	content_host.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.add_child(content_host)
 
+	_apply_window_metadata(instance, host, root, content_host)
+
 	var document = _markup_parser.parse_file(instance.manifest.entry_path if instance.manifest != null else "")
 	var render_context = HermesRenderContext.new()
 	render_context.stylesheets = _load_stylesheets(instance.manifest)
+	render_context.state = instance.state
 	var renderer = HermesRenderer.new()
 	renderer.setup(render_context)
 	instance.render_context = render_context
@@ -74,6 +77,10 @@ func mount_instance(instance, host: Control) -> Control:
 		var rendered: Control = renderer.render_tree(instance.root_element, content_host)
 		if rendered == null:
 			content_host.add_child(_error_label("HermesUI renderer returned null"))
+		else:
+			rendered.set_anchors_preset(Control.PRESET_FULL_RECT)
+			rendered.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			rendered.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	else:
 		content_host.add_child(_error_label(_document_error_text(document)))
 	if document != null and document.has_method("free_tree"):
@@ -177,3 +184,25 @@ func _document_error_text(document) -> String:
 	if line_value >= 0:
 		return "%s (line %d)" % [message, line_value]
 	return message
+
+func _apply_window_metadata(instance, host: Control, root: Control, content_host: Control) -> void:
+	if instance == null or instance.manifest == null:
+		return
+	var window_config: Dictionary = instance.manifest.window_config if instance.manifest.window_config is Dictionary else {}
+	if window_config.is_empty():
+		return
+	var default_size := Vector2(float(window_config.get("default_width", 0)), float(window_config.get("default_height", 0)))
+	var min_size := Vector2(float(window_config.get("min_width", 0)), float(window_config.get("min_height", 0)))
+	if default_size.x <= 0.0 or default_size.y <= 0.0:
+		default_size = Vector2(720, 520)
+	if min_size.x <= 0.0 or min_size.y <= 0.0:
+		min_size = Vector2(520, 360)
+	if default_size.x < min_size.x:
+		default_size.x = min_size.x
+	if default_size.y < min_size.y:
+		default_size.y = min_size.y
+	for node in [host, root, content_host]:
+		if node == null:
+			continue
+		node.set_meta("window_default_size", default_size)
+		node.set_meta("window_min_size", min_size)

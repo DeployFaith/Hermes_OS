@@ -1,0 +1,23 @@
+{
+  "id": "text",
+  "name": "Text",
+  "version": "0.1.0",
+  "hermes_ui": "0.1",
+  "entry": "main.hml",
+  "styles": ["main.hss"],
+  "controller": "main.gd",
+  "surface": "window",
+  "window": {
+    "title": "Text",
+    "default_width": 860,
+    "default_height": 620,
+    "min_width": 640,
+    "min_height": 420,
+    "resizable": true,
+    "chromed": true
+  },
+  "permissions": [
+    "files.read",
+    "files.write"
+  ]
+}

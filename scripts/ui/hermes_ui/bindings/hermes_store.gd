@@ -39,6 +39,9 @@ func get_bool(key_path: String, default_value: bool = false) -> bool:
 	var text: String = str(value).strip_edges().to_lower()
 	return text == "true" or text == "1" or text == "yes" or text == "on"
 
+func to_dictionary() -> Dictionary:
+	return _state.duplicate(true)
+
 func set_many(values: Dictionary) -> void:
 	if values.is_empty():
 		return

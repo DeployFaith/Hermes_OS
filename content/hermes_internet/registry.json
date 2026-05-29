@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "product": "Hermes Internet",
+  "default_domain": "home.hermes",
+  "sites": [
+    {
+      "domain": "home.hermes",
+      "title": "Hermes_OS",
+      "description": "The official Hermes_OS landing page for Hermes Internet.",
+      "root": "res://content/hermes_internet/sites/home.hermes",
+      "entry": "/",
+      "routes": {
+        "/": "pages/index.html"
+      },
+      "agent_visible": true
+    }
+  ]
+}
