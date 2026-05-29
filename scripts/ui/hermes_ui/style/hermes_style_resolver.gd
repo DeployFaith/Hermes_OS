@@ -518,7 +518,7 @@ func _cross_axis_flag_for_alignment(align_items: String) -> int:
 		"end", "right", "bottom":
 			return Control.SIZE_SHRINK_END
 		"stretch", "fill":
-			return Control.SIZE_FILL
+			return Control.SIZE_EXPAND_FILL
 		_:
 			return Control.SIZE_SHRINK_BEGIN
 

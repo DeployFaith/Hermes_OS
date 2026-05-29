@@ -13,5 +13,12 @@ static func manifest(builder: Callable) -> Dictionary:
 		"single_instance": true,
 		"agent_visible": true,
 		"agent_actions": ["accounts.get_state"],
+		"window": {
+			"default_width": 980,
+			"default_height": 640,
+			"min_width": 760,
+			"min_height": 520,
+			"resizable": true
+		},
 		"builder": builder
 	}

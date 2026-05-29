@@ -1,5 +1,7 @@
 extends "res://scripts/ui/hermes_ui/runtime/hermes_app_controller.gd"
 
+const DEBUG_FILES_TIMING := false
+
 var ready_called: bool = false
 var last_event = null
 
@@ -34,6 +36,7 @@ func _app_ready() -> void:
 		"path_input": home,
 		"breadcrumb": _breadcrumb(home),
 		"entries": [],
+		"has_entries": false,
 		"selected_path": "",
 		"selected_type": "",
 		"selected_name": "",
@@ -150,6 +153,7 @@ func get_visible_entries() -> Array:
 	return (state.get_value("entries", []) as Array).duplicate(true)
 
 func open_selected(event = null) -> void:
+	var timing_start: int = Time.get_ticks_usec()
 	last_event = event
 	if state == null:
 		return
@@ -157,11 +161,22 @@ func open_selected(event = null) -> void:
 	if selected_path == "":
 		_set_status("Select an item first", true)
 		return
-	if state.get_string("selected_type", "") == "dir":
-		open_path(selected_path)
+	_open_entry_path(selected_path)
+	_trace_timing("open_selected", timing_start)
+
+func open_entry(event) -> void:
+	var timing_start: int = Time.get_ticks_usec()
+	last_event = event
+	if state == null:
 		return
-	_open_text_file(selected_path)
-	_set_status("Opened in Text: " + _basename(selected_path), false)
+	var target_path: String = _normalize_path(str(event.value))
+	if target_path == "":
+		return
+	var entry: Dictionary = _entry_for_path(target_path)
+	if not entry.is_empty():
+		_apply_selection(entry)
+	_open_entry_path(target_path)
+	_trace_timing("open_entry", timing_start)
 
 func handle_path_input(_event = null) -> void:
 	_update_derived_state()
@@ -189,19 +204,23 @@ func navigate_up(event = null) -> void:
 	state.set("path_input", _dirname(state.get_string("current_path", _home_path())))
 	_refresh(true, true)
 
+func go_home(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	state.set("path_input", _home_path())
+	_refresh(true, true)
+
 func select_entry(event) -> void:
+	var timing_start: int = Time.get_ticks_usec()
 	last_event = event
 	if state == null:
 		return
 	var selected_path: String = _normalize_path(str(event.value))
-	var entries: Array = state.get_value("entries", [])
-	for entry_value in entries:
-		if not (entry_value is Dictionary):
-			continue
-		var entry: Dictionary = entry_value
-		if str(entry.get("path", "")) == selected_path:
-			_apply_selection(entry)
-			return
+	var entry: Dictionary = _entry_for_path(selected_path)
+	if not entry.is_empty():
+		_apply_selection(entry)
+		_trace_timing("select_entry", timing_start)
 
 func create_folder(event = null) -> void:
 	last_event = event
@@ -334,8 +353,10 @@ func select_shortcut(event) -> void:
 	last_event = event
 	if state == null:
 		return
-	state.set("shortcut_selected_path", _normalize_path(str(event.value)))
-	_update_derived_state()
+	var shortcut_path: String = _normalize_path(str(event.value))
+	state.set("shortcut_selected_path", shortcut_path)
+	state.set("path_input", shortcut_path)
+	_refresh(true, true)
 
 func open_add_shortcut(event = null) -> void:
 	last_event = event
@@ -514,6 +535,7 @@ func _navigate_history(direction: int) -> void:
 	_refresh(false, false)
 
 func _refresh(clear_status: bool, push_history: bool) -> void:
+	var timing_start: int = Time.get_ticks_usec()
 	if state == null:
 		return
 	var target_path: String = _resolve_path(state.get_string("path_input", state.get_string("current_path", _home_path())), state.get_string("current_path", _home_path()))
@@ -521,7 +543,9 @@ func _refresh(clear_status: bool, push_history: bool) -> void:
 		_set_status("Folder not found: " + target_path, true)
 		state.set("path_input", state.get_string("current_path", _home_path()))
 		return
+	var list_start: int = Time.get_ticks_usec()
 	var entries_raw: Array = _list_dir(target_path)
+	_trace_timing("list_dir " + target_path, list_start)
 	var entries: Array = []
 	for item in entries_raw:
 		if not (item is Dictionary):
@@ -544,33 +568,39 @@ func _refresh(clear_status: bool, push_history: bool) -> void:
 			"modified_text": "—",
 			"size_text": _size_label(entry)
 		})
-	state.set_many({
+	var next_state: Dictionary = {
 		"current_path": target_path,
 		"path_input": target_path,
 		"breadcrumb": _breadcrumb(target_path),
 		"entries": entries,
+		"has_entries": not entries.is_empty(),
 		"selected_path": "",
 		"selected_type": "",
 		"selected_name": "",
 		"selected_label": "Selected: none",
-		"details_label": ""
-	})
+		"details_label": "",
+		"has_selection": false,
+		"can_rename": false
+	}
+	if clear_status:
+		next_state["status"] = "This folder is empty." if entries.is_empty() else ""
+	state.set_many(next_state)
 	if push_history:
 		_push_history(target_path)
-	if clear_status:
-		_set_status("Empty folder" if entries.is_empty() else "", false)
 	_update_derived_state()
+	_trace_timing("refresh " + target_path, timing_start)
 
 func _apply_selection(entry: Dictionary) -> void:
 	if state == null:
 		return
 	var path_value: String = str(entry.get("path", ""))
 	var type_value: String = str(entry.get("type", ""))
+	var name_value: String = str(entry.get("name", ""))
 	state.set_many({
 		"selected_path": path_value,
 		"selected_type": type_value,
-		"selected_name": str(entry.get("name", "")),
-		"rename_name": str(entry.get("name", "")),
+		"selected_name": name_value,
+		"rename_name": name_value,
 		"selected_label": "Selected: " + path_value,
 		"details_label": "Type: %s   Owner: %s:%s   Mode: %s   Size: %s" % [
 			type_value,
@@ -578,13 +608,34 @@ func _apply_selection(entry: Dictionary) -> void:
 			str(entry.get("group", "")),
 			str(entry.get("mode", "")),
 			str(entry.get("size_text", ""))
-		]
+		],
+		"status": "Folder selected. Use Open to enter." if type_value == "dir" else "",
+		"has_selection": true,
+		"can_rename": name_value.strip_edges() != ""
 	})
-	if type_value == "dir":
-		_set_status("Folder selected. Use Open to enter.", false)
-	else:
-		_set_status("", false)
-	_update_derived_state()
+
+func _open_entry_path(path: String) -> void:
+	var target_path: String = _normalize_path(path)
+	var entry: Dictionary = _entry_for_path(target_path)
+	var type_value: String = str(entry.get("type", state.get_string("selected_type", "") if state != null else ""))
+	if type_value == "dir" or _is_dir(target_path):
+		open_path(target_path)
+		return
+	_open_text_file(target_path)
+	_set_status("Opened in Text: " + _basename(target_path), false)
+
+func _entry_for_path(path: String) -> Dictionary:
+	if state == null:
+		return {}
+	var target_path: String = _normalize_path(path)
+	var entries: Array = state.get_value("entries", [])
+	for entry_value in entries:
+		if not (entry_value is Dictionary):
+			continue
+		var entry: Dictionary = entry_value
+		if str(entry.get("path", "")) == target_path:
+			return entry
+	return {}
 
 func _update_derived_state() -> void:
 	if state == null:
@@ -715,21 +766,15 @@ func _paste_destination_path(source_path: String, destination_dir: String) -> St
 	return _join_path(clean_destination_dir, candidate_name)
 
 func _breadcrumb(path: String) -> String:
-	var normalized: String = _normalize_path(path)
-	if normalized == "/":
-		return "Home"
-	var pieces: PackedStringArray = normalized.trim_prefix("/").split("/", false)
-	if pieces.is_empty():
-		return "Home"
-	if pieces.size() >= 2 and pieces[0] == "home":
-		pieces[0] = "Home"
-	return " › ".join(PackedStringArray(pieces))
+	return _normalize_path(path)
+
+func _trace_timing(label: String, start_usec: int) -> void:
+	if DEBUG_FILES_TIMING:
+		print("[FilesTiming] %s %dus" % [label, Time.get_ticks_usec() - start_usec])
 
 func _size_label(entry: Dictionary) -> String:
 	if str(entry.get("type", "")) == "dir":
-		var children: Array = _list_dir(str(entry.get("path", "")))
-		var child_count: int = children.size()
-		return "%d item%s" % [child_count, "" if child_count == 1 else "s"]
+		return "Folder"
 	var size_bytes: int = int(entry.get("size", 0))
 	if size_bytes < 1024:
 		return "%d B" % size_bytes

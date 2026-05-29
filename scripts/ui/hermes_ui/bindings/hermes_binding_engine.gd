@@ -33,9 +33,6 @@ func bind_app(app_instance, context, app_stylesheets: Array = []) -> void:
 	_repeat_bindings.clear()
 	_suppress_input.clear()
 	if state != null:
-		var single_change := Callable(self, "_on_state_changed")
-		if not state.state_changed.is_connected(single_change):
-			state.state_changed.connect(single_change)
 		var batch_change := Callable(self, "_on_state_batch_changed")
 		if not state.state_batch_changed.is_connected(batch_change):
 			state.state_batch_changed.connect(batch_change)
@@ -44,9 +41,6 @@ func bind_app(app_instance, context, app_stylesheets: Array = []) -> void:
 
 func teardown() -> void:
 	if state != null:
-		var single_change := Callable(self, "_on_state_changed")
-		if state.state_changed.is_connected(single_change):
-			state.state_changed.disconnect(single_change)
 		var batch_change := Callable(self, "_on_state_batch_changed")
 		if state.state_batch_changed.is_connected(batch_change):
 			state.state_batch_changed.disconnect(batch_change)
@@ -140,10 +134,15 @@ func _connect_events_for_element(element) -> void:
 		if str(element.tag) in ["ListItem", "FileRow"]:
 			var list_click_method: String = str(element.props.get("on:click", "")).strip_edges()
 			var list_select_method: String = str(element.props.get("on:select", "")).strip_edges()
+			var list_open_method: String = str(element.props.get("on:open", element.props.get("on:activate", element.props.get("on:double_click", element.props.get("on:double-click", ""))))).strip_edges()
 			if list_click_method != "" or list_select_method != "":
 				var list_cb := Callable(self, "_on_list_item_pressed").bind(element, list_click_method, list_select_method)
 				if not button.pressed.is_connected(list_cb):
 					button.pressed.connect(list_cb)
+			if list_open_method != "":
+				var open_cb := Callable(self, "_on_list_item_gui_input").bind(element, list_open_method)
+				if not button.gui_input.is_connected(open_cb):
+					button.gui_input.connect(open_cb)
 		else:
 			var click_method: String = str(element.props.get("on:click", "")).strip_edges()
 			if click_method != "":
@@ -182,26 +181,45 @@ func _connect_events_for_element(element) -> void:
 			if not input.focus_exited.is_connected(blur_cb):
 				input.focus_exited.connect(blur_cb)
 
-func _on_state_changed(_key_path: String, _value) -> void:
-	_apply_all()
+func _on_state_changed(key_path: String, _value) -> void:
+	var keys := PackedStringArray([key_path])
+	_apply_all(_state_change_requires_repeat_rebuild(keys), keys)
 
-func _on_state_batch_changed(_keys: PackedStringArray) -> void:
-	_apply_all()
+func _on_state_batch_changed(keys: PackedStringArray) -> void:
+	_apply_all(_state_change_requires_repeat_rebuild(keys), keys)
 
-func _apply_all() -> void:
+func _apply_all(rebuild_repeats: bool = true, changed_keys: PackedStringArray = PackedStringArray()) -> void:
 	if _refreshing:
 		return
 	_refreshing = true
-	_apply_repeats()
+	if rebuild_repeats:
+		_apply_repeats()
+	else:
+		_apply_generated_repeat_bindings(changed_keys)
 	for binding in _text_bindings:
 		_apply_text_binding(binding)
 	for binding in _prop_bindings:
 		_apply_prop_binding(binding)
 	for binding in _model_bindings:
 		_apply_model_binding(binding)
-	if app != null and app.root_element != null and render_context != null and render_context.style_resolver != null and not stylesheets.is_empty():
+	if rebuild_repeats and app != null and app.root_element != null and render_context != null and render_context.style_resolver != null and not stylesheets.is_empty():
 		render_context.style_resolver.apply_tree(app.root_element, stylesheets)
 	_refreshing = false
+
+func _state_change_requires_repeat_rebuild(keys: PackedStringArray) -> bool:
+	if _repeat_bindings.is_empty():
+		return false
+	if keys.is_empty():
+		return true
+	for binding in _repeat_bindings:
+		var collection: String = str(binding.get("collection", "")).strip_edges()
+		if collection == "":
+			continue
+		for key in keys:
+			var changed: String = str(key)
+			if changed == collection or changed.begins_with(collection + "."):
+				return true
+	return false
 
 func _apply_text_binding(binding: Dictionary) -> void:
 	var element = binding.get("element", null)
@@ -296,6 +314,7 @@ func _apply_property_to_control(element, property_name: String, value) -> void:
 				(element.control as TextEdit).editable = not disabled
 			elif element.control is Range:
 				(element.control as Range).editable = not disabled
+			_apply_style_to_element(element)
 		"variant":
 			if str(element.tag) == "Badge":
 				_apply_badge_variant(element.control, str(value))
@@ -330,8 +349,14 @@ func _apply_property_to_control(element, property_name: String, value) -> void:
 			var selected: bool = _boolish(value)
 			element.set_pseudo_state("selected", selected)
 			element.props["selected"] = selected
+			_apply_style_to_element(element)
 		"hidden":
 			element.control.visible = not _boolish(value)
+		"path":
+			if element.control is Label:
+				(element.control as Label).text = str(value)
+			elif element.control is LineEdit:
+				(element.control as LineEdit).text = str(value)
 		_:
 			pass
 
@@ -359,6 +384,11 @@ func _apply_button_variant(control: Button, variant: String) -> void:
 			control.add_theme_color_override("font_hover_color", color_value)
 			control.add_theme_color_override("font_pressed_color", color_value)
 
+func _apply_style_to_element(element) -> void:
+	if element == null or render_context == null or render_context.style_resolver == null or stylesheets.is_empty():
+		return
+	render_context.style_resolver.apply_tree(element, stylesheets)
+
 func _on_button_pressed(element, method_name: String) -> void:
 	var button_text: String = ""
 	if element != null and element.control is Button:
@@ -371,6 +401,14 @@ func _on_list_item_pressed(element, click_method: String, select_method: String)
 		_dispatch_event("click", element, value, click_method, null)
 	if select_method != "":
 		_dispatch_event("select", element, value, select_method, null)
+
+func _on_list_item_gui_input(event: InputEvent, element, open_method: String) -> void:
+	if open_method == "" or not (event is InputEventMouseButton):
+		return
+	var mouse_event := event as InputEventMouseButton
+	if not mouse_event.pressed or mouse_event.button_index != MOUSE_BUTTON_LEFT or not mouse_event.double_click:
+		return
+	_dispatch_event("open", element, _event_value_for_element(element), open_method, event)
 
 func _event_value_for_element(element):
 	if element == null:
@@ -466,11 +504,12 @@ func _apply_repeats() -> void:
 		var offset: int = 0
 		for item in collection_value:
 			var scope: Dictionary = _repeat_scope(item_var, item)
-			var clone = _clone_for_repeat(template, scope)
+			var clone = _clone_for_repeat(template, scope, item_var, item)
 			if clone == null:
 				continue
 			clone.props["__repeat_generated"] = true
 			clone.props["__repeat_source_id"] = str(template.get_instance_id())
+			_set_repeat_metadata_recursive(clone, str(template.get_instance_id()), item_var, item)
 			var key_expression = binding.get("key_expression", null)
 			if key_expression != null:
 				clone.props["key"] = key_expression.evaluate(scope)
@@ -503,26 +542,85 @@ func _repeat_scope(item_var: String, item) -> Dictionary:
 	scope[item_var] = item
 	return scope
 
-func _clone_for_repeat(element, scope: Dictionary):
+func _set_repeat_metadata_recursive(element, source_id: String, item_var: String, item) -> void:
+	if element == null:
+		return
+	element.props["__repeat_generated"] = true
+	element.props["__repeat_source_id"] = source_id
+	element.props["__repeat_item_var"] = item_var
+	element.props["__repeat_item"] = item
+	for child in element.children:
+		_set_repeat_metadata_recursive(child, source_id, item_var, item)
+
+func _apply_generated_repeat_bindings(changed_keys: PackedStringArray = PackedStringArray()) -> void:
+	if app == null or app.root_element == null:
+		return
+	_apply_generated_repeat_bindings_recursive(app.root_element, changed_keys)
+
+func _apply_generated_repeat_bindings_recursive(element, changed_keys: PackedStringArray) -> void:
+	if element == null:
+		return
+	if bool(element.props.get("__repeat_generated", false)):
+		var item_var: String = str(element.props.get("__repeat_item_var", ""))
+		if item_var != "":
+			var scope: Dictionary = _repeat_scope(item_var, element.props.get("__repeat_item", null))
+			if element.node_type == "text":
+				var text_template: String = str(element.props.get("__repeat_text_template", ""))
+				if text_template != "" and element.control is Label and _template_depends_on_changed_key(text_template, changed_keys):
+					(element.control as Label).text = _resolve_template_string(text_template, scope)
+			else:
+				var prop_templates: Dictionary = element.props.get("__repeat_prop_templates", {}) if element.props.get("__repeat_prop_templates", {}) is Dictionary else {}
+				for key in prop_templates.keys():
+					var prop_name: String = str(key)
+					var template_text: String = str(prop_templates[key])
+					if not _template_depends_on_changed_key(template_text, changed_keys):
+						continue
+					var value = HermesBindingExpression.new().configure(template_text).evaluate(scope)
+					if element.props.get(prop_name, null) == value:
+						continue
+					element.props[prop_name] = value
+					_apply_property_to_control(element, prop_name, value)
+	for child in element.children:
+		_apply_generated_repeat_bindings_recursive(child, changed_keys)
+
+func _template_depends_on_changed_key(template_text: String, changed_keys: PackedStringArray) -> bool:
+	if changed_keys.is_empty():
+		return true
+	for key in changed_keys:
+		var clean: String = str(key).strip_edges()
+		if clean != "" and template_text.find(clean) != -1:
+			return true
+	return false
+
+func _clone_for_repeat(element, scope: Dictionary, item_var: String = "", item = null):
 	if element == null:
 		return null
 	if element.node_type == "text":
-		return HermesElementInstance.new().configure_text(_resolve_template_string(str(element.text_content), scope))
+		var text_template: String = str(element.text_content)
+		var text_clone = HermesElementInstance.new().configure_text(_resolve_template_string(text_template, scope))
+		if HermesBindingExpression.has_binding(text_template):
+			text_clone.props["__repeat_text_template"] = text_template
+		return text_clone
 	var props: Dictionary = {}
+	var prop_templates: Dictionary = {}
 	for key in element.props.keys():
 		var key_text: String = str(key)
-		if key_text in ["for", "key", "__repeat_generated", "__repeat_source_id"]:
+		if key_text in ["for", "key", "__repeat_generated", "__repeat_source_id", "__repeat_item_var", "__repeat_item", "__repeat_prop_templates", "__repeat_text_template"]:
 			continue
 		var value = element.props[key]
 		if value is String and HermesBindingExpression.has_binding(str(value)):
-			props[key_text] = HermesBindingExpression.new().configure(str(value)).evaluate(scope)
+			var template_text: String = str(value)
+			props[key_text] = HermesBindingExpression.new().configure(template_text).evaluate(scope)
+			prop_templates[key_text] = template_text
 		else:
 			props[key_text] = value
 	var clone = HermesElementInstance.new().configure_node(str(element.tag), props, [])
+	if not prop_templates.is_empty():
+		clone.props["__repeat_prop_templates"] = prop_templates
 	clone.source_file = element.source_file
 	clone.source_line = element.source_line
 	for child in element.children:
-		var child_clone = _clone_for_repeat(child, scope)
+		var child_clone = _clone_for_repeat(child, scope, item_var, item)
 		if child_clone != null:
 			clone.add_child(child_clone)
 	return clone

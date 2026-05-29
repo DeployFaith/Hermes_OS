@@ -29,12 +29,17 @@ func setup(context: Dictionary) -> void:
 		_fs = _shell._fs
 
 func render() -> void:
+	custom_minimum_size = Vector2(760, 520)
+	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	size_flags_vertical = Control.SIZE_EXPAND_FILL
+	set_meta("window_default_size", Vector2(980, 640))
+	set_meta("window_min_size", Vector2(760, 520))
 	var toolbar: Control = _build_toolbar()
 	var sidebar: Control = _build_accounts_sidebar()
 	var content: Control = _build_detail_content()
 	var status_bar: Control = ui.status_bar("Account Center ready", "info", {"name": "AccountCenterStatusBar"})
 	set_status_control(status_bar)
-	set_root(layout.sidebar_app(toolbar, sidebar, content, status_bar, {"sidebar_width": 260}))
+	set_root(layout.sidebar_app(toolbar, sidebar, content, status_bar, {"sidebar_width": 300}))
 	_refresh_accounts()
 
 func get_state() -> Dictionary:
@@ -48,9 +53,9 @@ func _build_toolbar() -> Control:
 	var title: Control = ui.label("Account Center", {"variant": "heading", "name": "AccountCenterTitle"})
 	var subtitle: Control = ui.label("Create, rename, duplicate, delete accounts, and manage profile pictures", {"variant": "muted", "name": "AccountCenterSubtitle"})
 	var block: Control = ui.vbox([title, subtitle], hermes_theme.spacing("space_1"), {"expand_h": true})
-	var role: String = "root" if _fs != null and _fs.current_user() == "root" else "user"
-	var badge: Control = ui.badge("Role: " + role, {"kind": "info", "name": "AccountCenterRole"})
-	return ui.toolbar([block, badge], {"name": "AccountCenterToolbar"})
+	var role: String = "Root session" if _fs != null and _fs.current_user() == "root" else "User session"
+	var role_label: Control = ui.label(role, {"variant": "muted", "name": "AccountCenterRole", "min_size": Vector2(120, 0)})
+	return ui.toolbar([block, role_label], {"name": "AccountCenterToolbar"})
 
 func _build_accounts_sidebar() -> Control:
 	_accounts_list = ui.list_view([], {"name": "AccountCenterList", "on_select": Callable(self, "_on_select_account"), "expand_h": true, "expand_v": true})
@@ -113,11 +118,12 @@ func _build_selected_account_card() -> Control:
 	var locked := bool(account.get("locked", false))
 	_display_name_input = ui.input({"value": display_name, "placeholder": "Display name", "name": "AccountCenterDisplayName"})
 	var save_display_button: Button = ui.button("Save display name", {"variant": "secondary", "on_pressed": Callable(self, "_save_display_name")})
+	var status_text := "Locked account" if locked else "Active account"
 	return ui.card([
 		ui.section_header("Selected account", "Identity and profile fields"),
 		ui.settings_row("Username", ui.label("@" + username, {"variant": "body", "expand_h": true}), {"expand_h": true}),
 		ui.settings_row("Home", ui.label(home, {"variant": "muted", "expand_h": true}), {"expand_h": true}),
-		ui.settings_row("Status", ui.label("Locked" if locked else "Active", {"variant": "status", "expand_h": true}), {"expand_h": true}),
+		ui.settings_row("Status", ui.label(status_text, {"variant": "body", "expand_h": true}), {"expand_h": true}),
 		ui.settings_row("Display name", _display_name_input, {"expand_h": true}),
 		save_display_button
 	], 16, {"name": "AccountCenterSelectedCard", "expand_h": true})
