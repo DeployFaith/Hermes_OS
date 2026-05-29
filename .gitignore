@@ -1,11 +1,23 @@
 # Godot generated/editor state
+
 .godot/
 .import/
+*.translation
 
-# Godot export credentials and local presets that can contain machine-specific data
+# Godot export credentials
+
+# Godot 4.1+ stores confidential export options here.
+
+# This is already covered by .godot/, but kept explicit for clarity.
+
+.godot/export_credentials.cfg
+
+# Legacy/defensive export credential ignore
+
 export_credentials.cfg
 
 # Build/export output
+
 /build/
 /builds/
 /export/
@@ -24,9 +36,53 @@ export_credentials.cfg
 *.wasm
 
 # Android export/generated project
+
 /android/
 
+# Runtime secrets / local environment files
+
+.env
+.env.*
+*.env
+!*.env.example
+!*.example.env
+runtime/**/compose.env
+!runtime/**/compose.env.example
+
+# Hermes / local runtime state
+
+runtime/**/hermes-home/
+runtime/**/logs/
+runtime/**/sessions/
+runtime/**/audio_cache/
+runtime/**/image_cache/
+
+# Node runtime artifacts
+
+node_modules/
+runtime/**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python runtime artifacts, useful if bridge/gateway tooling uses Python
+
+**pycache**/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Rust/native build artifacts, useful if WRY/native bridge tooling is built locally
+
+target/
+
 # Logs and temporary files
+
+logs/
 *.log
 *.tmp
 *.temp
@@ -35,16 +91,8 @@ export_credentials.cfg
 *.orig
 *~
 
-# Node runtime artifacts
-node_modules/
-runtime/mock_backend/node_modules/
-runtime/live_bridge/node_modules/
-runtime/*/hermes-home/
-runtime/live_bridge/compose.env
-runtime/hermes_gateway/compose.env
-runtime/hermes_os_mcp/node_modules/
-
 # Editor/OS noise
+
 .DS_Store
 .AppleDouble
 .LSOverride
@@ -54,7 +102,14 @@ desktop.ini
 *.swo
 .vscode/
 .idea/
+.zed/
+.cursor/
+
+# Local AI/editor tool settings that may contain machine-specific paths or secrets
+
+.claude/settings.local.json
 
 # Nextcloud conflict artifacts
+
 *.sync-conflict-*
 *conflicted copy*
