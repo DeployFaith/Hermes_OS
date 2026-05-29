@@ -48,10 +48,8 @@
 
 #SystemSettingsToolbarGatewayStatusLabel,
 #SystemSettingsToolbarMcpStatusLabel {
-  min-width: 118px;
-  border-width: 1px;
-  border-radius: var(--radius-pill);
-  padding: 7px;
+  min-width: 104px;
+  color: #aab5ca;
   font-size: var(--font-sm);
 }
 

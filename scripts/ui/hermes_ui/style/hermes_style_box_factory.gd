@@ -18,6 +18,11 @@ func build(computed_style) -> StyleBoxFlat:
 		box.border_width_right = border_width
 		box.border_width_top = border_width
 		box.border_width_bottom = border_width
+	_apply_edge_border_width(box, computed_style, "left", border_width)
+	_apply_edge_border_width(box, computed_style, "right", border_width)
+	_apply_edge_border_width(box, computed_style, "top", border_width)
+	_apply_edge_border_width(box, computed_style, "bottom", border_width)
+	if box.border_width_left > 0 or box.border_width_right > 0 or box.border_width_top > 0 or box.border_width_bottom > 0:
 		box.border_color = computed_style.get_color("border-color", Color.TRANSPARENT)
 	var radius: int = int(round(computed_style.get_number("border-radius", 0.0)))
 	if radius > 0:
@@ -47,8 +52,23 @@ func _apply_edge_margin(box: StyleBoxFlat, computed_style, edge: String, padding
 		"bottom":
 			box.content_margin_bottom = max(value, 0)
 
+func _apply_edge_border_width(box: StyleBoxFlat, computed_style, edge: String, border_default: int) -> void:
+	var value: int = border_default
+	for property_name in ["border-" + edge + "-width", "border-width-" + edge]:
+		if computed_style.has_property(property_name):
+			value = int(round(computed_style.get_number(property_name, float(border_default))))
+	match edge:
+		"left":
+			box.border_width_left = max(value, 0)
+		"right":
+			box.border_width_right = max(value, 0)
+		"top":
+			box.border_width_top = max(value, 0)
+		"bottom":
+			box.border_width_bottom = max(value, 0)
+
 func _has_visual_properties(computed_style) -> bool:
-	for property_name in ["background", "background-color", "border-color", "border-width", "border-radius", "padding", "padding-left", "padding-right", "padding-top", "padding-bottom"]:
+	for property_name in ["background", "background-color", "border-color", "border-width", "border-left-width", "border-right-width", "border-top-width", "border-bottom-width", "border-width-left", "border-width-right", "border-width-top", "border-width-bottom", "border-radius", "padding", "padding-left", "padding-right", "padding-top", "padding-bottom"]:
 		if computed_style.has_property(property_name):
 			return true
 	return false

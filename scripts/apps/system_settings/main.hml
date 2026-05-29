@@ -6,8 +6,8 @@
           <Title id="SystemSettingsTitle">System Settings</Title>
           <Text id="SystemSettingsSubtitle">System diagnostics, Hermes Gateway, and MCP controls</Text>
         </Column>
-        <Badge id="SystemSettingsToolbarGatewayStatusLabel" label="Gateway status" variant="{gateway_variant}">{gateway_toolbar_label}</Badge>
-        <Badge id="SystemSettingsToolbarMcpStatusLabel" label="MCP status" variant="{mcp_variant}">{mcp_toolbar_label}</Badge>
+        <Text id="SystemSettingsToolbarGatewayStatusLabel" class="system-settings-toolbar-status" label="Gateway status">{gateway_toolbar_label}</Text>
+        <Text id="SystemSettingsToolbarMcpStatusLabel" class="system-settings-toolbar-status" label="MCP status">{mcp_toolbar_label}</Text>
       </Toolbar>
 
       <Row id="system-settings-main" class="system-settings-main" label="Settings workspace">

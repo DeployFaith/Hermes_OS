@@ -48,28 +48,8 @@
 
 #notes-dirty {
   min-width: 86px;
-  border-width: 1px;
-  border-radius: var(--radius-pill);
-  padding: 8px;
+  color: #aab5ca;
   font-size: var(--font-sm);
-}
-
-#notes-dirty[variant="success"] {
-  background: rgba(126, 224, 161, 0.16);
-  color: #b6f1ca;
-  border-color: rgba(126, 224, 161, 0.50);
-}
-
-#notes-dirty[variant="warning"] {
-  background: rgba(255, 210, 126, 0.15);
-  color: #ffe0a6;
-  border-color: rgba(255, 210, 126, 0.45);
-}
-
-#notes-dirty[variant="danger"] {
-  background: rgba(255, 126, 147, 0.14);
-  color: #ffc1ca;
-  border-color: rgba(255, 126, 147, 0.48);
 }
 
 #notes-new,

@@ -46,30 +46,10 @@
   font-size: var(--font-sm);
 }
 
-#gateway-status {
-  min-width: 142px;
-  border-width: 1px;
-  border-radius: var(--radius-pill);
-  padding: 8px;
+.gateway-status {
+  min-width: 132px;
+  color: #aeb9ce;
   font-size: var(--font-sm);
-}
-
-#gateway-status[variant="success"] {
-  background: rgba(126, 224, 161, 0.16);
-  color: #b6f1ca;
-  border-color: rgba(126, 224, 161, 0.50);
-}
-
-#gateway-status[variant="warning"] {
-  background: rgba(255, 210, 126, 0.15);
-  color: #ffe0a6;
-  border-color: rgba(255, 210, 126, 0.45);
-}
-
-#gateway-status[variant="danger"] {
-  background: rgba(255, 126, 147, 0.14);
-  color: #ffc1ca;
-  border-color: rgba(255, 126, 147, 0.48);
 }
 
 .message-scroll {

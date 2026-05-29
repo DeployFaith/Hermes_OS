@@ -79,6 +79,18 @@ func _render_app(element, render_context, _renderer) -> Control:
 func _render_window(element, render_context, _renderer) -> Control:
 	return render_context.ui.panel([], render_context.theme.spacing("panel"), "base", {"name": "HermesRenderWindow", "expand_h": true, "expand_v": true})
 
+func _render_app_shell(_element, render_context, _renderer) -> Control:
+	return render_context.ui.vbox([], render_context.theme.spacing("space_3"), {"name": "HermesRenderAppShell", "expand_h": true, "expand_v": true})
+
+func _render_app_header(_element, render_context, _renderer) -> Control:
+	return render_context.ui.panel([], render_context.theme.spacing("space_2"), "base", {"name": "HermesRenderAppHeader", "expand_h": true})
+
+func _render_app_body(_element, render_context, _renderer) -> Control:
+	return render_context.ui.vbox([], render_context.theme.spacing("space_3"), {"name": "HermesRenderAppBody", "expand_h": true, "expand_v": true})
+
+func _render_app_footer(_element, render_context, _renderer) -> Control:
+	return render_context.ui.panel([], render_context.theme.spacing("space_2"), "base", {"name": "HermesRenderAppFooter", "expand_h": true})
+
 func _render_column(element, render_context, _renderer) -> Control:
 	var control := HermesFlexContainer.new("column")
 	control.name = "HermesRenderColumn"

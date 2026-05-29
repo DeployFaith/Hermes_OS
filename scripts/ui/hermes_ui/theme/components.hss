@@ -6,6 +6,55 @@ Window {
   padding: var(--space-4);
 }
 
+AppShell {
+  flex: 1;
+  gap: var(--space-2);
+  background: transparent;
+  border-color: transparent;
+  border-width: 0px;
+  border-radius: 0px;
+  padding: 0px;
+}
+
+AppHeader {
+  gap: var(--space-2);
+  align-items: center;
+  background: var(--surface-1);
+  border-color: var(--border-muted);
+  border-width: 0px;
+  border-bottom-width: 1px;
+  border-radius: 0px;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+
+AppBody {
+  flex: 1;
+  gap: var(--space-2);
+  background: transparent;
+  border-color: transparent;
+  border-width: 0px;
+  border-radius: 0px;
+  padding: 0px;
+}
+
+AppFooter {
+  min-height: 28px;
+  gap: var(--space-2);
+  align-items: center;
+  background: var(--surface-0);
+  border-color: var(--border-muted);
+  border-width: 0px;
+  border-top-width: 1px;
+  border-radius: 0px;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+}
+
 Column {
   gap: var(--space-3);
 }
@@ -38,11 +87,29 @@ SettingsSection {
 }
 
 Toolbar {
-  background: var(--surface-2);
+  background: var(--surface-1);
   border-color: var(--border-muted);
-  border-width: 1px;
-  border-radius: var(--radius-lg);
-  padding: var(--space-3);
+  border-width: 0px;
+  border-bottom-width: 1px;
+  border-radius: 0px;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+
+StatusBar {
+  min-height: 28px;
+  background: var(--surface-0);
+  color: var(--text-muted);
+  border-color: var(--border-muted);
+  border-width: 0px;
+  border-top-width: 1px;
+  border-radius: 0px;
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
 }
 
 Sidebar {
@@ -205,29 +272,32 @@ BrowserSurface {
 }
 
 Badge {
-  background: var(--surface-2);
+  background: transparent;
   color: var(--text-muted);
   border-color: var(--border-muted);
   border-width: 1px;
-  border-radius: var(--radius-pill);
-  padding: 6px;
+  border-radius: var(--radius-sm);
+  padding-left: 4px;
+  padding-right: 4px;
+  padding-top: 1px;
+  padding-bottom: 1px;
   font-size: var(--font-sm);
 }
 
 Badge[variant="success"] {
-  background: rgba(126, 224, 161, 0.18);
-  color: var(--success);
-  border-color: var(--success);
+  background: transparent;
+  color: var(--text-muted);
+  border-color: var(--border-muted);
 }
 
 Badge[variant="warning"] {
-  background: rgba(255, 210, 126, 0.18);
+  background: rgba(255, 210, 126, 0.10);
   color: var(--warning);
-  border-color: var(--warning);
+  border-color: rgba(255, 210, 126, 0.40);
 }
 
 Badge[variant="danger"] {
-  background: rgba(255, 126, 147, 0.18);
+  background: rgba(255, 126, 147, 0.10);
   color: var(--danger);
-  border-color: var(--danger);
+  border-color: rgba(255, 126, 147, 0.40);
 }

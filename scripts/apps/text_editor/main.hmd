@@ -6,8 +6,9 @@ style: main.hss
 ---
 
 ::Window id="text-editor-window" class="text-editor-window" label="Text editor window"
-::Column id="text-editor-root" class="text-editor-root" label="Text editor content"
-::Row id="text-editor-toolbar" class="text-editor-toolbar" label="Text editor toolbar"
+::AppShell id="text-editor-root" class="text-editor-root" label="Text editor content"
+::AppHeader id="text-editor-header" class="text-editor-header" label="Text editor toolbar"
+::Toolbar id="text-editor-toolbar" class="text-editor-toolbar" label="Text editor toolbar"
 ::Column id="text-editor-file-info" class="text-editor-file-info"
 ::Title id="text-editor-title"
 = Text
@@ -16,7 +17,7 @@ style: main.hss
 = {path_label}
 ::
 ::
-::Badge id="text-editor-dirty" label="Dirty state" variant="{dirty_variant}"
+::Text id="text-editor-dirty" class="text-editor-dirty" label="Dirty state"
 = {dirty_label}
 ::
 ::Button id="text-editor-save" label="Save file" variant="primary" disabled="{!can_save}"
@@ -24,11 +25,14 @@ on click: save_file
 = Save
 ::
 ::
+::
+::AppBody id="text-editor-body" class="text-editor-body" label="Text editor content area"
 ::TextArea id="text-editor-content" class="text-editor-content" label="File content" model="content" placeholder="Open a file from Files or Desktop to edit it here."
 on input: handle_content_input
 ::
-::Row id="text-editor-statusbar" class="text-editor-statusbar" label="Text editor status"
-::Text id="text-editor-status" class="text-editor-status" label="Status"
+::
+::AppFooter id="text-editor-footer" class="text-editor-footer" label="Text editor status"
+::StatusBar id="text-editor-statusbar" class="text-editor-statusbar" label="Status" variant="info"
 = {status}
 ::
 ::

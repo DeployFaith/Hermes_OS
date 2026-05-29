@@ -21,6 +21,10 @@ func register_defaults(renderer) -> void:
 		return
 	register_component("App", HermesComponent.new("App", Callable(renderer, "_render_app"), true, "application"))
 	register_component("Window", HermesComponent.new("Window", Callable(renderer, "_render_window"), true, "window"))
+	register_component("AppShell", HermesComponent.new("AppShell", Callable(renderer, "_render_app_shell"), true, "application"))
+	register_component("AppHeader", HermesComponent.new("AppHeader", Callable(renderer, "_render_app_header"), true, "banner"))
+	register_component("AppBody", HermesComponent.new("AppBody", Callable(renderer, "_render_app_body"), true, "main"))
+	register_component("AppFooter", HermesComponent.new("AppFooter", Callable(renderer, "_render_app_footer"), true, "contentinfo"))
 	register_component("Column", HermesComponent.new("Column", Callable(renderer, "_render_column"), true, "group"))
 	register_component("Row", HermesComponent.new("Row", Callable(renderer, "_render_row"), true, "group"))
 	register_component("Panel", HermesComponent.new("Panel", Callable(renderer, "_render_panel"), true, "region"))

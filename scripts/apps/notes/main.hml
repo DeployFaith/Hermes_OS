@@ -6,7 +6,7 @@
           <Title id="notes-title">Notes</Title>
           <Text id="notes-path" label="Current note path">{path_label}</Text>
         </Column>
-        <Badge id="notes-dirty" label="Dirty state" variant="{dirty_variant}">{dirty_label}</Badge>
+        <Text id="notes-dirty" class="notes-dirty" label="Dirty state">{dirty_label}</Text>
         <Button id="notes-new" label="New note" variant="secondary" on:click="new_note">New</Button>
         <Button id="notes-save" label="Save note" variant="primary" disabled="{!can_save}" on:click="save_note">Save</Button>
         <Button id="notes-delete" label="Delete note" variant="danger" disabled="{!can_delete}" on:click="delete_note">Delete</Button>
