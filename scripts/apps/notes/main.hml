@@ -1,7 +1,7 @@
 <App id="notes-app" label="Notes">
   <Window id="notes-window" class="notes-window" label="Notes window">
-    <Column id="notes-root" class="notes-root" label="Notes content">
-      <Row id="notes-toolbar" class="notes-toolbar" label="Notes toolbar">
+    <AppShell id="notes-root" class="notes-root" label="Notes content">
+      <AppHeader id="notes-toolbar" class="notes-toolbar" label="Notes toolbar">
         <Column id="notes-title-block" class="notes-title-block">
           <Title id="notes-title">Notes</Title>
           <Text id="notes-path" label="Current note path">{path_label}</Text>
@@ -10,21 +10,23 @@
         <Button id="notes-new" label="New note" variant="secondary" on:click="new_note">New</Button>
         <Button id="notes-save" label="Save note" variant="primary" disabled="{!can_save}" on:click="save_note">Save</Button>
         <Button id="notes-delete" label="Delete note" variant="danger" disabled="{!can_delete}" on:click="delete_note">Delete</Button>
-      </Row>
+      </AppHeader>
 
-      <Row id="notes-main" class="notes-main" label="Notes workspace">
-        <Column id="notes-sidebar" class="notes-sidebar" label="Notes sidebar">
-          <Text id="notes-sidebar-title" class="notes-sidebar-title">Saved notes</Text>
-          <List id="notes-list" class="notes-list" label="Saved notes list">
-            <ListItem id="note-{note.id}" class="notes-list-item" label="{note.title}" value="{note.id}" selected="{note.id == active_note_id}" for="note in notes" key="{note.id}" on:select="select_note">{note.title}</ListItem>
-          </List>
-        </Column>
-        <TextArea id="notes-content" class="notes-content" label="Note content" model="content" placeholder="Select or create a note to start writing." on:input="handle_content_input" />
-      </Row>
+      <AppBody id="notes-main" class="notes-main" label="Notes workspace">
+        <Row id="notes-workspace" class="notes-workspace" label="Notes editor workspace">
+          <Column id="notes-sidebar" class="notes-sidebar" label="Notes sidebar">
+            <Text id="notes-sidebar-title" class="notes-sidebar-title">Saved notes</Text>
+            <List id="notes-list" class="notes-list" label="Saved notes list">
+              <ListItem id="note-{note.id}" class="notes-list-item" label="{note.title}" value="{note.id}" selected="{note.id == active_note_id}" for="note in notes" key="{note.id}" on:select="select_note">{note.title}</ListItem>
+            </List>
+          </Column>
+          <TextArea id="notes-content" class="notes-content" label="Note content" model="content" placeholder="Select or create a note to start writing." on:input="handle_content_input" />
+        </Row>
+      </AppBody>
 
-      <Row id="notes-statusbar" class="notes-statusbar" label="Notes status">
+      <AppFooter id="notes-statusbar" class="notes-statusbar" label="Notes status">
         <Text id="notes-status" class="notes-status" label="Status">{status}</Text>
-      </Row>
-    </Column>
+      </AppFooter>
+    </AppShell>
   </Window>
 </App>
