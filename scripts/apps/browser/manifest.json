@@ -9,10 +9,11 @@
   "surface": "window",
   "window": {
     "title": "Browser",
-    "default_width": 980,
-    "default_height": 640,
-    "min_width": 760,
-    "min_height": 520,
+    "size_class": "workspace",
+    "default_width": 1080,
+    "default_height": 720,
+    "min_width": 840,
+    "min_height": 560,
     "resizable": true,
     "chromed": true
   }

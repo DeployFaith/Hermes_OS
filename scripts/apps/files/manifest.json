@@ -9,10 +9,11 @@
   "surface": "window",
   "window": {
     "title": "Files",
-    "default_width": 1100,
-    "default_height": 680,
-    "min_width": 820,
-    "min_height": 520,
+    "size_class": "workspace",
+    "default_width": 1080,
+    "default_height": 720,
+    "min_width": 840,
+    "min_height": 560,
     "resizable": true,
     "chromed": true
   },

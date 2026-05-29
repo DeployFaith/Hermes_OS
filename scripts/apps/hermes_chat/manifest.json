@@ -10,10 +10,11 @@
   "surface": "window",
   "window": {
     "title": "Hermes Chat",
-    "default_width": 760,
-    "default_height": 560,
-    "min_width": 620,
-    "min_height": 420,
+    "size_class": "workspace",
+    "default_width": 1080,
+    "default_height": 720,
+    "min_width": 840,
+    "min_height": 560,
     "resizable": true,
     "chromed": true
   },

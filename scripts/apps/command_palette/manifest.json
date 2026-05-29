@@ -9,10 +9,11 @@
   "surface": "window",
   "window": {
     "title": "Command Palette",
-    "default_width": 780,
-    "default_height": 560,
-    "min_width": 620,
-    "min_height": 420,
+    "size_class": "standard",
+    "default_width": 840,
+    "default_height": 620,
+    "min_width": 660,
+    "min_height": 460,
     "resizable": true,
     "chromed": true
   }

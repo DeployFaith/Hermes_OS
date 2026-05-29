@@ -222,6 +222,14 @@ const HERMES_UI_PRODUCTION_MANIFESTS := {
 }
 const SHELL_LAUNCHER_MANIFEST := "res://scripts/os/hermes_shell/chrome/launcher/launcher_manifest.json"
 const SHELL_TASKBAR_MANIFEST := "res://scripts/os/shell_ui/taskbar_manifest.json"
+const WINDOW_SIZE_CLASS_POLICY := {
+	"utility": {"default": Vector2(680, 500), "min": Vector2(520, 360)},
+	"standard": {"default": Vector2(840, 620), "min": Vector2(660, 460)},
+	"document": {"default": Vector2(920, 680), "min": Vector2(720, 500)},
+	"dashboard": {"default": Vector2(1020, 720), "min": Vector2(780, 540)},
+	"workspace": {"default": Vector2(1080, 720), "min": Vector2(840, 560)}
+}
+const WINDOW_SIZE_CLASS_FALLBACK := "standard"
 
 const Tokens = preload("res://scripts/os/design_tokens.gd")
 const StyleFactory = preload("res://scripts/os/style_factory.gd")
@@ -2517,14 +2525,17 @@ func _resolve_window_launch_options(app_id: String, app: Dictionary, content: Co
 	return {"size": default_size}
 
 func _default_window_size(app_id: String, app: Dictionary = {}, content: Control = null) -> Vector2:
+	var manifest_window := _window_config_for_app(app_id, app)
+	var size_class_default := _window_size_for_class(manifest_window, "default")
+	if size_class_default != Vector2.ZERO:
+		return size_class_default
+	var manifest_size := _window_size_from_config(manifest_window, "default_width", "default_height")
+	if manifest_size != Vector2.ZERO:
+		return manifest_size
 	if content != null and content.has_meta("window_default_size"):
 		var meta_size: Variant = content.get_meta("window_default_size")
 		if meta_size is Vector2:
 			return meta_size
-	var manifest_window := _window_config_for_app(app_id, app)
-	var manifest_size := _window_size_from_config(manifest_window, "default_width", "default_height")
-	if manifest_size != Vector2.ZERO:
-		return manifest_size
 	match app_id:
 		"files":
 			return Vector2(1100, 680)
@@ -2544,14 +2555,33 @@ func _default_window_size(app_id: String, app: Dictionary = {}, content: Control
 			return Vector2(560, 380)
 
 func _resolve_window_min_size(app_id: String, app: Dictionary, content: Control) -> Vector2:
+	var manifest_window := _window_config_for_app(app_id, app)
+	var size_class_min := _window_size_for_class(manifest_window, "min")
+	if size_class_min != Vector2.ZERO:
+		return size_class_min
+	var manifest_size := _window_size_from_config(manifest_window, "min_width", "min_height")
+	if manifest_size != Vector2.ZERO:
+		return manifest_size
 	if content != null and content.has_meta("window_min_size"):
 		var meta_size: Variant = content.get_meta("window_min_size")
 		if meta_size is Vector2:
 			return meta_size
-	var manifest_window := _window_config_for_app(app_id, app)
-	var manifest_size := _window_size_from_config(manifest_window, "min_width", "min_height")
-	if manifest_size != Vector2.ZERO:
-		return manifest_size
+	return Vector2.ZERO
+
+func _window_size_for_class(window_config: Dictionary, size_kind: String) -> Vector2:
+	if window_config.is_empty():
+		return Vector2.ZERO
+	var size_class := str(window_config.get("size_class", "")).strip_edges().to_lower()
+	if size_class == "":
+		return Vector2.ZERO
+	if not WINDOW_SIZE_CLASS_POLICY.has(size_class):
+		size_class = WINDOW_SIZE_CLASS_FALLBACK
+	var policy_entry: Dictionary = WINDOW_SIZE_CLASS_POLICY.get(size_class, {}) as Dictionary
+	if policy_entry.is_empty():
+		return Vector2.ZERO
+	var size_value: Variant = policy_entry.get(size_kind, Vector2.ZERO)
+	if size_value is Vector2:
+		return size_value
 	return Vector2.ZERO
 
 func _window_config_for_app(app_id: String, app: Dictionary) -> Dictionary:
