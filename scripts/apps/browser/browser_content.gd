@@ -63,6 +63,8 @@ var _native_teardown_done := false
 var _native_teardown_started_msec := 0
 var _local_document_active := false
 var _last_loaded_document: Dictionary = {}
+var _native_webview_window_visible := true
+var _native_webview_last_rect := Rect2()
 
 var _tabs: Array[Dictionary] = []
 var _closed_tabs: Array[Dictionary] = []
@@ -82,6 +84,7 @@ func _ready() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	add_theme_constant_override("separation", 6)
+	set_process(true)
 	set_process_unhandled_input(true)
 	_setup_session_save_timer()
 	_load_settings()
@@ -92,6 +95,10 @@ func _ready() -> void:
 	if _restore_session_enabled:
 		_restore_session()
 	_sync_active_tab_to_ui()
+	_sync_native_webview_window_state(true)
+
+func _process(_delta: float) -> void:
+	_sync_native_webview_window_state()
 
 func _exit_tree() -> void:
 	_teardown_embedded_webview()
@@ -605,6 +612,73 @@ func _configure_webview_layout() -> void:
 		_webview.set("full_window_size", false)
 	elif _webview.has_method("set_full_window_size"):
 		_webview.call("set_full_window_size", false)
+	_sync_native_webview_window_state(true)
+
+func _sync_native_webview_window_state(force := false) -> void:
+	if _webview == null or not is_instance_valid(_webview):
+		return
+	var should_show := _should_show_native_webview()
+	var current_rect := get_global_rect()
+	var rect_changed := current_rect != _native_webview_last_rect
+	if force or should_show != _native_webview_window_visible:
+		_native_webview_window_visible = should_show
+		if _webview is CanvasItem:
+			(_webview as CanvasItem).visible = should_show
+		if _webview.has_method("set_visible"):
+			_webview.call("set_visible", should_show)
+		if _webview.has_method("update_visibility"):
+			_webview.call("update_visibility")
+		_record_webview_signal("native_visibility", should_show)
+	if force or rect_changed:
+		_native_webview_last_rect = current_rect
+		if _webview.has_method("resize"):
+			_webview.call("resize")
+
+func _should_show_native_webview() -> bool:
+	if _webview == null or not is_instance_valid(_webview):
+		return false
+	if not is_visible_in_tree():
+		return false
+	if _content_host != null and not _content_host.is_visible_in_tree():
+		return false
+	if _settings_panel != null and _settings_panel.visible:
+		return false
+	if _diagnostics_panel != null and _diagnostics_panel.visible:
+		return false
+	if _new_tab_page != null and _new_tab_page.visible:
+		return false
+	var window := _find_os_window_ancestor()
+	if window == null:
+		return true
+	if not window.visible or not window.is_visible_in_tree():
+		return false
+	return _is_topmost_visible_window(window)
+
+func _find_os_window_ancestor() -> Control:
+	var node: Node = self
+	while node != null:
+		if node is OSWindow:
+			return node as Control
+		node = node.get_parent()
+	return null
+
+func _is_topmost_visible_window(window: Control) -> bool:
+	var parent := window.get_parent()
+	if parent == null:
+		return true
+	for sibling in parent.get_children():
+		if sibling == window:
+			continue
+		if not (sibling is Control):
+			continue
+		var other := sibling as Control
+		if not other.visible:
+			continue
+		if str(other.get("app_id")) == "":
+			continue
+		if other.get_index() > window.get_index():
+			return false
+	return true
 
 func _create_webview_node() -> Node:
 	for c in WRY_CLASS_CANDIDATES:
@@ -886,6 +960,167 @@ func can_go_forward() -> bool:
 	var tab := _active_tab_data()
 	var history := tab.get("history", []) as Array
 	return not tab.is_empty() and int(tab.get("history_index", 0)) < history.size() - 1
+
+func agent_get_state(_args: Dictionary = {}) -> Dictionary:
+	var state := debug_get_state()
+	state["success"] = true
+	state["operation"] = "browser.get_state"
+	state["url"] = get_current_url()
+	state["title"] = get_current_title()
+	state["can_go_back"] = can_go_back()
+	state["can_go_forward"] = can_go_forward()
+	state["links"] = agent_list_links({}).get("links", [])
+	return state
+
+func agent_navigate(args: Dictionary = {}) -> Dictionary:
+	var target := _agent_navigation_target(args)
+	if target == "":
+		return _agent_error("browser.navigate", "MISSING_ARG", "browser.navigate requires url, page, route, or target")
+	var normalized := _resolver.normalize_user_url(target)
+	var document: Dictionary = _document_loader.load(normalized)
+	var status_code := int(document.get("status_code", 0))
+	var mode := str(document.get("mode", ""))
+	if status_code >= 400:
+		var label := _agent_target_label(args, normalized)
+		if mode == "real_internet_unavailable":
+			return _agent_error("browser.navigate", "EXTERNAL_NAVIGATION_BLOCKED", "browser navigation blocked: external internet unavailable", {"url": normalized, "mode": mode})
+		return _agent_error("browser.navigate", "PAGE_NOT_FOUND", "browser page not found: %s" % label, {"url": normalized, "mode": mode, "status_code": status_code})
+	open_url(normalized)
+	return {
+		"success": true,
+		"operation": "browser.navigate",
+		"url": get_current_url(),
+		"title": get_current_title(),
+		"status_code": status_code,
+		"mode": mode,
+		"source_path": str(document.get("source_path", ""))
+	}
+
+func agent_back(_args: Dictionary = {}) -> Dictionary:
+	if not can_go_back():
+		return _agent_error("browser.back", "NO_HISTORY", "browser has no back history")
+	go_back()
+	return _agent_success("browser.back")
+
+func agent_forward(_args: Dictionary = {}) -> Dictionary:
+	if not can_go_forward():
+		return _agent_error("browser.forward", "NO_HISTORY", "browser has no forward history")
+	go_forward()
+	return _agent_success("browser.forward")
+
+func agent_reload(_args: Dictionary = {}) -> Dictionary:
+	reload()
+	return _agent_success("browser.reload")
+
+func agent_list_links(_args: Dictionary = {}) -> Dictionary:
+	var html := str(_last_loaded_document.get("html", ""))
+	var links: Array[Dictionary] = []
+	if html != "":
+		var regex := RegEx.new()
+		if regex.compile("(?is)<a\\b([^>]*)\\bhref\\s*=\\s*([\"'])([^\"']+)\\2([^>]*)>(.*?)</a>") == OK:
+			for match in regex.search_all(html):
+				var href := str(match.get_string(3)).strip_edges()
+				var text := _strip_html(str(match.get_string(5))).strip_edges()
+				if href == "":
+					continue
+				links.append({
+					"id": _link_id_for(href, links.size()),
+					"href": _resolve_link_href(href),
+					"label": text if text != "" else href
+				})
+	return {
+		"success": true,
+		"operation": "browser.list_links",
+		"url": get_current_url(),
+		"title": get_current_title(),
+		"links": links
+	}
+
+func agent_activate_link(args: Dictionary = {}) -> Dictionary:
+	var requested := str(args.get("id", args.get("link_id", args.get("label", "")))).strip_edges().to_lower()
+	if requested == "":
+		return _agent_error("browser.activate_link", "MISSING_ARG", "browser.activate_link requires id, link_id, or label")
+	var links: Array = agent_list_links({}).get("links", [])
+	for link_value in links:
+		if not (link_value is Dictionary):
+			continue
+		var link: Dictionary = link_value
+		if str(link.get("id", "")).to_lower() == requested or str(link.get("label", "")).to_lower() == requested:
+			return agent_navigate({"url": str(link.get("href", "")), "target": str(link.get("label", requested))})
+	return _agent_error("browser.activate_link", "LINK_NOT_FOUND", "browser link not found: %s" % requested, {"links": links})
+
+func _agent_navigation_target(args: Dictionary) -> String:
+	var raw := str(args.get("url", args.get("page", args.get("route", args.get("target", ""))))).strip_edges()
+	var lower := raw.to_lower()
+	match lower:
+		"games", "game", "games page", "the games page":
+			return "http://home.hermes/games"
+		"snake", "snake game", "the snake game", "open snake", "open snake game":
+			return "http://home.hermes/games/snake"
+		"home", "home page", "home.hermes":
+			return DEFAULT_URL
+	if lower.begins_with("/"):
+		return "http://home.hermes%s" % raw
+	if (args.has("page") or args.has("route")) and not lower.contains("://"):
+		return "http://home.hermes/%s" % lower.replace(" ", "-")
+	return raw
+
+func _agent_target_label(args: Dictionary, fallback_url: String) -> String:
+	var raw := str(args.get("page", args.get("route", args.get("target", args.get("url", ""))))).strip_edges()
+	if raw != "":
+		return raw.to_lower().replace(" page", "").replace("the ", "")
+	var path := _resolver.extract_path_and_query(fallback_url).strip_edges().trim_prefix("/")
+	return path if path != "" else fallback_url
+
+func _agent_success(operation: String) -> Dictionary:
+	return {
+		"success": true,
+		"operation": operation,
+		"url": get_current_url(),
+		"title": get_current_title(),
+		"can_go_back": can_go_back(),
+		"can_go_forward": can_go_forward()
+	}
+
+func _agent_error(operation: String, code: String, message: String, details: Dictionary = {}) -> Dictionary:
+	var out := details.duplicate(true)
+	out["success"] = false
+	out["operation"] = operation
+	out["code"] = code
+	out["error"] = message
+	return out
+
+func _resolve_link_href(href: String) -> String:
+	var clean := href.strip_edges()
+	if clean.begins_with("#"):
+		return get_current_url() + clean
+	if clean.begins_with("/"):
+		return "http://%s%s" % [_host_for_url(get_current_url()), clean]
+	if clean.contains("://"):
+		return clean
+	var current := get_current_url()
+	var base_path := _resolver.extract_path_and_query(current)
+	if base_path.find("?") >= 0:
+		base_path = base_path.substr(0, base_path.find("?"))
+	var base_dir := base_path.get_base_dir()
+	if base_dir == "." or base_dir == "":
+		base_dir = "/"
+	return "http://%s/%s" % [_host_for_url(current), (base_dir.rstrip("/") + "/" + clean).trim_prefix("/")]
+
+func _link_id_for(href: String, index: int) -> String:
+	var clean := href.strip_edges().to_lower().replace("http://", "").replace("https://", "")
+	clean = clean.replace("/", "_").replace("#", "_").replace("?", "_").replace("=", "_").replace("&", "_")
+	while clean.begins_with("_"):
+		clean = clean.substr(1)
+	while clean.ends_with("_"):
+		clean = clean.substr(0, clean.length() - 1)
+	return clean if clean != "" else "link_%d" % index
+
+func _strip_html(value: String) -> String:
+	var regex := RegEx.new()
+	if regex.compile("(?is)<[^>]+>") != OK:
+		return value
+	return regex.sub(value, "", true).replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'")
 
 func _set_active_tab_url(display_url: String, record_history: bool) -> void:
 	if _active_tab < 0 or _active_tab >= _tabs.size():

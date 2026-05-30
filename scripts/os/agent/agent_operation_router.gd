@@ -104,6 +104,20 @@ func _route_operation(operation: String, args: Dictionary) -> Dictionary:
 			return _route_windows_open_app(operation, args)
 		"windows.focus", "windows.focus_window":
 			return _route_windows_focus(operation, args)
+		"browser.get_state":
+			return _route_browser_operation(operation, args, "agent_browser_get_state", false)
+		"browser.navigate":
+			return _route_browser_operation(operation, args, "agent_browser_navigate", true)
+		"browser.back":
+			return _route_browser_operation(operation, args, "agent_browser_back", true)
+		"browser.forward":
+			return _route_browser_operation(operation, args, "agent_browser_forward", true)
+		"browser.reload":
+			return _route_browser_operation(operation, args, "agent_browser_reload", true)
+		"browser.list_links":
+			return _route_browser_operation(operation, args, "agent_browser_list_links", true)
+		"browser.activate_link":
+			return _route_browser_operation(operation, args, "agent_browser_activate_link", true)
 		"notifications.create", "desktop.show_notification":
 			return _route_notifications_create(operation, args)
 		"system.get_state":
@@ -244,11 +258,62 @@ func _route_windows_focus(operation: String, args: Dictionary) -> Dictionary:
 		target_window = _window_manager.call("get_window_for_app", StringName(focus_app_id))
 	if target_window == null:
 		return _make_error(operation, "WINDOW_NOT_FOUND", "Window not found")
-	if _shell.has_method("_focus_window"):
-		_shell.call("_focus_window", target_window)
-	elif _window_manager != null and _window_manager.has_method("get_window_id") and _window_manager.has_method("focus_window"):
-		_window_manager.call("focus_window", int(_window_manager.call("get_window_id", target_window)))
+	_focus_window_object(target_window)
 	return _make_result(operation, {"window_id": _window_id_for(target_window), "app_id": str(target_window.get("app_id")) if target_window is Object else focus_app_id})
+
+func _route_browser_operation(operation: String, args: Dictionary, method_name: String, open_if_missing: bool) -> Dictionary:
+	var target := _ensure_browser_operation_target(operation, open_if_missing)
+	if not bool(target.get("ok", false)):
+		return target
+	var browser: Object = target.get("browser", null) as Object
+	if browser == null or not browser.has_method(method_name):
+		return _make_error(operation, "BROWSER_OPERATION_UNAVAILABLE", "Browser operation is unavailable: " + operation)
+	var result_value: Variant = browser.call(method_name, args.duplicate(true))
+	if not (result_value is Dictionary):
+		return _make_error(operation, "BAD_RESULT", "Browser operation returned a non-dictionary result")
+	var result: Dictionary = (result_value as Dictionary).duplicate(true)
+	result["operation"] = operation
+	if bool(result.get("success", false)):
+		return _make_result(operation, result)
+	var code := str(result.get("code", "BROWSER_OPERATION_FAILED"))
+	var message := str(result.get("error", "Browser operation failed: " + operation))
+	return _make_error(operation, code, message, result)
+
+func _ensure_browser_operation_target(operation: String, open_if_missing: bool) -> Dictionary:
+	var window: Variant = null
+	if _window_manager != null and _window_manager.has_method("get_window_for_app"):
+		window = _window_manager.call("get_window_for_app", StringName("browser"))
+	if window == null and open_if_missing:
+		if _shell == null or not _shell.has_method("launch_app"):
+			return _make_error(operation, "SHELL_UNAVAILABLE", "Shell launch_app boundary is unavailable")
+		window = _shell.call("launch_app", "browser")
+	if window == null:
+		return _make_error(operation, "BROWSER_NOT_OPEN", "Browser is not open")
+	_focus_window_object(window)
+	var browser := _find_browser_operation_node(window as Node)
+	if browser == null:
+		return _make_error(operation, "BROWSER_SURFACE_UNAVAILABLE", "Browser app node is unavailable")
+	return {"ok": true, "browser": browser, "window": window}
+
+func _focus_window_object(window: Variant) -> void:
+	if window == null:
+		return
+	if _shell != null and _shell.has_method("_focus_window"):
+		_shell.call("_focus_window", window)
+		return
+	if _window_manager != null and _window_manager.has_method("get_window_id") and _window_manager.has_method("focus_window"):
+		_window_manager.call("focus_window", int(_window_manager.call("get_window_id", window)))
+
+func _find_browser_operation_node(root: Node) -> Object:
+	if root == null or not is_instance_valid(root):
+		return null
+	if root.has_method("agent_browser_navigate"):
+		return root
+	for child in root.get_children():
+		var found := _find_browser_operation_node(child)
+		if found != null:
+			return found
+	return null
 
 func _route_notifications_create(operation: String, args: Dictionary) -> Dictionary:
 	if _shell == null or not _shell.has_method("notify"):

@@ -67,6 +67,40 @@ func reload() -> void:
 		surface.call("reload")
 	_sync_controller_from_surface()
 
+func agent_browser_get_state(args: Dictionary = {}) -> Dictionary:
+	return _call_surface_agent_method("agent_get_state", args, "browser.get_state")
+
+func agent_browser_navigate(args: Dictionary = {}) -> Dictionary:
+	return _call_surface_agent_method("agent_navigate", args, "browser.navigate")
+
+func agent_browser_back(args: Dictionary = {}) -> Dictionary:
+	return _call_surface_agent_method("agent_back", args, "browser.back")
+
+func agent_browser_forward(args: Dictionary = {}) -> Dictionary:
+	return _call_surface_agent_method("agent_forward", args, "browser.forward")
+
+func agent_browser_reload(args: Dictionary = {}) -> Dictionary:
+	return _call_surface_agent_method("agent_reload", args, "browser.reload")
+
+func agent_browser_list_links(args: Dictionary = {}) -> Dictionary:
+	return _call_surface_agent_method("agent_list_links", args, "browser.list_links")
+
+func agent_browser_activate_link(args: Dictionary = {}) -> Dictionary:
+	return _call_surface_agent_method("agent_activate_link", args, "browser.activate_link")
+
+func _call_surface_agent_method(method_name: String, args: Dictionary, operation: String) -> Dictionary:
+	var surface = get_browser_surface()
+	if surface == null or not surface.has_method(method_name):
+		return {"success": false, "operation": operation, "code": "BROWSER_SURFACE_UNAVAILABLE", "error": "Browser surface is unavailable"}
+	var result: Variant = surface.call(method_name, args)
+	_sync_controller_from_surface()
+	if result is Dictionary:
+		var response := (result as Dictionary).duplicate(true)
+		if not response.has("operation"):
+			response["operation"] = operation
+		return response
+	return {"success": false, "operation": operation, "code": "BAD_RESULT", "error": "Browser operation returned a non-dictionary result"}
+
 func stop_loading() -> void:
 	var surface = get_browser_surface()
 	if surface != null and surface.has_method("stop_loading"):
