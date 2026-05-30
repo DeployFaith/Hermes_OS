@@ -1,5 +1,7 @@
 (() => {
   const status = document.getElementById("demo-status");
+  const renderingMode = document.getElementById("rendering-mode");
+  const lifecycleState = document.getElementById("lifecycle-state");
   const counterValue = document.getElementById("counter-value");
   const incrementBtn = document.getElementById("increment-btn");
   const themeBtn = document.getElementById("theme-btn");
@@ -8,7 +10,7 @@
   const lastKey = document.getElementById("last-key");
   const channelState = document.getElementById("channel-state");
 
-  if (!status || !counterValue || !incrementBtn || !themeBtn || !typedInput || !typedText || !lastKey || !channelState) {
+  if (!status || !renderingMode || !lifecycleState || !counterValue || !incrementBtn || !themeBtn || !typedInput || !typedText || !lastKey || !channelState) {
     return;
   }
 
@@ -18,6 +20,25 @@
     lastKey: "",
     lastAction: "init",
     connected: false,
+    lifecycle: "boot",
+  };
+
+  const hasIpc = () => Boolean(window.ipc && typeof window.ipc.postMessage === "function");
+
+  const emitLifecycle = (eventName, extra = {}) => {
+    state.lifecycle = eventName;
+    lifecycleState.textContent = eventName;
+    renderingMode.textContent = hasIpc() ? "native_webview_ipc" : "fallback_preview_only";
+    if (!hasIpc()) {
+      return;
+    }
+    window.ipc.postMessage(JSON.stringify({
+      source: "hermes_interactive",
+      type: "browser_view_lifecycle",
+      event: eventName,
+      rendering_mode: "native_webview_ipc",
+      ...extra,
+    }));
   };
 
   const render = () => {
@@ -28,7 +49,7 @@
   };
 
   const publishState = () => {
-    if (window.ipc && typeof window.ipc.postMessage === "function") {
+    if (hasIpc()) {
       state.connected = true;
     }
     const payload = {
@@ -39,6 +60,9 @@
       last_key: state.lastKey,
       last_action: state.lastAction,
       connected: state.connected,
+      document_loaded: true,
+      dom_ready: true,
+      interactive_ready: true,
     };
     if (state.connected) {
       window.ipc.postMessage(JSON.stringify(payload));
@@ -66,6 +90,7 @@
   };
 
   status.textContent = "Local JavaScript loaded successfully.";
+  emitLifecycle("document_loaded", { document_loaded: true });
 
   incrementBtn.addEventListener("click", (event) => {
     event.preventDefault();
@@ -118,19 +143,31 @@
     const payload = data.payload || {};
     if (action === "key") {
       applyKey(String(payload.key || ""));
+      emitLifecycle("test_input_roundtrip", { action: "key" });
       return;
     }
     if (action === "type") {
       applyType(String(payload.text || ""));
+      emitLifecycle("test_input_roundtrip", { action: "type" });
       return;
     }
     if (action === "click" && String(payload.target || "increment") === "increment") {
       applyClick();
+      emitLifecycle("test_input_roundtrip", { action: "click" });
     }
   };
 
   window.addEventListener("message", handleTestInputMessage);
   document.addEventListener("message", handleTestInputMessage);
 
+  document.addEventListener("DOMContentLoaded", () => {
+    emitLifecycle("dom_ready", { dom_ready: true });
+  });
+  window.addEventListener("load", () => {
+    emitLifecycle("interactive_ready", { interactive_ready: true });
+  });
+
+  emitLifecycle("dom_ready", { dom_ready: true });
+  emitLifecycle("interactive_ready", { interactive_ready: true });
   publishState();
 })();

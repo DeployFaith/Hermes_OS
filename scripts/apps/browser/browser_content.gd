@@ -71,6 +71,21 @@ var _local_document_active := false
 var _last_loaded_document: Dictionary = {}
 var _native_webview_window_visible := true
 var _native_webview_last_rect := Rect2()
+var _native_render_debug: Dictionary = {
+	"webview_present": false,
+	"webview_visible": false,
+	"bounds": {"x": 0.0, "y": 0.0, "w": 0.0, "h": 0.0},
+	"load_start": 0,
+	"load_done": 0,
+	"status_code": 0,
+	"document_loaded": false,
+	"dom_ready": false,
+	"interactive_ready": false,
+	"test_input_roundtrip": false,
+	"fallback_active": false,
+	"rendering_mode": "unknown",
+	"native_limitation": ""
+}
 var _last_browser_input_proof: Dictionary = {
 	"connected": false,
 	"last_action": "",
@@ -461,7 +476,7 @@ func _build_interactive_fallback_panel() -> void:
 	margin.add_child(box)
 
 	var title := Label.new()
-	title.text = "Interactive BrowserView Test"
+	title.text = "Interactive BrowserView Test — Local Diagnostic/Fallback Preview"
 	title.add_theme_font_size_override("font_size", 23)
 	box.add_child(title)
 
@@ -482,6 +497,11 @@ func _build_interactive_fallback_panel() -> void:
 	_interactive_fallback_channel = Label.new()
 	_interactive_fallback_channel.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(_interactive_fallback_channel)
+	_interactive_fallback_panel.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_interactive_fallback_panel.offset_left = -520
+	_interactive_fallback_panel.offset_top = -220
+	_interactive_fallback_panel.offset_right = -12
+	_interactive_fallback_panel.offset_bottom = -12
 
 func _build_diagnostics_panel() -> void:
 	_diagnostics_panel = PanelContainer.new()
@@ -677,7 +697,10 @@ func _configure_webview_layout() -> void:
 
 func _sync_native_webview_window_state(force := false) -> void:
 	if _webview == null or not is_instance_valid(_webview):
+		_native_render_debug["webview_present"] = false
+		_native_render_debug["webview_visible"] = false
 		return
+	_native_render_debug["webview_present"] = true
 	var should_show := _should_show_native_webview()
 	var current_rect := get_global_rect()
 	var rect_changed := current_rect != _native_webview_last_rect
@@ -690,8 +713,15 @@ func _sync_native_webview_window_state(force := false) -> void:
 		if _webview.has_method("update_visibility"):
 			_webview.call("update_visibility")
 		_record_webview_signal("native_visibility", should_show)
+		_native_render_debug["webview_visible"] = should_show
 	if force or rect_changed:
 		_native_webview_last_rect = current_rect
+		_native_render_debug["bounds"] = {
+			"x": current_rect.position.x,
+			"y": current_rect.position.y,
+			"w": current_rect.size.x,
+			"h": current_rect.size.y
+		}
 		if _webview.has_method("resize"):
 			_webview.call("resize")
 
@@ -802,6 +832,7 @@ func _bind_webview_signals() -> void:
 	if _webview.has_signal("ipc_message"):
 		_webview.connect("ipc_message", func(value) -> void:
 			_record_webview_signal("ipc_message", value)
+			_consume_browser_lifecycle_message(value)
 			_consume_browser_ipc_message(value)
 		)
 
@@ -920,13 +951,26 @@ func open_url(input_url: String) -> void:
 	_hide_new_tab_page()
 	_set_active_tab_title(str(document.get("title", "Hermes Internet")))
 	if _webview == null:
+		_native_render_debug["rendering_mode"] = "fallback_only"
+		_native_render_debug["native_limitation"] = "webview unavailable"
 		_apply_document_load_state(document, "webview unavailable")
 		return
 	var html := str(document.get("html", ""))
+	_native_render_debug["load_start"] = Time.get_ticks_msec()
+	_native_render_debug["load_done"] = 0
+	_native_render_debug["document_loaded"] = false
+	_native_render_debug["dom_ready"] = false
+	_native_render_debug["interactive_ready"] = false
+	_native_render_debug["test_input_roundtrip"] = false
+	_native_render_debug["status_code"] = int(document.get("status_code", 0))
+	_native_render_debug["native_limitation"] = ""
+	_native_render_debug["rendering_mode"] = "native_attempt_with_companion_fallback"
 	if _call_first(["load_html"], [html]):
 		_set_tab_load_state(LOAD_LOADING, "")
 		_set_status_text("loading Hermes Internet document")
 	else:
+		_native_render_debug["rendering_mode"] = "fallback_only"
+		_native_render_debug["native_limitation"] = "load_html unavailable in current webview runtime"
 		_apply_document_load_state(document, "load_html unavailable")
 		_set_status_text("Hermes Internet document ready; native load_html unavailable")
 	_update_interactive_fallback_state()
@@ -1133,16 +1177,49 @@ func _consume_browser_ipc_message(raw_value: Variant) -> void:
 	_last_browser_input_proof["last_key"] = str(message.get("last_key", _last_browser_input_proof.get("last_key", "")))
 	_last_browser_input_proof["updated_msec"] = Time.get_ticks_msec()
 	_last_browser_input_proof["source"] = "hermes_interactive"
+	if str(_last_browser_input_proof.get("last_action", "")) in ["click", "type", "key"]:
+		_native_render_debug["test_input_roundtrip"] = true
+	if message.has("document_loaded"):
+		_native_render_debug["document_loaded"] = bool(message.get("document_loaded", false))
+	if message.has("dom_ready"):
+		_native_render_debug["dom_ready"] = bool(message.get("dom_ready", false))
+	if message.has("interactive_ready"):
+		_native_render_debug["interactive_ready"] = bool(message.get("interactive_ready", false))
 	_update_interactive_fallback_state()
 	_sync_interactive_fallback_visibility()
+
+func _consume_browser_lifecycle_message(raw_value: Variant) -> void:
+	var payload: Variant = raw_value
+	if raw_value is String:
+		payload = JSON.parse_string(str(raw_value))
+	if not (payload is Dictionary):
+		return
+	var message: Dictionary = payload
+	if str(message.get("type", "")) != "browser_view_lifecycle":
+		return
+	if str(message.get("source", "")) != "hermes_interactive":
+		return
+	var event_name := str(message.get("event", ""))
+	if event_name != "":
+		_record_webview_signal("lifecycle_" + event_name, message)
+	match event_name:
+		"document_loaded":
+			_native_render_debug["document_loaded"] = true
+		"dom_ready":
+			_native_render_debug["dom_ready"] = true
+		"interactive_ready":
+			_native_render_debug["interactive_ready"] = true
+		"test_input_roundtrip":
+			_native_render_debug["test_input_roundtrip"] = true
+	if message.has("rendering_mode"):
+		_native_render_debug["rendering_mode"] = str(message.get("rendering_mode", _native_render_debug.get("rendering_mode", "unknown")))
 
 func _sync_interactive_fallback_visibility() -> void:
 	if _interactive_fallback_panel == null:
 		return
 	var show := _is_interactive_test_page_active() and _content_host != null and _content_host.visible and (_new_tab_page == null or not _new_tab_page.visible)
 	_interactive_fallback_panel.visible = show
-	if _webview and _webview is CanvasItem:
-		(_webview as CanvasItem).visible = not show
+	_native_render_debug["fallback_active"] = show
 
 func _update_interactive_fallback_state() -> void:
 	if _interactive_fallback_status == null:
@@ -1153,7 +1230,7 @@ func _update_interactive_fallback_state() -> void:
 	var last_key := str(_last_browser_input_proof.get("last_key", ""))
 	var source := str(_last_browser_input_proof.get("source", ""))
 	var channel_state := "connected" if connected else "not confirmed"
-	_interactive_fallback_status.text = "Deterministic fallback preview for http://home.hermes/interactive. Native WRY/WebKit rendering may appear blank/black in this runtime."
+	_interactive_fallback_status.text = "Local diagnostic/fallback preview for http://home.hermes/interactive (companion panel). Native WRY/WebKit rendering may still appear blank/black in this runtime."
 	_interactive_fallback_clicks.text = "click count: %d" % clicks
 	_interactive_fallback_typed.text = "typed text: %s" % (typed if typed != "" else "(empty)")
 	_interactive_fallback_last_key.text = "last key: %s" % (last_key if last_key != "" else "(none)")
@@ -1526,6 +1603,9 @@ func _apply_document_load_state(document: Dictionary, suffix: String = "") -> vo
 			_set_status_text("Real Internet mode is not enabled")
 		_:
 			_set_status_text(reason)
+	_native_render_debug["status_code"] = status_code
+	_native_render_debug["load_done"] = Time.get_ticks_msec()
+	_native_render_debug["document_loaded"] = status_code < 400
 
 func _html_escape(value: String) -> String:
 	return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
@@ -2015,10 +2095,11 @@ func debug_get_state() -> Dictionary:
 		"browser_visible_fallback": {
 			"enabled": _is_interactive_test_page_active(),
 			"visible": _interactive_fallback_panel != null and _interactive_fallback_panel.visible,
-			"title": "Interactive BrowserView Test",
-			"note": "Deterministic local fallback preview for /interactive due native WebView blank/black runtime limitation"
+			"title": "Interactive BrowserView Test — Local Diagnostic/Fallback Preview",
+			"note": "Companion diagnostic/fallback preview for /interactive; native view still attempted"
 		},
-		"browser_input_proof": _last_browser_input_proof.duplicate(true)
+		"browser_input_proof": _last_browser_input_proof.duplicate(true),
+		"browser_native_proof": _native_render_debug.duplicate(true)
 	}
 
 func debug_apply_settings(values: Dictionary) -> void:
