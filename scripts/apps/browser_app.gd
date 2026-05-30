@@ -88,6 +88,15 @@ func agent_browser_list_links(args: Dictionary = {}) -> Dictionary:
 func agent_browser_activate_link(args: Dictionary = {}) -> Dictionary:
 	return _call_surface_agent_method("agent_activate_link", args, "browser.activate_link")
 
+func agent_browser_test_press_key(args: Dictionary = {}) -> Dictionary:
+	return _call_surface_agent_method("agent_browser_test_press_key", args, "browser.test_press_key")
+
+func agent_browser_test_type_text(args: Dictionary = {}) -> Dictionary:
+	return _call_surface_agent_method("agent_browser_test_type_text", args, "browser.test_type_text")
+
+func agent_browser_test_click(args: Dictionary = {}) -> Dictionary:
+	return _call_surface_agent_method("agent_browser_test_click", args, "browser.test_click")
+
 func _call_surface_agent_method(method_name: String, args: Dictionary, operation: String) -> Dictionary:
 	var surface = get_browser_surface()
 	if surface == null or not surface.has_method(method_name):

@@ -24,6 +24,7 @@ func capability_registry_init() -> void:
 	_register_operation("browser.reload", "browser.navigate", "low", true, "Reload the current Browser page", false)
 	_register_operation("browser.list_links", "browser.read", "low", false, "List links on the current Browser page", false)
 	_register_operation("browser.activate_link", "browser.navigate", "medium", true, "Activate a declared link on the current Browser page", false)
+	_register_operation("browser.test_click", "browser.input", "low", true, "Send deterministic click target=increment to the bundled /interactive Browser test page", false)
 	_register_operation("input.press_key", "input.keyboard", "medium", true, "Press a key into focused Hermes_OS window", false)
 	_register_operation("input.type_text", "input.keyboard", "medium", true, "Type text into focused Hermes_OS window", false)
 	_register_operation("input.scroll", "input.pointer", "low", true, "Scroll within focused Hermes_OS window", false)

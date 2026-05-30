@@ -911,8 +911,29 @@ func _cmd_os_press_key(params: Dictionary) -> void:
 		_send_response(_os_input_error("os_press_key", "UNSUPPORTED_KEY", "Unsupported key: %s" % key_name))
 		return
 	var focused_window: Node = target.get("window", null) as Node
+	if focused_window != null and str(focused_window.get("app_id")) != "browser" and str(params.get("target_ref", "")).strip_edges() == "":
+		var browser_window := _find_interactive_browser_window(shell)
+		if browser_window != null:
+			focused_window = browser_window
+			if shell != null and shell.has_method("_focus_window"):
+				shell.call("_focus_window", focused_window)
 	if focused_window == null:
 		_send_response(_os_input_error("os_press_key", "FOCUS_REQUIRED", "No focused Hermes_OS window"))
+		return
+	if str(focused_window.get("app_id")) == "browser":
+		var browser_result := _forward_browser_test_input(focused_window, "press_key", {"key": key_name})
+		if bool(browser_result.get("success", false)):
+			_send_response(_os_input_success("os_press_key", {
+				"key": key_name,
+				"window_id": _window_id_for_shell(shell, focused_window),
+				"browser": browser_result
+			}))
+		else:
+			_send_response(_os_input_error("os_press_key", str(browser_result.get("code", "BROWSER_INPUT_FAILED")), str(browser_result.get("error", "browser input failed")), {
+				"key": key_name,
+				"window_id": _window_id_for_shell(shell, focused_window),
+				"browser": browser_result
+			}))
 		return
 	var press_event := InputEventKey.new()
 	press_event.keycode = keycode as Key
@@ -942,8 +963,29 @@ func _cmd_os_type_text(params: Dictionary) -> void:
 		_send_response(target)
 		return
 	var focused_window: Node = target.get("window", null) as Node
+	if focused_window != null and str(focused_window.get("app_id")) != "browser" and str(params.get("target_ref", "")).strip_edges() == "":
+		var browser_window := _find_interactive_browser_window(shell)
+		if browser_window != null:
+			focused_window = browser_window
+			if shell != null and shell.has_method("_focus_window"):
+				shell.call("_focus_window", focused_window)
 	if focused_window == null:
 		_send_response(_os_input_error("os_type_text", "FOCUS_REQUIRED", "No focused Hermes_OS window"))
+		return
+	if str(focused_window.get("app_id")) == "browser":
+		var browser_result := _forward_browser_test_input(focused_window, "type_text", {"text": text})
+		if bool(browser_result.get("success", false)):
+			_send_response(_os_input_success("os_type_text", {
+				"chars": text.length(),
+				"window_id": _window_id_for_shell(shell, focused_window),
+				"browser": browser_result
+			}))
+		else:
+			_send_response(_os_input_error("os_type_text", str(browser_result.get("code", "BROWSER_INPUT_FAILED")), str(browser_result.get("error", "browser input failed")), {
+				"chars": text.length(),
+				"window_id": _window_id_for_shell(shell, focused_window),
+				"browser": browser_result
+			}))
 		return
 	for i in text.length():
 		var ch := text.unicode_at(i)
@@ -1597,6 +1639,54 @@ func _resolve_input_target_window(shell: Node, params: Dictionary) -> Dictionary
 	return {"ok": true, "window": focused_window}
 
 
+func _forward_browser_test_input(window: Node, action: String, args: Dictionary) -> Dictionary:
+	var app_root := _window_app_root(window)
+	if app_root == null:
+		return {
+			"success": false,
+			"code": "BROWSER_APP_UNAVAILABLE",
+			"error": "Browser app root not found for focused browser window"
+		}
+	match action:
+		"press_key":
+			if app_root.has_method("agent_browser_test_press_key"):
+				var result: Variant = app_root.call("agent_browser_test_press_key", args)
+				if result is Dictionary:
+					return (result as Dictionary).duplicate(true)
+		"type_text":
+			if app_root.has_method("agent_browser_test_type_text"):
+				var result: Variant = app_root.call("agent_browser_test_type_text", args)
+				if result is Dictionary:
+					return (result as Dictionary).duplicate(true)
+		"click":
+			if app_root.has_method("agent_browser_test_click"):
+				var result: Variant = app_root.call("agent_browser_test_click", args)
+				if result is Dictionary:
+					return (result as Dictionary).duplicate(true)
+	return {
+		"success": false,
+		"code": "BROWSER_INPUT_UNSUPPORTED",
+		"error": "Browser app does not support bounded browser test-channel input for action: %s" % action
+	}
+
+
+func _window_app_root(window: Node) -> Node:
+	if window == null:
+		return null
+	var body_host := window.get_node_or_null("Frame/Body")
+	if body_host == null:
+		return null
+	if body_host.get_child_count() < 1:
+		return null
+	var body_panel := body_host.get_child(0)
+	if body_panel == null or body_panel.get_child_count() < 1:
+		return null
+	var app_root := body_panel.get_child(0)
+	if app_root is Node and is_instance_valid(app_root):
+		return app_root as Node
+	return null
+
+
 func _find_focused_window(shell: Node) -> Node:
 	if shell == null:
 		return null
@@ -1607,6 +1697,32 @@ func _find_focused_window(shell: Node) -> Node:
 	var focused_id: String = str(focused_summary.get("id", ""))
 	if focused_id != "":
 		return _find_window_from_shell(shell, focused_id)
+	return null
+
+
+func _find_interactive_browser_window(shell: Node) -> Node:
+	if shell == null or not shell.has_method("hermes_get_state"):
+		return null
+	var state_value: Variant = shell.call("hermes_get_state", {
+		"include_apps": false,
+		"include_windows": true,
+		"include_filesystem": false
+	})
+	if not (state_value is Dictionary):
+		return null
+	var windows: Array = (state_value as Dictionary).get("windows", []) if (state_value as Dictionary).get("windows", []) is Array else []
+	for window_value in windows:
+		if not (window_value is Dictionary):
+			continue
+		var window_info: Dictionary = window_value as Dictionary
+		if str(window_info.get("app_id", "")) != "browser":
+			continue
+		var window_id: String = str(window_info.get("id", ""))
+		if window_id == "":
+			continue
+		var window: Node = _find_window_from_shell(shell, window_id)
+		if window != null:
+			return window
 	return null
 
 

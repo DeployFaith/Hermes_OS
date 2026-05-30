@@ -10,8 +10,8 @@
   <main class="shell">
     <section class="hero">
       <div class="eyebrow">Hermes Internet</div>
-      <h1>Interactive JS Demo</h1>
-      <p class="subtitle">A local JavaScript page running entirely from bundled files.</p>
+      <h1>Interactive BrowserView Test</h1>
+      <p class="subtitle">Deterministic local page with visible click/type/key proof and BrowserView test-channel status.</p>
       <div class="actions">
         <a href="/">Home</a>
         <a href="/games">Games</a>
@@ -21,11 +21,16 @@
     <section class="card js-demo">
       <h2>Status panel</h2>
       <p id="demo-status">Waiting for script…</p>
+      <p>Test channel: <strong id="channel-state">disconnected</strong></p>
       <div class="actions">
         <a href="#" id="increment-btn">Increment counter</a>
         <a href="#" id="theme-btn">Toggle accent glow</a>
       </div>
-      <p>Counter: <strong id="counter-value">0</strong></p>
+      <p>Click count: <strong id="counter-value">0</strong></p>
+      <p>Typed text: <strong id="typed-text">(none)</strong></p>
+      <p>Last key: <strong id="last-key">(none)</strong></p>
+      <label for="typed-input">Type here:</label>
+      <input id="typed-input" type="text" autocomplete="off" spellcheck="false" />
     </section>
   </main>
   <script src="../scripts/interactive_demo.js"></script>

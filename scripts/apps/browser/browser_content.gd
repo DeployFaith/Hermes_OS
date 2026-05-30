@@ -40,6 +40,12 @@ var _tab_context_menu: PopupMenu
 var _settings_menu: PopupMenu
 var _session_save_timer: Timer
 var _content_host: PanelContainer
+var _interactive_fallback_panel: PanelContainer
+var _interactive_fallback_status: Label
+var _interactive_fallback_clicks: Label
+var _interactive_fallback_typed: Label
+var _interactive_fallback_last_key: Label
+var _interactive_fallback_channel: Label
 var _new_tab_page: PanelContainer
 var _settings_panel: PanelContainer
 var _settings_home_input: LineEdit
@@ -65,6 +71,15 @@ var _local_document_active := false
 var _last_loaded_document: Dictionary = {}
 var _native_webview_window_visible := true
 var _native_webview_last_rect := Rect2()
+var _last_browser_input_proof: Dictionary = {
+	"connected": false,
+	"last_action": "",
+	"click_count": 0,
+	"typed_text": "",
+	"last_key": "",
+	"updated_msec": 0,
+	"source": ""
+}
 
 var _tabs: Array[Dictionary] = []
 var _closed_tabs: Array[Dictionary] = []
@@ -162,12 +177,13 @@ func _begin_native_teardown() -> void:
 	if _webview.has_method("load_html"):
 		_webview.call("load_html", "")
 	_call_first(["load_url", "navigate", "load_uri", "set_url"], ["about:blank"])
-	if _webview.has_method("destroy_webview"):
-		_webview.call("destroy_webview")
-		if _webview.has_method("is_destroyed") and bool(_webview.call("is_destroyed")):
+	var webview_node: Node = _webview
+	if webview_node.has_method("destroy_webview"):
+		webview_node.call("destroy_webview")
+		if _webview != null and is_instance_valid(_webview) and _webview.has_method("is_destroyed") and bool(_webview.call("is_destroyed")):
 			_on_native_teardown_completed()
-	elif _webview.has_method("close"):
-		_webview.call("close")
+	elif webview_node.has_method("close"):
+		webview_node.call("close")
 		_on_native_teardown_completed()
 	else:
 		_on_native_teardown_completed()
@@ -418,9 +434,54 @@ func _build_surface() -> void:
 		_content_host.add_child(_webview)
 		_bind_webview_signals()
 		_set_status_text("ready")
+	_build_interactive_fallback_panel()
 	_build_new_tab_page()
 	_build_diagnostics_panel()
 	_build_settings_panel()
+	_update_interactive_fallback_state()
+	_sync_interactive_fallback_visibility()
+
+func _build_interactive_fallback_panel() -> void:
+	_interactive_fallback_panel = PanelContainer.new()
+	_interactive_fallback_panel.name = "InteractiveFallbackPanel"
+	_interactive_fallback_panel.visible = false
+	_interactive_fallback_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_interactive_fallback_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_content_host.add_child(_interactive_fallback_panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 20)
+	margin.add_theme_constant_override("margin_top", 18)
+	margin.add_theme_constant_override("margin_right", 20)
+	margin.add_theme_constant_override("margin_bottom", 18)
+	_interactive_fallback_panel.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	margin.add_child(box)
+
+	var title := Label.new()
+	title.text = "Interactive BrowserView Test"
+	title.add_theme_font_size_override("font_size", 23)
+	box.add_child(title)
+
+	_interactive_fallback_status = Label.new()
+	_interactive_fallback_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(_interactive_fallback_status)
+
+	_interactive_fallback_clicks = Label.new()
+	box.add_child(_interactive_fallback_clicks)
+
+	_interactive_fallback_typed = Label.new()
+	_interactive_fallback_typed.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(_interactive_fallback_typed)
+
+	_interactive_fallback_last_key = Label.new()
+	box.add_child(_interactive_fallback_last_key)
+
+	_interactive_fallback_channel = Label.new()
+	_interactive_fallback_channel.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(_interactive_fallback_channel)
 
 func _build_diagnostics_panel() -> void:
 	_diagnostics_panel = PanelContainer.new()
@@ -738,6 +799,11 @@ func _bind_webview_signals() -> void:
 			_record_webview_signal("teardown_completed", "signal")
 			_on_native_teardown_completed()
 		)
+	if _webview.has_signal("ipc_message"):
+		_webview.connect("ipc_message", func(value) -> void:
+			_record_webview_signal("ipc_message", value)
+			_consume_browser_ipc_message(value)
+		)
 
 func _new_tab(url: String, activate := true) -> void:
 	var normalized := _migrate_legacy_browser_url(url)
@@ -863,6 +929,8 @@ func open_url(input_url: String) -> void:
 	else:
 		_apply_document_load_state(document, "load_html unavailable")
 		_set_status_text("Hermes Internet document ready; native load_html unavailable")
+	_update_interactive_fallback_state()
+	_sync_interactive_fallback_visibility()
 
 func _show_new_tab_page() -> void:
 	if _new_tab_page == null or _content_host == null:
@@ -871,6 +939,7 @@ func _show_new_tab_page() -> void:
 		if child is CanvasItem:
 			(child as CanvasItem).visible = child == _new_tab_page
 	_new_tab_page.visible = true
+	_sync_interactive_fallback_visibility()
 	_set_status_text("new tab")
 
 func _hide_new_tab_page() -> void:
@@ -880,6 +949,7 @@ func _hide_new_tab_page() -> void:
 		if child is CanvasItem:
 			(child as CanvasItem).visible = child != _new_tab_page
 	_new_tab_page.visible = false
+	_sync_interactive_fallback_visibility()
 
 func search(query: String) -> void:
 	var q := query.strip_edges()
@@ -970,7 +1040,124 @@ func agent_get_state(_args: Dictionary = {}) -> Dictionary:
 	state["can_go_back"] = can_go_back()
 	state["can_go_forward"] = can_go_forward()
 	state["links"] = agent_list_links({}).get("links", [])
+	state["browser_input_proof"] = _last_browser_input_proof.duplicate(true)
 	return state
+
+func agent_browser_test_press_key(args: Dictionary = {}) -> Dictionary:
+	var key_name := str(args.get("key", "")).strip_edges()
+	if key_name == "":
+		return _agent_error("browser.test_press_key", "MISSING_KEY", "browser.test_press_key requires key")
+	return _send_browser_test_input("key", {"key": key_name}, "browser.test_press_key")
+
+func agent_browser_test_type_text(args: Dictionary = {}) -> Dictionary:
+	if not args.has("text"):
+		return _agent_error("browser.test_type_text", "MISSING_TEXT", "browser.test_type_text requires text")
+	var text := str(args.get("text", ""))
+	return _send_browser_test_input("type", {"text": text}, "browser.test_type_text")
+
+func agent_browser_test_click(args: Dictionary = {}) -> Dictionary:
+	var target := str(args.get("target", "increment")).strip_edges().to_lower()
+	if target == "":
+		target = "increment"
+	if target != "increment":
+		return _agent_error("browser.test_click", "UNSUPPORTED_TARGET", "browser.test_click supports only target=increment")
+	return _send_browser_test_input("click", {"target": target}, "browser.test_click")
+
+func _send_browser_test_input(action: String, payload: Dictionary, operation: String) -> Dictionary:
+	if not _is_interactive_test_page_active():
+		return _agent_error(operation, "PAGE_NOT_READY", "Browser test input requires http://home.hermes/interactive", {"url": get_current_url()})
+	if _webview == null or not is_instance_valid(_webview) or not _webview.has_method("post_message"):
+		return {
+			"success": false,
+			"operation": operation,
+			"code": "BROWSER_TEST_CHANNEL_UNAVAILABLE",
+			"error": "Native BrowserView does not expose bounded post_message test channel",
+			"limitation": {
+				"native_input_supported": false,
+				"reason": "WRY/Godot input events do not reliably reach native WebKit in this runtime",
+				"workaround": "BrowserView test-channel input unavailable (post_message missing)"
+			}
+		}
+	var message := {
+		"source": "hermes_os",
+		"type": "browser_test_input",
+		"action": action,
+		"payload": payload
+	}
+	_webview.call("post_message", JSON.stringify(message))
+	_last_browser_input_proof["last_action"] = action
+	_last_browser_input_proof["source"] = "browser_test_channel"
+	_last_browser_input_proof["updated_msec"] = Time.get_ticks_msec()
+	if action == "click":
+		_last_browser_input_proof["click_count"] = int(_last_browser_input_proof.get("click_count", 0)) + 1
+	elif action == "type":
+		_last_browser_input_proof["typed_text"] = str(_last_browser_input_proof.get("typed_text", "")) + str(payload.get("text", ""))
+	elif action == "key":
+		_last_browser_input_proof["last_key"] = str(payload.get("key", ""))
+	_update_interactive_fallback_state()
+	_sync_interactive_fallback_visibility()
+	return {
+		"success": true,
+		"operation": operation,
+		"input_channel": "browser_test_channel",
+		"native_input": false,
+		"limitation": {
+			"native_input_supported": false,
+			"reason": "uses bounded BrowserView post_message test channel; not host/native OS input"
+		},
+		"proof": _last_browser_input_proof.duplicate(true)
+	}
+
+func _is_interactive_test_page_active() -> bool:
+	var current := _resolver.normalize_user_url(get_current_url())
+	if current.begins_with("http://home.hermes/interactive"):
+		return true
+	var backend := _resolver.resolve_to_backend(current)
+	return backend.find("/interactive") >= 0
+
+func _consume_browser_ipc_message(raw_value: Variant) -> void:
+	var payload: Variant = raw_value
+	if raw_value is String:
+		payload = JSON.parse_string(str(raw_value))
+	if not (payload is Dictionary):
+		return
+	var message: Dictionary = payload
+	if str(message.get("type", "")) != "browser_test_state":
+		return
+	if str(message.get("source", "")) != "hermes_interactive":
+		return
+	_last_browser_input_proof["connected"] = true
+	_last_browser_input_proof["last_action"] = str(message.get("last_action", _last_browser_input_proof.get("last_action", "")))
+	_last_browser_input_proof["click_count"] = int(message.get("click_count", _last_browser_input_proof.get("click_count", 0)))
+	_last_browser_input_proof["typed_text"] = str(message.get("typed_text", _last_browser_input_proof.get("typed_text", "")))
+	_last_browser_input_proof["last_key"] = str(message.get("last_key", _last_browser_input_proof.get("last_key", "")))
+	_last_browser_input_proof["updated_msec"] = Time.get_ticks_msec()
+	_last_browser_input_proof["source"] = "hermes_interactive"
+	_update_interactive_fallback_state()
+	_sync_interactive_fallback_visibility()
+
+func _sync_interactive_fallback_visibility() -> void:
+	if _interactive_fallback_panel == null:
+		return
+	var show := _is_interactive_test_page_active() and _content_host != null and _content_host.visible and (_new_tab_page == null or not _new_tab_page.visible)
+	_interactive_fallback_panel.visible = show
+	if _webview and _webview is CanvasItem:
+		(_webview as CanvasItem).visible = not show
+
+func _update_interactive_fallback_state() -> void:
+	if _interactive_fallback_status == null:
+		return
+	var connected := bool(_last_browser_input_proof.get("connected", false))
+	var clicks := int(_last_browser_input_proof.get("click_count", 0))
+	var typed := str(_last_browser_input_proof.get("typed_text", ""))
+	var last_key := str(_last_browser_input_proof.get("last_key", ""))
+	var source := str(_last_browser_input_proof.get("source", ""))
+	var channel_state := "connected" if connected else "not confirmed"
+	_interactive_fallback_status.text = "Deterministic fallback preview for http://home.hermes/interactive. Native WRY/WebKit rendering may appear blank/black in this runtime."
+	_interactive_fallback_clicks.text = "click count: %d" % clicks
+	_interactive_fallback_typed.text = "typed text: %s" % (typed if typed != "" else "(empty)")
+	_interactive_fallback_last_key.text = "last key: %s" % (last_key if last_key != "" else "(none)")
+	_interactive_fallback_channel.text = "test channel: %s (source: %s)" % [channel_state, source if source != "" else "none"]
 
 func agent_navigate(args: Dictionary = {}) -> Dictionary:
 	var target := _agent_navigation_target(args)
@@ -1824,7 +2011,14 @@ func debug_get_state() -> Dictionary:
 			"search_template": _search_template,
 			"confirm_close_tabs": _confirm_close_tabs,
 			"max_closed_tabs": _max_closed_tabs
-		}
+		},
+		"browser_visible_fallback": {
+			"enabled": _is_interactive_test_page_active(),
+			"visible": _interactive_fallback_panel != null and _interactive_fallback_panel.visible,
+			"title": "Interactive BrowserView Test",
+			"note": "Deterministic local fallback preview for /interactive due native WebView blank/black runtime limitation"
+		},
+		"browser_input_proof": _last_browser_input_proof.duplicate(true)
 	}
 
 func debug_apply_settings(values: Dictionary) -> void:
