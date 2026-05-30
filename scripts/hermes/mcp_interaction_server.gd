@@ -331,6 +331,18 @@ func _handle_command(json_str: String) -> void:
 			_cmd_os_get_ui_tree(params)
 		"ui_click":
 			_cmd_ui_click(params)
+		"os_press_key":
+			await _cmd_os_press_key(params)
+		"os_type_text":
+			await _cmd_os_type_text(params)
+		"os_scroll":
+			_cmd_os_scroll(params)
+		"os_drag":
+			_cmd_os_drag(params)
+		"os_wait":
+			await _cmd_os_wait(params)
+		"os_focus_window":
+			_cmd_os_focus_window(params)
 		"os_list_files":
 			_cmd_os_list_files(params)
 		"os_read_file":
@@ -884,6 +896,160 @@ func _cmd_ui_click(params: Dictionary) -> void:
 	_send_response(sanitized if sanitized is Dictionary else response)
 
 
+func _cmd_os_press_key(params: Dictionary) -> void:
+	var key_name: String = str(params.get("key", "")).strip_edges()
+	if key_name == "":
+		_send_response(_os_input_error("os_press_key", "MISSING_KEY", "os_press_key requires key"))
+		return
+	var shell: Node = _find_hermes_shell()
+	var target := _resolve_input_target_window(shell, params)
+	if not bool(target.get("ok", false)):
+		_send_response(target)
+		return
+	var keycode: int = _string_to_keycode(_normalize_key_name(key_name))
+	if keycode == KEY_NONE:
+		_send_response(_os_input_error("os_press_key", "UNSUPPORTED_KEY", "Unsupported key: %s" % key_name))
+		return
+	var focused_window: Node = target.get("window", null) as Node
+	if focused_window == null:
+		_send_response(_os_input_error("os_press_key", "FOCUS_REQUIRED", "No focused Hermes_OS window"))
+		return
+	var press_event := InputEventKey.new()
+	press_event.keycode = keycode as Key
+	press_event.physical_keycode = keycode as Key
+	press_event.pressed = true
+	Input.parse_input_event(press_event)
+	await get_tree().process_frame
+	var release_event := InputEventKey.new()
+	release_event.keycode = keycode as Key
+	release_event.physical_keycode = keycode as Key
+	release_event.pressed = false
+	Input.parse_input_event(release_event)
+	_send_response(_os_input_success("os_press_key", {"key": key_name, "window_id": _window_id_for_shell(shell, focused_window)}))
+
+
+func _cmd_os_type_text(params: Dictionary) -> void:
+	if not params.has("text"):
+		_send_response(_os_input_error("os_type_text", "MISSING_TEXT", "os_type_text requires text"))
+		return
+	var text: String = str(params.get("text", ""))
+	if text.length() > 500:
+		_send_response(_os_input_error("os_type_text", "TEXT_TOO_LONG", "text exceeds 500 char limit"))
+		return
+	var shell: Node = _find_hermes_shell()
+	var target := _resolve_input_target_window(shell, params)
+	if not bool(target.get("ok", false)):
+		_send_response(target)
+		return
+	var focused_window: Node = target.get("window", null) as Node
+	if focused_window == null:
+		_send_response(_os_input_error("os_type_text", "FOCUS_REQUIRED", "No focused Hermes_OS window"))
+		return
+	for i in text.length():
+		var ch := text.unicode_at(i)
+		var press_event := InputEventKey.new()
+		press_event.pressed = true
+		press_event.unicode = ch
+		press_event.keycode = ch as Key
+		press_event.physical_keycode = ch as Key
+		Input.parse_input_event(press_event)
+		var release_event := InputEventKey.new()
+		release_event.pressed = false
+		release_event.unicode = ch
+		release_event.keycode = ch as Key
+		release_event.physical_keycode = ch as Key
+		Input.parse_input_event(release_event)
+	await get_tree().process_frame
+	_send_response(_os_input_success("os_type_text", {"chars": text.length(), "window_id": _window_id_for_shell(shell, focused_window)}))
+
+
+func _cmd_os_scroll(params: Dictionary) -> void:
+	var shell: Node = _find_hermes_shell()
+	var target := _resolve_input_target_window(shell, params)
+	if not bool(target.get("ok", false)):
+		_send_response(target)
+		return
+	var direction: String = str(params.get("direction", "down")).to_lower().strip_edges()
+	var amount: int = clampi(int(params.get("amount", 1)), 1, 12)
+	var button_index: int = MOUSE_BUTTON_WHEEL_DOWN
+	match direction:
+		"up":
+			button_index = MOUSE_BUTTON_WHEEL_UP
+		"left":
+			button_index = MOUSE_BUTTON_WHEEL_LEFT
+		"right":
+			button_index = MOUSE_BUTTON_WHEEL_RIGHT
+		"down":
+			button_index = MOUSE_BUTTON_WHEEL_DOWN
+		_:
+			_send_response(_os_input_error("os_scroll", "INVALID_DIRECTION", "direction must be up/down/left/right"))
+			return
+	for i in amount:
+		var press_event := InputEventMouseButton.new()
+		press_event.button_index = button_index as MouseButton
+		press_event.pressed = true
+		press_event.factor = 1.0
+		Input.parse_input_event(press_event)
+		var release_event := InputEventMouseButton.new()
+		release_event.button_index = button_index as MouseButton
+		release_event.pressed = false
+		Input.parse_input_event(release_event)
+	var focused_window: Node = target.get("window", null) as Node
+	_send_response(_os_input_success("os_scroll", {"direction": direction, "amount": amount, "window_id": _window_id_for_shell(shell, focused_window)}))
+
+
+func _cmd_os_drag(params: Dictionary) -> void:
+	var shell: Node = _find_hermes_shell()
+	if shell == null:
+		_send_response(_os_input_error("os_drag", "SHELL_UNAVAILABLE", "Hermes shell not found"))
+		return
+	var window_id: String = str(params.get("window_id", "")).strip_edges()
+	var window: Node = null
+	if window_id != "":
+		window = _find_window_from_shell(shell, window_id)
+	else:
+		var target := _resolve_input_target_window(shell, params)
+		if bool(target.get("ok", false)):
+			window = target.get("window", null) as Node
+	if window == null:
+		_send_response(_os_input_error("os_drag", "WINDOW_NOT_FOUND", "No target window for drag"))
+		return
+	var dx: float = clampf(float(params.get("delta_x", params.get("dx", 0.0))), -600.0, 600.0)
+	var dy: float = clampf(float(params.get("delta_y", params.get("dy", 0.0))), -600.0, 600.0)
+	var target_pos: Vector2 = window.position + Vector2(dx, dy)
+	var viewport_rect: Rect2 = get_viewport().get_visible_rect()
+	var max_x: float = maxf(0.0, viewport_rect.size.x - window.size.x)
+	var max_y: float = maxf(0.0, viewport_rect.size.y - window.size.y)
+	target_pos.x = clampf(target_pos.x, 0.0, max_x)
+	target_pos.y = clampf(target_pos.y, 0.0, max_y)
+	window.position = target_pos
+	_send_response(_os_input_success("os_drag", {"window_id": _window_id_for_shell(shell, window), "position": {"x": target_pos.x, "y": target_pos.y}}))
+
+
+func _cmd_os_wait(params: Dictionary) -> void:
+	var frames: int = clampi(int(params.get("frames", 0)), 0, 240)
+	var ms: int = clampi(int(params.get("ms", 0)), 0, 4000)
+	if frames <= 0 and ms <= 0:
+		frames = 1
+	for i in frames:
+		await get_tree().process_frame
+	if ms > 0:
+		await get_tree().create_timer(float(ms) / 1000.0).timeout
+	_send_response(_os_input_success("os_wait", {"frames": frames, "ms": ms}))
+
+
+func _cmd_os_focus_window(params: Dictionary) -> void:
+	var operation_args: Dictionary = {}
+	if str(params.get("window_id", "")).strip_edges() != "":
+		operation_args["window_id"] = str(params.get("window_id", "")).strip_edges()
+	if str(params.get("app_id", "")).strip_edges() != "":
+		operation_args["app_id"] = str(params.get("app_id", "")).strip_edges()
+	if operation_args.is_empty():
+		_send_response(_os_input_error("os_focus_window", "MISSING_TARGET", "os_focus_window requires window_id or app_id"))
+		return
+	_send_os_operation_response("windows.focus", operation_args)
+
+
 func _cmd_os_list_files(params: Dictionary) -> void:
 	_send_os_file_operation_response("files.list_dir", params)
 
@@ -1408,6 +1574,75 @@ func _is_window_focused(shell: Node, window: Node) -> bool:
 	if active_value != null and active_value is Node and active_value == window:
 		return true
 	return false
+
+
+func _resolve_input_target_window(shell: Node, params: Dictionary) -> Dictionary:
+	if shell == null:
+		return _os_input_error("os_input", "SHELL_UNAVAILABLE", "Hermes shell not found")
+	var target_ref: String = str(params.get("target_ref", "")).strip_edges()
+	if target_ref != "":
+		var separator: int = target_ref.find(":")
+		if separator <= 0:
+			return _os_input_error("os_input", "INVALID_TARGET_REF", "target_ref must be a window-scoped ref")
+		var target_window_id: String = target_ref.substr(0, separator)
+		var target_window: Node = _find_window_from_shell(shell, target_window_id)
+		if target_window == null:
+			return _os_input_error("os_input", "TARGET_WINDOW_NOT_FOUND", "target_ref window not found")
+		if shell.has_method("_focus_window"):
+			shell.call("_focus_window", target_window)
+		return {"ok": true, "window": target_window}
+	var focused_window := _find_focused_window(shell)
+	if focused_window == null:
+		return _os_input_error("os_input", "FOCUS_REQUIRED", "No focused Hermes_OS window")
+	return {"ok": true, "window": focused_window}
+
+
+func _find_focused_window(shell: Node) -> Node:
+	if shell == null:
+		return null
+	var active_value: Variant = shell.get("_active_window")
+	if active_value is Node and active_value != null and is_instance_valid(active_value):
+		return active_value as Node
+	var focused_summary: Dictionary = _focused_window_summary(shell)
+	var focused_id: String = str(focused_summary.get("id", ""))
+	if focused_id != "":
+		return _find_window_from_shell(shell, focused_id)
+	return null
+
+
+func _normalize_key_name(value: String) -> String:
+	var clean := value.strip_edges()
+	match clean.to_lower():
+		"arrowup":
+			return "UP"
+		"arrowdown":
+			return "DOWN"
+		"arrowleft":
+			return "LEFT"
+		"arrowright":
+			return "RIGHT"
+		_:
+			return clean
+
+
+func _os_input_success(operation: String, details: Dictionary = {}) -> Dictionary:
+	return {
+		"success": true,
+		"operation": operation,
+		"result": details,
+		"error": {},
+		"observe": _build_os_observe_payload({})
+	}
+
+
+func _os_input_error(operation: String, code: String, message: String, details: Dictionary = {}) -> Dictionary:
+	return {
+		"success": false,
+		"operation": operation,
+		"result": details,
+		"error": {"code": code, "message": message},
+		"observe": _build_os_observe_payload({})
+	}
 
 
 func _unsupported_click(ref: String, message: String) -> Dictionary:
