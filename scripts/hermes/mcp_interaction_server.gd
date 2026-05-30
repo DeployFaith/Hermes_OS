@@ -339,6 +339,12 @@ func _handle_command(json_str: String) -> void:
 			_cmd_os_write_file(params)
 		"os_create_folder":
 			_cmd_os_create_folder(params)
+		"os_list_apps":
+			_cmd_os_list_apps(params)
+		"os_open_app":
+			_cmd_os_open_app(params)
+		"os_execute_operation":
+			_cmd_os_execute_operation(params)
 		_:
 			_send_response({"error": "Unknown command: %s" % command})
 
@@ -891,13 +897,69 @@ func _cmd_os_write_file(params: Dictionary) -> void:
 
 
 func _cmd_os_create_folder(params: Dictionary) -> void:
-	_send_os_file_operation_response("files.create_folder", params)
+	_send_os_operation_response("files.create_folder", params)
 
 
 func _send_os_file_operation_response(operation: String, params: Dictionary) -> void:
+	_send_os_operation_response(operation, params)
+
+
+func _cmd_os_list_apps(params: Dictionary) -> void:
+	var operation_response: Dictionary = _build_os_operation_response("system.get_state", {"include_apps": true, "include_windows": false, "include_filesystem": false}, false)
+	if not bool(operation_response.get("success", false)):
+		_send_response(operation_response)
+		return
+	var apps: Array = _build_os_observe_payload(params).get("app_summary", {}).get("items", [])
+	var response: Dictionary = {
+		"success": true,
+		"operation": "system.get_state",
+		"result": {"apps": apps},
+		"error": {},
+		"observe": _build_os_observe_payload({})
+	}
+	var sanitized: Variant = _variant_to_json(response)
+	_send_response(sanitized if sanitized is Dictionary else response)
+
+
+func _cmd_os_open_app(params: Dictionary) -> void:
+	var app_id: String = str(params.get("app_id", "")).strip_edges()
+	if app_id == "":
+		_send_response({
+			"success": false,
+			"operation": "windows.open_app",
+			"result": {},
+			"error": {"code": "MISSING_ARG", "message": "os_open_app requires app_id"},
+			"observe": _build_os_observe_payload({})
+		})
+		return
+	_send_os_operation_response("windows.open_app", params)
+
+
+func _cmd_os_execute_operation(params: Dictionary) -> void:
+	var operation: String = str(params.get("operation", params.get("op", ""))).strip_edges()
+	var args_value: Variant = params.get("args", {})
+	var operation_args: Dictionary = args_value.duplicate(true) if args_value is Dictionary else {}
+	if operation == "":
+		_send_response({
+			"success": false,
+			"operation": "",
+			"result": {},
+			"error": {"code": "MISSING_OPERATION", "message": "os_execute_operation requires operation"},
+			"observe": _build_os_observe_payload({})
+		})
+		return
+	_send_os_operation_response(operation, operation_args)
+
+
+func _send_os_operation_response(operation: String, params: Dictionary) -> void:
+	var response: Dictionary = _build_os_operation_response(operation, params, true)
+	_send_response(response)
+
+
+func _build_os_operation_response(operation: String, params: Dictionary, include_observe: bool = true) -> Dictionary:
 	var shell: Node = _find_hermes_shell()
 	if shell == null or not shell.has_method("hermes_execute_operation"):
-		_send_response({
+		var unavailable: Dictionary = {
 			"success": false,
 			"operation": operation,
 			"error": {
@@ -905,9 +967,11 @@ func _send_os_file_operation_response(operation: String, params: Dictionary) -> 
 				"message": "Hermes shell operation router is unavailable"
 			},
 			"result": {}
-		})
-		return
-	var operation_args: Dictionary = params.duplicate(true)
+		}
+		if include_observe:
+			unavailable["observe"] = _build_os_observe_payload({})
+		return unavailable
+	var operation_args: Dictionary = _strip_transport_metadata(params)
 	var result_value: Variant = shell.call("hermes_execute_operation", operation, operation_args)
 	var operation_result: Dictionary = result_value if result_value is Dictionary else {
 		"ok": false,
@@ -919,11 +983,19 @@ func _send_os_file_operation_response(operation: String, params: Dictionary) -> 
 		"success": bool(operation_result.get("ok", false)),
 		"operation": str(operation_result.get("operation", operation)),
 		"result": operation_result.get("result", {}) if operation_result.get("result", {}) is Dictionary else {},
-		"error": operation_result.get("error", {}) if operation_result.get("error", {}) is Dictionary else {},
-		"observe": _build_os_observe_payload({})
+		"error": operation_result.get("error", {}) if operation_result.get("error", {}) is Dictionary else {}
 	}
+	if include_observe:
+		response["observe"] = _build_os_observe_payload({})
 	var sanitized: Variant = _variant_to_json(response)
-	_send_response(sanitized if sanitized is Dictionary else response)
+	return sanitized if sanitized is Dictionary else response
+
+
+func _strip_transport_metadata(params: Dictionary) -> Dictionary:
+	var clean: Dictionary = params.duplicate(true)
+	for key in ["source", "metadata", "tool_call_id", "context", "task_id", "session_id", "enabled_toolsets", "disabled_toolsets", "enabled_tools", "user_task"]:
+		clean.erase(key)
+	return clean
 
 
 func _build_os_ui_tree_payload(_params: Dictionary = {}) -> Array:
