@@ -2,6 +2,7 @@ extends "res://scripts/ui/hermes_ui/runtime/hermes_app_controller.gd"
 
 const DEFAULT_URL := "http://home.hermes/"
 const NEW_TAB_URL := DEFAULT_URL
+const SEARCH_URL_TEMPLATE := "http://pythia.com/?q=%s"
 
 var _shell: Node = null
 var _fs: Object = null
@@ -51,17 +52,43 @@ func handle_address_input(event) -> void:
 
 func load_address(event = null) -> void:
 	_setup_surface()
-	var value: String = _event_or_address(event)
-	if value.strip_edges() == "":
+	var value: String = _event_or_address(event).strip_edges()
+	if value == "":
 		value = DEFAULT_URL
 	if _surface == null:
 		_set_status("browser surface unavailable")
 		return
-	if value.strip_edges().contains(" ") and _surface.has_method("search"):
-		_surface.call("search", value)
+	if _should_search_address(value) and _surface.has_method("open_url"):
+		_surface.call("open_url", _search_url_for(value))
 	elif _surface.has_method("open_url"):
 		_surface.call("open_url", value)
 	sync_from_surface()
+
+func _search_url_for(query: String) -> String:
+	return SEARCH_URL_TEMPLATE % query.uri_encode()
+
+func _should_search_address(value: String) -> bool:
+	var clean := value.strip_edges()
+	if clean == "":
+		return false
+	if _contains_whitespace(clean):
+		return true
+	var lower := clean.to_lower()
+	if lower.begins_with("about:") or lower.begins_with("browser://") or lower.begins_with("hermes://"):
+		return false
+	if clean.contains("://"):
+		return false
+	if clean.contains("."):
+		return false
+	if clean.contains("/"):
+		return false
+	return true
+
+func _contains_whitespace(value: String) -> bool:
+	for ch in value:
+		if ch in [" ", "	", "\n", "\r"]:
+			return true
+	return false
 
 func go_back(_event = null) -> void:
 	_setup_surface()

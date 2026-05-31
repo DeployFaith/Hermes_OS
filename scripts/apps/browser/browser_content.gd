@@ -125,7 +125,7 @@ var _startup_mode := STARTUP_MODE_NEW_TAB
 var _custom_home_url := DEFAULT_URL
 var _show_favorites_on_new_tab := true
 var _restore_session_enabled := false
-var _search_template := "http://home.hermes/search?q=%s"
+var _search_template := "http://pythia.com/?q=%s"
 var _max_closed_tabs := 30
 var _confirm_close_tabs := false
 
@@ -1228,7 +1228,7 @@ func search(query: String) -> void:
 	var q := query.strip_edges()
 	if q == "":
 		return
-	var template := _search_template if _search_template.contains("%s") else "http://home.hermes/search?q=%s"
+	var template := _search_template if _search_template.contains("%s") else "http://pythia.com/?q=%s"
 	open_url(template % q.uri_encode())
 
 func go_back() -> void:
@@ -2373,11 +2373,11 @@ func _load_settings() -> void:
 	_custom_home_url = _migrate_legacy_browser_url(str(cfg.get_value("browser", "custom_home_url", str(cfg.get_value("browser", "home_url", DEFAULT_URL)))))
 	_show_favorites_on_new_tab = bool(cfg.get_value("browser", "show_favorites_on_new_tab", true))
 	_restore_session_enabled = bool(cfg.get_value("browser", "restore_session", false))
-	_search_template = _migrate_legacy_search_template(str(cfg.get_value("browser", "search_template", "http://home.hermes/search?q=%s")))
+	_search_template = _migrate_legacy_search_template(str(cfg.get_value("browser", "search_template", "http://pythia.com/?q=%s")))
 	_confirm_close_tabs = bool(cfg.get_value("browser", "confirm_close_tabs", false))
 	_max_closed_tabs = maxi(0, int(cfg.get_value("browser", "max_closed_tabs", 30)))
 	if not _search_template.contains("%s"):
-		_search_template = "http://home.hermes/search?q=%s"
+		_search_template = "http://pythia.com/?q=%s"
 
 func _migrate_legacy_browser_url(value: String) -> String:
 	# Obsolete fake-domain routes from the retired Browser prototype are migrated to the official Hermes Internet home.
@@ -2387,12 +2387,12 @@ func _migrate_legacy_browser_url(value: String) -> String:
 	return _resolver.normalize_user_url(value)
 
 func _migrate_legacy_search_template(value: String) -> String:
-	# Obsolete fake-domain search templates are not kept active; searches now stay under home.hermes.
+	# Obsolete fake-domain search templates are not kept active; searches now route to Pythia.
 	var clean := value.strip_edges()
 	var lower := clean.to_lower()
 	if clean == "" or lower.contains("news.grid") or lower.contains("atlas.node") or lower.contains("vault.corp") or lower.contains("newtab.grid"):
-		return "http://home.hermes/search?q=%s"
-	return clean if clean.contains("%s") else "http://home.hermes/search?q=%s"
+		return "http://pythia.com/?q=%s"
+	return clean if clean.contains("%s") else "http://pythia.com/?q=%s"
 
 func _save_settings() -> void:
 	var cfg := ConfigFile.new()
@@ -2622,7 +2622,7 @@ func debug_apply_settings(values: Dictionary) -> void:
 		_confirm_close_tabs = bool(values.get("confirm_close_tabs", false))
 	if values.has("search_template"):
 		var template := str(values.get("search_template", _search_template))
-		_search_template = template if template.contains("%s") else "http://home.hermes/search?q=%s"
+		_search_template = template if template.contains("%s") else "http://pythia.com/?q=%s"
 	if values.has("max_closed_tabs"):
 		_max_closed_tabs = maxi(0, int(values.get("max_closed_tabs", 30)))
 		while _closed_tabs.size() > _max_closed_tabs:
