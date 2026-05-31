@@ -12,23 +12,47 @@ var _busy_since: float = 0.0
 const PORT: int = 9090
 const HOST: String = "0.0.0.0"
 const BUSY_TIMEOUT: float = 30.0
+const LISTEN_RETRY_INTERVAL: float = 2.0
 var _key_map: Dictionary
 var _held_keys: Dictionary = {}
+var _listen_retry_at: float = -1.0
+var _listen_failed_once: bool = false
 
 func _ready() -> void:
 	# Ensure MCP server keeps processing even when game is paused
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_init_key_map()
 	_server = TCPServer.new()
-	var err: int = _server.listen(PORT, HOST)
-	if err != OK:
-		push_error("McpInteractionServer: Failed to listen on %s:%d, error: %d" % [HOST, PORT, err])
+	_try_start_server()
+
+
+func _try_start_server() -> void:
+	if _server == null or _server.is_listening():
 		return
-	print("McpInteractionServer: Listening on %s:%d (host access via 127.0.0.1:%d)" % [HOST, PORT, PORT])
+
+	var err: int = _server.listen(PORT, HOST)
+	if err == OK:
+		if _listen_failed_once:
+			print("McpInteractionServer: Recovered and now listening on %s:%d" % [HOST, PORT])
+		else:
+			print("McpInteractionServer: Listening on %s:%d (host access via 127.0.0.1:%d)" % [HOST, PORT, PORT])
+		_listen_retry_at = -1.0
+		return
+
+	if not _listen_failed_once:
+		push_error("McpInteractionServer: Failed to listen on %s:%d, error: %d. Will retry." % [HOST, PORT, err])
+		_listen_failed_once = true
+	_listen_retry_at = Time.get_ticks_msec() / 1000.0 + LISTEN_RETRY_INTERVAL
 
 
 func _process(_delta: float) -> void:
 	if _server == null:
+		return
+
+	if not _server.is_listening():
+		var now: float = Time.get_ticks_msec() / 1000.0
+		if _listen_retry_at < 0.0 or now >= _listen_retry_at:
+			_try_start_server()
 		return
 
 	# Safety timeout: force-reset _busy if it's been stuck too long
