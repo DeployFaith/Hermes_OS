@@ -813,6 +813,28 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		if _delete_selected_desktop_items():
 			get_viewport().set_input_as_handled()
 
+func _unhandled_input(event: InputEvent) -> void:
+	if not _session_active or _auth_overlay != null:
+		return
+	if _launcher == null or not _launcher.visible:
+		return
+	if not (event is InputEventMouseButton):
+		return
+	var mouse_event := event as InputEventMouseButton
+	if not mouse_event.pressed:
+		return
+	if mouse_event.button_index != MOUSE_BUTTON_LEFT and mouse_event.button_index != MOUSE_BUTTON_RIGHT:
+		return
+	var pointer := get_global_mouse_position()
+	if _is_point_inside_control_global(_launcher, pointer):
+		return
+	_hide_launcher()
+
+func _is_point_inside_control_global(control: Control, point: Vector2) -> bool:
+	if control == null or not is_instance_valid(control) or not control.visible:
+		return false
+	return control.get_global_rect().has_point(point)
+
 func _focused_text_control_should_keep_key(key_event: InputEventKey) -> bool:
 	if key_event == null:
 		return false

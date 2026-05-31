@@ -25,9 +25,21 @@
 
 .shell-taskbar-windows {
   flex: 1;
+  min-height: 40px;
+  max-height: 40px;
   gap: 8px;
   background: transparent;
   border-width: 0;
+  flex-direction: row;
+}
+
+.shell-taskbar-windows-scroll {
+  flex: 1;
+  min-height: 40px;
+  max-height: 40px;
+  background: transparent;
+  border-width: 0;
+  padding: 0;
 }
 
 .shell-taskbar-window-item {
