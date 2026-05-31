@@ -1402,10 +1402,24 @@ func _load_html_document(html: String, base_url: String) -> bool:
 		break
 	_webview.callv("load_html", [html])
 	return true
-
 func _inject_browser_navigation_bridge(html: String) -> String:
 	if html.find("data-hermes-browser-navigation-bridge") >= 0:
 		return html
+
+	const DEFAULT_SELECTION_STYLE := "<style id=\"hermesos-browser-default-selection-style\">::selection{background:rgba(96,165,250,0.85);color:#ffffff}input::selection,textarea::selection{background:rgba(96,165,250,0.95);color:#ffffff}</style>"
+
+	var style := DEFAULT_SELECTION_STYLE
+
+	var head_close := html.to_lower().rfind("</head>")
+	if head_close >= 0:
+		html = html.substr(0, head_close) + style + html.substr(head_close)
+	else:
+		var body_open := html.to_lower().find("<body")
+		if body_open >= 0:
+			html = html.substr(0, body_open) + style + html.substr(body_open)
+		else:
+			html = style + html
+
 	var script := "\n<script data-hermes-browser-navigation-bridge=\"true\">\n"
 	script += "(function () {\n"
 	script += "  if (window.__hermesBrowserNavigationBridge) return;\n"
@@ -1427,11 +1441,11 @@ func _inject_browser_navigation_bridge(html: String) -> String:
 	script += "  }, true);\n"
 	script += "}());\n"
 	script += "</script>\n"
+
 	var body_close := html.to_lower().rfind("</body>")
 	if body_close >= 0:
 		return html.substr(0, body_close) + script + html.substr(body_close)
 	return html + script
-
 func _blank_document() -> Dictionary:
 	return {
 		"ok": true,
