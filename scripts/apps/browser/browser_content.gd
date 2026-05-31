@@ -1,15 +1,30 @@
 class_name BrowserContentSurface
 extends VBoxContainer
 
+signal navigation_state_changed
+
 const URLResolver = preload("res://scripts/os/url_resolver.gd")
 const HermesInternetDocumentLoader = preload("res://scripts/os/hermes_internet/hermes_internet_document_loader.gd")
 const WRY_EXTENSION_PATH := "res://addons/godot_wry/WRY.gdextension"
 const WRY_LINUX_LIBRARY_PATH := "res://addons/godot_wry/bin/x86_64-unknown-linux-gnu/libgodot_wry.so"
 const WRY_CLASS_CANDIDATES := ["WebView", "GodotWebView", "GDExtensionWebView", "WryWebView"]
 const SESSION_PATH := "user://browser_session.cfg"
-const DEFAULT_URL := "http://home.hermes/"
-const NEW_TAB_URL := DEFAULT_URL
+const INTERNAL_NEW_TAB_URL := "about:newtab"
+const INTERNAL_SETTINGS_URL := "about:settings"
+const BLANK_URL := "about:blank"
+const DEFAULT_URL := INTERNAL_NEW_TAB_URL
+const NEW_TAB_URL := INTERNAL_NEW_TAB_URL
 const SETTINGS_PATH := "user://browser_settings.cfg"
+const STARTUP_MODE_NEW_TAB := "new_tab"
+const STARTUP_MODE_BLANK := "blank"
+const STARTUP_MODE_CUSTOM := "custom"
+const NEW_TAB_FAVORITES: Array[Dictionary] = [
+	{"name": "Agora Market", "url": "agoramarket.com"},
+	{"name": "Charon Wallet", "url": "charonwallet.com"},
+	{"name": "Athena Trust", "url": "athenatrust.org"},
+	{"name": "Oracle Board", "url": "oracleboard.net"},
+	{"name": "Ares Market", "url": "aresmarket.com"}
+]
 const LOAD_IDLE := "idle"
 const LOAD_LOADING := "loading"
 const LOAD_TRANSFERRING := "transferring"
@@ -48,12 +63,15 @@ var _interactive_fallback_last_key: Label
 var _interactive_fallback_channel: Label
 var _new_tab_page: PanelContainer
 var _settings_panel: PanelContainer
+var _settings_startup_new_tab: CheckBox
+var _settings_startup_blank: CheckBox
+var _settings_startup_custom: CheckBox
 var _settings_home_input: LineEdit
-var _settings_restore_check: CheckButton
-var _settings_search_input: LineEdit
-var _settings_confirm_close_check: CheckButton
-var _settings_max_closed_spin: SpinBox
+var _settings_show_favorites_check: CheckButton
 var _settings_feedback: Label
+var _settings_search_input: LineEdit
+var _settings_new_tab_select: OptionButton
+var _settings_category_buttons: Dictionary = {}
 var _bridge_endpoint_input: LineEdit
 var _bridge_auto_check: CheckButton
 var _bridge_status_label: Label
@@ -103,8 +121,10 @@ var _active_tab := -1
 var _navigating_history := false
 var _address_is_editing := false
 var _address_valid := true
-var _home_url := DEFAULT_URL
-var _restore_session_enabled := true
+var _startup_mode := STARTUP_MODE_NEW_TAB
+var _custom_home_url := DEFAULT_URL
+var _show_favorites_on_new_tab := true
+var _restore_session_enabled := false
 var _search_template := "http://home.hermes/search?q=%s"
 var _max_closed_tabs := 30
 var _confirm_close_tabs := false
@@ -120,10 +140,10 @@ func _ready() -> void:
 	_load_settings()
 	_build_toolbar()
 	_build_surface()
-	if _tabs.is_empty():
-		_new_tab(_home_url, true)
 	if _restore_session_enabled:
 		_restore_session()
+	if _tabs.is_empty():
+		_new_tab(_startup_url_for_mode(), true)
 	_sync_active_tab_to_ui()
 	_sync_native_webview_window_state(true)
 
@@ -319,7 +339,7 @@ func _build_toolbar() -> void:
 	_forward_button = Button.new(); _forward_button.text = "→"; _forward_button.pressed.connect(go_forward); row.add_child(_forward_button)
 	_reload_button = Button.new(); _reload_button.text = "⟳"; _reload_button.pressed.connect(reload); row.add_child(_reload_button)
 	_stop_button = Button.new(); _stop_button.text = "✕"; _stop_button.tooltip_text = "Stop"; _stop_button.visible = false; _stop_button.pressed.connect(stop_loading); row.add_child(_stop_button)
-	var home := Button.new(); home.text = "Home"; home.pressed.connect(func() -> void: open_url(_home_url)); row.add_child(home)
+	var home := Button.new(); home.text = "Home"; home.pressed.connect(open_home); row.add_child(home)
 
 	_security_badge = Label.new()
 	_security_badge.text = "🔒"
@@ -409,7 +429,7 @@ func _build_toolbar() -> void:
 	_settings_menu = PopupMenu.new()
 	_settings_menu.add_check_item("Restore previous session", 101)
 	_settings_menu.add_item("Set current page as Home", 102)
-	_settings_menu.add_item("Reset Home to home.hermes", 103)
+	_settings_menu.add_item("Reset Home to New Tab", 103)
 	_settings_menu.id_pressed.connect(_on_settings_menu_id_pressed)
 	add_child(_settings_menu)
 
@@ -548,33 +568,49 @@ func _build_new_tab_page() -> void:
 	margin.add_child(box)
 
 	var title := Label.new()
-	title.text = "HermesOS Browser"
+	title.text = "New Tab"
 	title.add_theme_font_size_override("font_size", 26)
 	box.add_child(title)
 
 	var hint := Label.new()
-	hint.text = "Search or enter a Hermes Internet URL above. home.hermes is bundled with Hermes_OS."
+	hint.text = "WorldWeb favorites. Real Internet is disabled in HermesOS Browser."
 	box.add_child(hint)
+
+	var favorites := GridContainer.new()
+	favorites.name = "FavoritesGrid"
+	favorites.columns = 3
+	favorites.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for site in NEW_TAB_FAVORITES:
+		var tile := Button.new()
+		var name := str(site.get("name", "Site"))
+		var url := str(site.get("url", ""))
+		if name == "Ares Market":
+			tile.text = "%s\n%s\n%s" % [name, url, "Locked preview"]
+		else:
+			tile.text = "%s\n%s" % [name, url]
+		tile.custom_minimum_size = Vector2(180, 72)
+		tile.pressed.connect(Callable(self, "open_url").bind(url))
+		favorites.add_child(tile)
+	var add_tile := Button.new()
+	add_tile.text = "＋ Add Site\n(coming soon)"
+	add_tile.disabled = true
+	add_tile.custom_minimum_size = Vector2(180, 72)
+	favorites.add_child(add_tile)
+	box.add_child(favorites)
 
 	var actions := HBoxContainer.new()
 	actions.add_theme_constant_override("separation", 8)
-	var home_button := Button.new()
-	home_button.text = "Open Home"
-	home_button.pressed.connect(func() -> void: open_url(_home_url))
-	actions.add_child(home_button)
 	var settings_button := Button.new()
-	settings_button.text = "Settings"
-	settings_button.pressed.connect(_show_settings_panel)
+	settings_button.text = "Browser Settings"
+	settings_button.pressed.connect(func() -> void:
+		open_url(INTERNAL_SETTINGS_URL)
+	)
 	actions.add_child(settings_button)
 	var reopen_button := Button.new()
 	reopen_button.text = "Reopen Closed Tab"
 	reopen_button.pressed.connect(_reopen_closed_tab)
 	actions.add_child(reopen_button)
 	box.add_child(actions)
-
-	var internet := Label.new()
-	internet.text = "Hermes Internet: bundled local pages, no localhost service required"
-	box.add_child(internet)
 
 func _build_settings_panel() -> void:
 	_settings_panel = PanelContainer.new()
@@ -585,72 +621,152 @@ func _build_settings_panel() -> void:
 	add_child(_settings_panel)
 
 	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 24)
-	margin.add_theme_constant_override("margin_top", 18)
-	margin.add_theme_constant_override("margin_right", 24)
-	margin.add_theme_constant_override("margin_bottom", 18)
+	margin.add_theme_constant_override("margin_left", 18)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_right", 18)
+	margin.add_theme_constant_override("margin_bottom", 16)
 	_settings_panel.add_child(margin)
+
+	var root := VBoxContainer.new()
+	root.add_theme_constant_override("separation", 12)
+	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margin.add_child(root)
+
+	var title := Label.new()
+	title.text = "Browser Settings"
+	title.add_theme_font_size_override("font_size", 24)
+	root.add_child(title)
+
+	_settings_search_input = LineEdit.new()
+	_settings_search_input.placeholder_text = "Search settings"
+	_settings_search_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.add_child(_settings_search_input)
+
+	var body_split := HSplitContainer.new()
+	body_split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body_split.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body_split.split_offset = 240
+	root.add_child(body_split)
+
+	var sidebar_panel := PanelContainer.new()
+	sidebar_panel.custom_minimum_size = Vector2(220, 0)
+	sidebar_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body_split.add_child(sidebar_panel)
+	var sidebar_margin := MarginContainer.new()
+	sidebar_margin.add_theme_constant_override("margin_left", 10)
+	sidebar_margin.add_theme_constant_override("margin_top", 10)
+	sidebar_margin.add_theme_constant_override("margin_right", 10)
+	sidebar_margin.add_theme_constant_override("margin_bottom", 10)
+	sidebar_panel.add_child(sidebar_margin)
+	var sidebar := VBoxContainer.new()
+	sidebar.add_theme_constant_override("separation", 6)
+	sidebar_margin.add_child(sidebar)
+
+	var content_panel := PanelContainer.new()
+	content_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body_split.add_child(content_panel)
+	var content_margin := MarginContainer.new()
+	content_margin.add_theme_constant_override("margin_left", 12)
+	content_margin.add_theme_constant_override("margin_top", 12)
+	content_margin.add_theme_constant_override("margin_right", 12)
+	content_margin.add_theme_constant_override("margin_bottom", 12)
+	content_panel.add_child(content_margin)
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	content_margin.add_child(scroll)
 
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 12)
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	margin.add_child(box)
+	scroll.add_child(box)
 
-	var title := Label.new()
-	title.text = "Browser Settings"
-	title.add_theme_font_size_override("font_size", 22)
-	box.add_child(title)
+	_settings_category_buttons.clear()
+	for category_name in ["Get Started", "Appearance", "WorldWeb", "Startup", "New Tab", "Favorites", "Privacy and Safety", "Downloads", "Accessibility", "System", "About Browser"]:
+		var category_text := str(category_name)
+		var category_button := Button.new()
+		category_button.text = category_text
+		category_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		category_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		category_button.pressed.connect(func() -> void:
+			_set_status_text("settings: " + category_text)
+		)
+		sidebar.add_child(category_button)
+		_settings_category_buttons[category_text] = category_button
 
+	_add_settings_section(box, "Get Started", "HermesOS Browser v0 with internal WorldWeb routing. Real internet is disabled by design.")
+
+	var startup_card := _add_settings_card(box, "Startup", "Choose what opens for Home and startup.")
+	_settings_startup_new_tab = CheckBox.new(); _settings_startup_new_tab.text = "Open the New Tab page"; startup_card.add_child(_settings_startup_new_tab)
+	_settings_startup_blank = CheckBox.new(); _settings_startup_blank.text = "Open a blank page"; startup_card.add_child(_settings_startup_blank)
+	_settings_startup_custom = CheckBox.new(); _settings_startup_custom.text = "Open a specific WorldWeb page"; startup_card.add_child(_settings_startup_custom)
+	_settings_startup_new_tab.toggled.connect(func(v: bool) -> void:
+		if v:
+			_set_startup_mode_checks(STARTUP_MODE_NEW_TAB)
+	)
+	_settings_startup_blank.toggled.connect(func(v: bool) -> void:
+		if v:
+			_set_startup_mode_checks(STARTUP_MODE_BLANK)
+	)
+	_settings_startup_custom.toggled.connect(func(v: bool) -> void:
+		if v:
+			_set_startup_mode_checks(STARTUP_MODE_CUSTOM)
+	)
 	_settings_home_input = LineEdit.new()
-	_settings_home_input.placeholder_text = DEFAULT_URL
-	box.add_child(_settings_field_row("Homepage", _settings_home_input))
+	_settings_home_input.placeholder_text = "agoramarket.com"
+	startup_card.add_child(_settings_field_row("Custom homepage URL", _settings_home_input))
 
-	_settings_restore_check = CheckButton.new()
-	_settings_restore_check.text = "Restore previous session on startup"
-	box.add_child(_settings_restore_check)
+	var new_tab_card := _add_settings_card(box, "New Tab", "Manage the default content shown on about:newtab.")
+	var new_tab_row := _add_settings_row(new_tab_card, "New tab page shows")
+	_settings_new_tab_select = OptionButton.new()
+	_settings_new_tab_select.add_item("Favorites + speed dial")
+	_settings_new_tab_select.add_item("Minimal page")
+	_settings_new_tab_select.selected = 0
+	_settings_new_tab_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	new_tab_row.add_child(_settings_new_tab_select)
+	var customize_row := _add_settings_row(new_tab_card, "Customize new tab page")
+	var customize_status := Label.new()
+	customize_status.text = "Not available in v0"
+	customize_status.autowrap_mode = TextServer.AUTOWRAP_OFF
+	customize_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	customize_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	customize_row.add_child(customize_status)
+	var customize_button := Button.new()
+	customize_button.text = "Customize"
+	customize_button.disabled = true
+	customize_row.add_child(customize_button)
 
-	_settings_search_input = LineEdit.new()
-	_settings_search_input.placeholder_text = "http://home.hermes/search?q=%s"
-	box.add_child(_settings_field_row("Search template (%s required)", _settings_search_input))
+	var favorites_card := _add_settings_card(box, "Favorites", "Default favorites: Agora Market, Charon Wallet, Athena Trust, Oracle Board, Ares Market.")
+	_settings_show_favorites_check = CheckButton.new()
+	_settings_show_favorites_check.text = "Show favorites on New Tab"
+	favorites_card.add_child(_settings_show_favorites_check)
+	var add_tile_row := _add_settings_row(favorites_card, "Add site tile")
+	var add_tile_status := Label.new()
+	add_tile_status.text = "Coming soon"
+	add_tile_status.modulate = Color(0.75, 0.77, 0.81, 0.75)
+	add_tile_status.autowrap_mode = TextServer.AUTOWRAP_OFF
+	add_tile_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	add_tile_row.add_child(add_tile_status)
+	var add_tile_button := Button.new()
+	add_tile_button.text = "Add"
+	add_tile_button.disabled = true
+	add_tile_row.add_child(add_tile_button)
 
-	_settings_confirm_close_check = CheckButton.new()
-	_settings_confirm_close_check.text = "Confirm before closing tabs"
-	box.add_child(_settings_confirm_close_check)
+	var world_web_card := _add_settings_card(box, "WorldWeb", "Routing and validation use the local Hermes Internet resolver and registry.")
+	_add_settings_row(world_web_card, "Current mode", "WorldWeb/local only")
+	_add_settings_row(world_web_card, "Real internet", "Disabled")
+	_add_settings_row(world_web_card, "External domains", "Blocked by design")
 
-	_settings_max_closed_spin = SpinBox.new()
-	_settings_max_closed_spin.min_value = 0
-	_settings_max_closed_spin.max_value = 200
-	_settings_max_closed_spin.step = 1
-	box.add_child(_settings_field_row("Max reopen stack", _settings_max_closed_spin))
-
-	var bridge_heading := Label.new()
-	bridge_heading.text = "Hermes Bridge"
-	bridge_heading.add_theme_font_size_override("font_size", 18)
-	box.add_child(bridge_heading)
-
-	_bridge_status_label = Label.new()
-	box.add_child(_bridge_status_label)
-
-	_bridge_endpoint_input = LineEdit.new()
-	_bridge_endpoint_input.placeholder_text = "Managed by System Settings"
-	box.add_child(_settings_field_row("Bridge endpoint", _bridge_endpoint_input))
-
-	_bridge_auto_check = CheckButton.new()
-	_bridge_auto_check.text = "Auto-connect bridge on startup"
-	box.add_child(_bridge_auto_check)
-
-	var bridge_buttons := HBoxContainer.new()
-	bridge_buttons.add_theme_constant_override("separation", 8)
-	var bridge_connect := Button.new()
-	bridge_connect.text = "Connect"
-	bridge_connect.pressed.connect(_connect_bridge_from_settings)
-	bridge_buttons.add_child(bridge_connect)
-	var bridge_disconnect := Button.new()
-	bridge_disconnect.text = "Disconnect"
-	bridge_disconnect.pressed.connect(_disconnect_bridge_from_settings)
-	bridge_buttons.add_child(bridge_disconnect)
-	box.add_child(bridge_buttons)
+	_add_settings_section(box, "Appearance", "Placeholder card: dark HermesOS visual language, compact spacing.")
+	_add_settings_section(box, "Privacy and Safety", "Real Internet disabled: ON\nBlock external network access: ON\nClear local browsing data: placeholder")
+	_add_settings_section(box, "Downloads", "Downloads are not enabled yet. Future versions will save into HermesOS virtual files.")
+	_add_settings_section(box, "Accessibility", "Placeholder controls for text scaling and focus visibility.")
+	_add_settings_section(box, "System", "Internal routes: about:newtab, about:settings, about:blank.")
+	_add_settings_section(box, "About Browser", "HermesOS Browser v0\nBuilt-in WorldWeb browser with local resolver routing only.")
 
 	_settings_feedback = Label.new()
 	_settings_feedback.text = ""
@@ -659,14 +775,19 @@ func _build_settings_panel() -> void:
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 8)
 	var apply := Button.new()
-	apply.text = "Apply"
+	apply.text = "Save"
 	apply.pressed.connect(_apply_settings_panel)
 	buttons.add_child(apply)
 	var reset_home := Button.new()
-	reset_home.text = "Reset Home"
+	reset_home.text = "Reset"
 	reset_home.pressed.connect(func() -> void:
-		_settings_home_input.text = DEFAULT_URL
-		_apply_settings_panel()
+		_startup_mode = STARTUP_MODE_NEW_TAB
+		_custom_home_url = DEFAULT_URL
+		_show_favorites_on_new_tab = true
+		_sync_settings_panel_from_state()
+		_save_settings()
+		if _settings_feedback:
+			_settings_feedback.text = "Reset to defaults."
 	)
 	buttons.add_child(reset_home)
 	var close := Button.new()
@@ -676,15 +797,69 @@ func _build_settings_panel() -> void:
 	box.add_child(buttons)
 
 func _settings_field_row(label_text: String, field: Control) -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
-	var label := Label.new()
-	label.text = label_text
-	label.custom_minimum_size = Vector2(190, 0)
-	row.add_child(label)
+	var row := _add_settings_row(null, label_text)
 	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(field)
 	return row
+
+func _add_settings_section(parent: VBoxContainer, title: String, body: String) -> VBoxContainer:
+	var card := _add_settings_card(parent, title)
+	if body != "":
+		card.add_child(_settings_body_label(body))
+	return card
+
+func _add_settings_card(parent: VBoxContainer, title: String, body := "") -> VBoxContainer:
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(panel)
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 12)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_right", 12)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	panel.add_child(margin)
+	var card := VBoxContainer.new()
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.add_theme_constant_override("separation", 8)
+	margin.add_child(card)
+	card.add_child(_settings_section_label(title))
+	if body != "":
+		card.add_child(_settings_body_label(body))
+	return card
+
+func _add_settings_row(parent: VBoxContainer, label_text: String, value_text := "") -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", 10)
+	if parent != null:
+		parent.add_child(row)
+	var label := Label.new()
+	label.text = label_text
+	label.custom_minimum_size = Vector2(220, 0)
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	row.add_child(label)
+	if value_text != "":
+		var value := Label.new()
+		value.text = value_text
+		value.autowrap_mode = TextServer.AUTOWRAP_OFF
+		value.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		value.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		row.add_child(value)
+	return row
+
+func _settings_section_label(text: String) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.add_theme_font_size_override("font_size", 18)
+	return label
+
+func _settings_body_label(text: String) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return label
 
 func _configure_webview_layout() -> void:
 	if _webview == null:
@@ -736,6 +911,8 @@ func _should_show_native_webview() -> bool:
 		return false
 	if _diagnostics_panel != null and _diagnostics_panel.visible:
 		return false
+	if _active_tab_is_internal_about_page():
+		return false
 	if _new_tab_page != null and _new_tab_page.visible:
 		return false
 	var window := _find_os_window_ancestor()
@@ -784,12 +961,16 @@ func _bind_webview_signals() -> void:
 		if _webview.has_signal(sig_name):
 			_webview.connect(sig_name, func(value) -> void:
 				_record_webview_signal(sig_name, value)
+				if _should_ignore_native_webview_callback(value):
+					return
 				_set_active_tab_title(str(value))
 			)
 	for sig_name in ["url_changed", "uri_changed"]:
 		if _webview.has_signal(sig_name):
 			_webview.connect(sig_name, func(value) -> void:
 				_record_webview_signal(sig_name, value)
+				if _should_ignore_native_webview_callback(value):
+					return
 				var maybe := str(value)
 				if maybe == "":
 					return
@@ -805,12 +986,16 @@ func _bind_webview_signals() -> void:
 		if _webview.has_signal(sig_name):
 			_webview.connect(sig_name, func(_v = null) -> void:
 				_record_webview_signal(sig_name, _v)
+				if _should_ignore_native_webview_callback(_v):
+					return
 				_set_tab_load_state(LOAD_TRANSFERRING)
 			)
 	for sig_name in ["load_finished", "navigation_finished", "page_load_finished"]:
 		if _webview.has_signal(sig_name):
 			_webview.connect(sig_name, func(_v = null) -> void:
 				_record_webview_signal(sig_name, _v)
+				if _should_ignore_native_webview_callback(_v):
+					return
 				if _local_document_active:
 					_apply_document_load_state(_last_loaded_document)
 					return
@@ -821,6 +1006,8 @@ func _bind_webview_signals() -> void:
 		if _webview.has_signal(sig_name):
 			_webview.connect(sig_name, func(_v = null) -> void:
 				_record_webview_signal(sig_name, _v)
+				if _should_ignore_native_webview_callback(_v):
+					return
 				_set_tab_load_state(LOAD_FAILED, "webview signal")
 				_set_status_text("load failed")
 			)
@@ -832,6 +1019,7 @@ func _bind_webview_signals() -> void:
 	if _webview.has_signal("ipc_message"):
 		_webview.connect("ipc_message", func(value) -> void:
 			_record_webview_signal("ipc_message", value)
+			_consume_browser_navigation_message(value)
 			_consume_browser_lifecycle_message(value)
 			_consume_browser_ipc_message(value)
 		)
@@ -900,7 +1088,7 @@ func _close_tab(index: int) -> void:
 	_tabs.remove_at(index)
 	_tab_bar.remove_tab(index)
 	if _tabs.is_empty():
-		_new_tab(_home_url, true)
+		_new_tab(_startup_url_for_mode(), true)
 		return
 	if _active_tab >= _tabs.size():
 		_active_tab = _tabs.size() - 1
@@ -929,15 +1117,32 @@ func _sync_active_tab_to_ui() -> void:
 	var tab := _active_tab_data()
 	if tab.is_empty():
 		return
-	var url := str(tab.get("url", DEFAULT_URL))
-	if _address and not _address_is_editing and not _address.has_focus():
-		_address.text = url
-		_validate_address_text()
+	_sync_address_bar_to_active_tab(false)
 	_current_title_from_tab(tab)
 	_refresh_nav_buttons()
 	_set_tab_load_state(str(tab.get("load_state", LOAD_IDLE)), str(tab.get("timeout_reason", "")), false)
 
 func open_url(input_url: String) -> void:
+	var internal := _normalize_internal_url(input_url)
+	if internal == INTERNAL_NEW_TAB_URL:
+		_set_active_tab_url(INTERNAL_NEW_TAB_URL, not _navigating_history)
+		_set_active_tab_title("New Tab")
+		_show_new_tab_page()
+		_mark_internal_about_page_ready(INTERNAL_NEW_TAB_URL, "New Tab", "new tab")
+		return
+	if internal == INTERNAL_SETTINGS_URL:
+		_set_active_tab_url(INTERNAL_SETTINGS_URL, not _navigating_history)
+		_set_active_tab_title("Settings")
+		_show_settings_panel()
+		_mark_internal_about_page_ready(INTERNAL_SETTINGS_URL, "Settings", "settings")
+		return
+	if internal == BLANK_URL:
+		var blank_doc := _blank_document()
+		_set_active_tab_url(BLANK_URL, not _navigating_history)
+		_set_active_tab_title("Blank Page")
+		_show_blank_page()
+		_mark_internal_about_page_ready(BLANK_URL, "Blank Page", "blank", blank_doc)
+		return
 	var normalized := _resolver.normalize_user_url(input_url)
 	var document: Dictionary = _document_loader.load(normalized)
 	var resolved := str(document.get("local_url", _resolver.resolve_to_backend(normalized)))
@@ -955,7 +1160,7 @@ func open_url(input_url: String) -> void:
 		_native_render_debug["native_limitation"] = "webview unavailable"
 		_apply_document_load_state(document, "webview unavailable")
 		return
-	var html := str(document.get("html", ""))
+	var html := _inject_browser_navigation_bridge(str(document.get("html", "")))
 	_native_render_debug["load_start"] = Time.get_ticks_msec()
 	_native_render_debug["load_done"] = 0
 	_native_render_debug["document_loaded"] = false
@@ -964,10 +1169,9 @@ func open_url(input_url: String) -> void:
 	_native_render_debug["test_input_roundtrip"] = false
 	_native_render_debug["status_code"] = int(document.get("status_code", 0))
 	_native_render_debug["native_limitation"] = ""
-	_native_render_debug["rendering_mode"] = "native_attempt_with_companion_fallback"
-	if _call_first(["load_html"], [html]):
-		_set_tab_load_state(LOAD_LOADING, "")
-		_set_status_text("loading Hermes Internet document")
+	_native_render_debug["rendering_mode"] = "native_load_html_local_document"
+	if _load_html_document(html, _safe_webview_base_url_for_document(document)):
+		_apply_document_load_state(document)
 	else:
 		_native_render_debug["rendering_mode"] = "fallback_only"
 		_native_render_debug["native_limitation"] = "load_html unavailable in current webview runtime"
@@ -979,12 +1183,37 @@ func open_url(input_url: String) -> void:
 func _show_new_tab_page() -> void:
 	if _new_tab_page == null or _content_host == null:
 		return
+	if _settings_panel:
+		_settings_panel.visible = false
+	if _diagnostics_panel:
+		_diagnostics_panel.visible = false
+	_content_host.visible = true
 	for child in _content_host.get_children():
 		if child is CanvasItem:
 			(child as CanvasItem).visible = child == _new_tab_page
 	_new_tab_page.visible = true
+	var favorites_grid := _new_tab_page.find_child("FavoritesGrid", true, false)
+	if favorites_grid is CanvasItem:
+		(favorites_grid as CanvasItem).visible = _show_favorites_on_new_tab
 	_sync_interactive_fallback_visibility()
+	_sync_native_webview_window_state(true)
 	_set_status_text("new tab")
+
+func _show_blank_page() -> void:
+	if _settings_panel:
+		_settings_panel.visible = false
+	if _diagnostics_panel:
+		_diagnostics_panel.visible = false
+	if _content_host:
+		_content_host.visible = true
+		for child in _content_host.get_children():
+			if child is CanvasItem:
+				(child as CanvasItem).visible = false
+	if _new_tab_page:
+		_new_tab_page.visible = false
+	_sync_interactive_fallback_visibility()
+	_sync_native_webview_window_state(true)
+	_set_status_text("blank")
 
 func _hide_new_tab_page() -> void:
 	if _new_tab_page == null or _content_host == null:
@@ -1036,6 +1265,9 @@ func go_forward() -> void:
 	_save_session()
 
 func reload() -> void:
+	if _local_document_active or _active_tab_is_internal_about_page():
+		open_url(get_current_url())
+		return
 	if _call_first(["reload", "refresh"]):
 		_set_tab_load_state(LOAD_LOADING, "reload")
 
@@ -1055,7 +1287,173 @@ func get_current_title() -> String:
 	return str(tab.get("title", "Browser"))
 
 func open_home() -> void:
-	open_url(_home_url)
+	open_url(INTERNAL_NEW_TAB_URL)
+
+func _startup_url_for_mode() -> String:
+	match _startup_mode:
+		STARTUP_MODE_BLANK:
+			return BLANK_URL
+		STARTUP_MODE_CUSTOM:
+			return _custom_home_url
+		_:
+			return INTERNAL_NEW_TAB_URL
+
+func _normalize_internal_url(input_url: String) -> String:
+	var clean := input_url.strip_edges().to_lower()
+	if clean == "":
+		return INTERNAL_NEW_TAB_URL
+	if clean == "about:newtab" or clean == "browser://newtab" or clean == "hermes://newtab":
+		return INTERNAL_NEW_TAB_URL
+	if clean == "about:settings" or clean == "browser://settings" or clean == "hermes://settings":
+		return INTERNAL_SETTINGS_URL
+	if clean == "about:blank":
+		return BLANK_URL
+	return ""
+
+func _active_tab_is_internal_about_page() -> bool:
+	var tab := _active_tab_data()
+	if tab.is_empty():
+		return false
+	return _normalize_internal_url(str(tab.get("url", ""))) != ""
+
+func _active_tab_is_local_document_page() -> bool:
+	if not _local_document_active:
+		return false
+	var tab := _active_tab_data()
+	if tab.is_empty() or _last_loaded_document.is_empty():
+		return false
+	var display_url := str(_last_loaded_document.get("display_url", tab.get("url", "")))
+	if display_url == "":
+		return false
+	return _resolver.normalize_user_url(str(tab.get("url", ""))) == _resolver.normalize_user_url(display_url)
+
+func _should_ignore_native_webview_callback(value: Variant = null) -> bool:
+	if _active_tab_is_internal_about_page():
+		return true
+	if _active_tab_is_local_document_page():
+		return true
+	var callback_url := _display_url_from_native_callback(value)
+	if callback_url == "":
+		return false
+	var tab := _active_tab_data()
+	if tab.is_empty():
+		return false
+	var pending := str(tab.get("pending_navigation", ""))
+	if pending == "":
+		return false
+	return _resolver.normalize_user_url(callback_url) != _resolver.normalize_user_url(pending)
+
+func _display_url_from_native_callback(value: Variant) -> String:
+	if value == null:
+		return ""
+	if value is String:
+		var raw := str(value).strip_edges()
+		return _resolver.display_url_from_backend(raw) if raw != "" else ""
+	if value is Dictionary:
+		var data: Dictionary = value
+		for key in ["url", "uri", "href", "location"]:
+			if data.has(key):
+				var raw := str(data.get(key, "")).strip_edges()
+				if raw != "":
+					return _resolver.display_url_from_backend(raw)
+	return ""
+
+func _mark_internal_about_page_ready(url: String, title: String, status_text: String, document: Dictionary = {}) -> void:
+	var ready_document := document.duplicate(true)
+	if ready_document.is_empty():
+		ready_document = {
+			"ok": true,
+			"status_code": 200,
+			"mode": "internal_about",
+			"display_url": url,
+			"local_url": url,
+			"title": title,
+			"html": ""
+		}
+	_local_document_active = false
+	_last_loaded_document = ready_document
+	_set_active_tab_backend_url(url)
+	_set_tab_load_state(LOAD_DONE, "", false)
+	_set_status_text(status_text)
+	_native_render_debug["status_code"] = int(ready_document.get("status_code", 200))
+	_native_render_debug["load_done"] = Time.get_ticks_msec()
+	_native_render_debug["document_loaded"] = true
+	_native_render_debug["dom_ready"] = true
+	_native_render_debug["interactive_ready"] = true
+	_native_render_debug["native_limitation"] = "internal about page"
+	_native_render_debug["rendering_mode"] = "internal_about"
+	_sync_native_webview_window_state(true)
+
+func _safe_webview_base_url_for_document(_document: Dictionary) -> String:
+	return "about:blank"
+
+func _load_html_document(html: String, base_url: String) -> bool:
+	if _webview == null or not _webview.has_method("load_html"):
+		return false
+	for method in _webview.get_method_list():
+		if not (method is Dictionary):
+			continue
+		if str(method.get("name", "")) != "load_html":
+			continue
+		var args: Array = method.get("args", []) as Array
+		if args.size() >= 2:
+			_webview.callv("load_html", [html, base_url])
+			return true
+		break
+	_webview.callv("load_html", [html])
+	return true
+
+func _inject_browser_navigation_bridge(html: String) -> String:
+	if html.find("data-hermes-browser-navigation-bridge") >= 0:
+		return html
+	var script := "\n<script data-hermes-browser-navigation-bridge=\"true\">\n"
+	script += "(function () {\n"
+	script += "  if (window.__hermesBrowserNavigationBridge) return;\n"
+	script += "  window.__hermesBrowserNavigationBridge = true;\n"
+	script += "  function post(payload) {\n"
+	script += "    if (window.ipc && typeof window.ipc.postMessage === 'function') {\n"
+	script += "      window.ipc.postMessage(JSON.stringify(payload));\n"
+	script += "    }\n"
+	script += "  }\n"
+	script += "  document.addEventListener('click', function (event) {\n"
+	script += "    var node = event.target;\n"
+	script += "    while (node && node !== document && !(node.tagName && node.tagName.toLowerCase() === 'a' && node.getAttribute('href'))) { node = node.parentNode; }\n"
+	script += "    if (!node || node === document) return;\n"
+	script += "    var href = node.getAttribute('href') || '';\n"
+	script += "    var lower = href.toLowerCase();\n"
+	script += "    if (!href || href.charAt(0) === '#' || lower.indexOf('javascript:') === 0) return;\n"
+	script += "    event.preventDefault();\n"
+	script += "    post({source: 'hermes_browser', type: 'browser_navigation', href: href});\n"
+	script += "  }, true);\n"
+	script += "}());\n"
+	script += "</script>\n"
+	var body_close := html.to_lower().rfind("</body>")
+	if body_close >= 0:
+		return html.substr(0, body_close) + script + html.substr(body_close)
+	return html + script
+
+func _blank_document() -> Dictionary:
+	return {
+		"ok": true,
+		"status_code": 200,
+		"mode": "internal_blank",
+		"display_url": BLANK_URL,
+		"local_url": BLANK_URL,
+		"title": "Blank Page",
+		"html": "<!doctype html><html><head><meta charset=\"utf-8\"><title>Blank</title></head><body style=\"background:#111;color:#bbb;font-family:sans-serif;\"></body></html>"
+	}
+
+func _validate_custom_homepage_url(input_url: String) -> Dictionary:
+	var normalized := _resolver.normalize_user_url(input_url)
+	var document: Dictionary = _document_loader.load(normalized)
+	var mode := str(document.get("mode", ""))
+	if mode == "hermes_internet":
+		return {"ok": true, "url": normalized, "message": "Saved."}
+	return {
+		"ok": false,
+		"url": normalized,
+		"message": "Custom homepage must be a known local/WorldWeb site (example: agoramarket.com). External or unknown domains are not allowed."
+	}
 
 func new_tab(url: String = NEW_TAB_URL) -> void:
 	_new_tab(url, true)
@@ -1108,8 +1506,19 @@ func agent_browser_test_click(args: Dictionary = {}) -> Dictionary:
 	return _send_browser_test_input("click", {"target": target}, "browser.test_click")
 
 func _send_browser_test_input(action: String, payload: Dictionary, operation: String) -> Dictionary:
-	if not _is_interactive_test_page_active():
-		return _agent_error(operation, "PAGE_NOT_READY", "Browser test input requires http://home.hermes/interactive", {"url": get_current_url()})
+	var target := _browser_test_input_target_for_current_page()
+	if target == "":
+		return _agent_error(operation, "PAGE_NOT_READY", "Browser test input requires supported local route", {"url": get_current_url(), "supported_routes": ["http://home.hermes/interactive", "http://home.hermes/games/snake"]})
+	if target == "snake":
+		if action != "key":
+			return _agent_error(operation, "UNSUPPORTED_INPUT", "Snake supports key input only", {"url": get_current_url(), "supported_actions": ["key"]})
+		var allowed_snake_keys := ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", "R", "Space"]
+		var raw_key := str(payload.get("key", "")).strip_edges()
+		var normalized_key := _normalize_allowed_game_key(raw_key)
+		if normalized_key == "":
+			return _agent_error(operation, "UNSUPPORTED_KEY", "Unsupported key for Snake", {"key": raw_key, "allowed_keys": allowed_snake_keys})
+		payload = payload.duplicate(true)
+		payload["key"] = normalized_key
 	if _webview == null or not is_instance_valid(_webview) or not _webview.has_method("post_message"):
 		return {
 			"success": false,
@@ -1126,7 +1535,8 @@ func _send_browser_test_input(action: String, payload: Dictionary, operation: St
 		"source": "hermes_os",
 		"type": "browser_test_input",
 		"action": action,
-		"payload": payload
+		"payload": payload,
+		"target": target
 	}
 	_webview.call("post_message", JSON.stringify(message))
 	_last_browser_input_proof["last_action"] = action
@@ -1144,6 +1554,7 @@ func _send_browser_test_input(action: String, payload: Dictionary, operation: St
 		"success": true,
 		"operation": operation,
 		"input_channel": "browser_test_channel",
+		"target": target,
 		"native_input": false,
 		"limitation": {
 			"native_input_supported": false,
@@ -1152,12 +1563,64 @@ func _send_browser_test_input(action: String, payload: Dictionary, operation: St
 		"proof": _last_browser_input_proof.duplicate(true)
 	}
 
+func _browser_test_input_target_for_current_page() -> String:
+	if _is_interactive_test_page_active():
+		return "interactive"
+	if _is_snake_game_page_active():
+		return "snake"
+	return ""
+
 func _is_interactive_test_page_active() -> bool:
 	var current := _resolver.normalize_user_url(get_current_url())
 	if current.begins_with("http://home.hermes/interactive"):
 		return true
 	var backend := _resolver.resolve_to_backend(current)
 	return backend.find("/interactive") >= 0
+
+func _is_snake_game_page_active() -> bool:
+	var current := _resolver.normalize_user_url(get_current_url())
+	if current == "http://home.hermes/games/snake":
+		return true
+	var backend := _resolver.resolve_to_backend(current)
+	return backend.find("/games/snake") >= 0
+
+func _normalize_allowed_game_key(key_name: String) -> String:
+	match key_name.to_lower().strip_edges():
+		"arrowup", "up":
+			return "ArrowUp"
+		"arrowdown", "down":
+			return "ArrowDown"
+		"arrowleft", "left":
+			return "ArrowLeft"
+		"arrowright", "right":
+			return "ArrowRight"
+		"enter", "return":
+			return "Enter"
+		"r":
+			return "R"
+		"space", "spacebar":
+			return "Space"
+	return ""
+
+func _consume_browser_navigation_message(raw_value: Variant) -> void:
+	var payload: Variant = raw_value
+	if raw_value is String:
+		payload = JSON.parse_string(str(raw_value))
+	if not (payload is Dictionary):
+		return
+	var message: Dictionary = payload
+	if str(message.get("source", "")) != "hermes_browser":
+		return
+	if str(message.get("type", "")) != "browser_navigation":
+		return
+	var href := str(message.get("href", "")).strip_edges()
+	if href == "":
+		return
+	var target := _resolve_link_href(href)
+	if target == "":
+		return
+	_set_status_text("navigating local link")
+	call_deferred("open_url", target)
 
 func _consume_browser_ipc_message(raw_value: Variant) -> void:
 	var payload: Variant = raw_value
@@ -1409,11 +1872,27 @@ func _set_active_tab_url(display_url: String, record_history: bool) -> void:
 			tab["history"] = history
 			tab["history_index"] = idx
 	_tabs[_active_tab] = tab
-	if _address and not _address_is_editing and not _address.has_focus():
-		_address.text = display_url
-		_validate_address_text()
+	_sync_address_bar_to_active_tab(true)
 	_refresh_nav_buttons()
 	_queue_session_save()
+	_emit_navigation_state_changed()
+
+func _sync_address_bar_to_active_tab(force: bool = false) -> void:
+	if _address == null:
+		return
+	var tab := _active_tab_data()
+	if tab.is_empty():
+		return
+	if not force and (_address_is_editing or _address.has_focus()):
+		return
+	var display_url := str(tab.get("url", DEFAULT_URL))
+	if _address.text != display_url:
+		_address.text = display_url
+	_address_is_editing = false
+	_validate_address_text()
+
+func _emit_navigation_state_changed() -> void:
+	navigation_state_changed.emit()
 
 func _set_active_tab_backend_url(backend_url: String) -> void:
 	if _active_tab < 0 or _active_tab >= _tabs.size():
@@ -1738,12 +2217,18 @@ func _on_settings_menu_id_pressed(id: int) -> void:
 			_save_settings()
 			_sync_settings_panel_from_state()
 		102:
-			_home_url = get_current_url()
-			_save_settings()
-			_sync_settings_panel_from_state()
-			_set_status_text("home set")
+			var validated := _validate_custom_homepage_url(get_current_url())
+			if bool(validated.get("ok", false)):
+				_startup_mode = STARTUP_MODE_CUSTOM
+				_custom_home_url = str(validated.get("url", DEFAULT_URL))
+				_save_settings()
+				_sync_settings_panel_from_state()
+				_set_status_text("home set")
+			else:
+				_set_status_text("home rejected")
 		103:
-			_home_url = DEFAULT_URL
+			_startup_mode = STARTUP_MODE_NEW_TAB
+			_custom_home_url = DEFAULT_URL
 			_save_settings()
 			_sync_settings_panel_from_state()
 			_set_status_text("home reset")
@@ -1766,50 +2251,45 @@ func _hide_settings_panel() -> void:
 		_content_host.visible = true
 	_set_status_text(str(_active_tab_data().get("load_state", LOAD_IDLE)))
 
+func _set_startup_mode_checks(mode: String) -> void:
+	if _settings_startup_new_tab:
+		_settings_startup_new_tab.button_pressed = mode == STARTUP_MODE_NEW_TAB
+	if _settings_startup_blank:
+		_settings_startup_blank.button_pressed = mode == STARTUP_MODE_BLANK
+	if _settings_startup_custom:
+		_settings_startup_custom.button_pressed = mode == STARTUP_MODE_CUSTOM
+
 func _sync_settings_panel_from_state() -> void:
+	_set_startup_mode_checks(_startup_mode)
 	if _settings_home_input:
-		_settings_home_input.text = _home_url
-	if _settings_restore_check:
-		_settings_restore_check.button_pressed = _restore_session_enabled
-	if _settings_search_input:
-		_settings_search_input.text = _search_template
-	if _settings_confirm_close_check:
-		_settings_confirm_close_check.button_pressed = _confirm_close_tabs
-	if _settings_max_closed_spin:
-		_settings_max_closed_spin.value = _max_closed_tabs
+		_settings_home_input.text = _custom_home_url
+	if _settings_show_favorites_check:
+		_settings_show_favorites_check.button_pressed = _show_favorites_on_new_tab
 	if _settings_feedback:
 		_settings_feedback.text = ""
-	_sync_bridge_panel_from_kernel()
 
 func _apply_settings_panel() -> void:
 	if _settings_home_input == null:
 		return
-	var next_home := _resolver.normalize_user_url(_settings_home_input.text)
-	var next_template := _settings_search_input.text.strip_edges()
-	var valid := true
-	var feedback := ""
-	if next_home.strip_edges() == "":
-		valid = false
-		feedback = "Homepage is required."
-	elif not next_template.contains("%s"):
-		valid = false
-		feedback = "Search template must include %s."
-	if not valid:
-		if _settings_feedback:
-			_settings_feedback.text = feedback
-		_set_status_text("settings invalid")
-		return
-	_home_url = next_home
-	_restore_session_enabled = _settings_restore_check.button_pressed
-	_search_template = next_template
-	_confirm_close_tabs = _settings_confirm_close_check.button_pressed
-	_max_closed_tabs = maxi(0, int(_settings_max_closed_spin.value))
-	while _closed_tabs.size() > _max_closed_tabs:
-		_closed_tabs.remove_at(0)
-	_apply_bridge_panel_settings(false)
+	var selected_mode := STARTUP_MODE_NEW_TAB
+	if _settings_startup_blank and _settings_startup_blank.button_pressed:
+		selected_mode = STARTUP_MODE_BLANK
+	elif _settings_startup_custom and _settings_startup_custom.button_pressed:
+		selected_mode = STARTUP_MODE_CUSTOM
+	var homepage_result := {"ok": true, "url": _custom_home_url, "message": "Saved."}
+	if selected_mode == STARTUP_MODE_CUSTOM:
+		homepage_result = _validate_custom_homepage_url(_settings_home_input.text)
+		if not bool(homepage_result.get("ok", false)):
+			if _settings_feedback:
+				_settings_feedback.text = str(homepage_result.get("message", "Invalid homepage."))
+			_set_status_text("settings invalid")
+			return
+	_startup_mode = selected_mode
+	_custom_home_url = str(homepage_result.get("url", _custom_home_url))
+	_show_favorites_on_new_tab = _settings_show_favorites_check.button_pressed if _settings_show_favorites_check else true
 	_save_settings()
 	if _settings_feedback:
-		_settings_feedback.text = "Saved."
+		_settings_feedback.text = str(homepage_result.get("message", "Saved."))
 	_set_status_text("settings saved")
 
 func _find_kernel() -> Node:
@@ -1873,8 +2353,12 @@ func _load_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(SETTINGS_PATH) != OK:
 		return
-	_home_url = _migrate_legacy_browser_url(str(cfg.get_value("browser", "home_url", DEFAULT_URL)))
-	_restore_session_enabled = bool(cfg.get_value("browser", "restore_session", true))
+	_startup_mode = str(cfg.get_value("browser", "startup_mode", STARTUP_MODE_NEW_TAB))
+	if _startup_mode != STARTUP_MODE_NEW_TAB and _startup_mode != STARTUP_MODE_BLANK and _startup_mode != STARTUP_MODE_CUSTOM:
+		_startup_mode = STARTUP_MODE_NEW_TAB
+	_custom_home_url = _migrate_legacy_browser_url(str(cfg.get_value("browser", "custom_home_url", str(cfg.get_value("browser", "home_url", DEFAULT_URL)))))
+	_show_favorites_on_new_tab = bool(cfg.get_value("browser", "show_favorites_on_new_tab", true))
+	_restore_session_enabled = bool(cfg.get_value("browser", "restore_session", false))
 	_search_template = _migrate_legacy_search_template(str(cfg.get_value("browser", "search_template", "http://home.hermes/search?q=%s")))
 	_confirm_close_tabs = bool(cfg.get_value("browser", "confirm_close_tabs", false))
 	_max_closed_tabs = maxi(0, int(cfg.get_value("browser", "max_closed_tabs", 30)))
@@ -1898,7 +2382,9 @@ func _migrate_legacy_search_template(value: String) -> String:
 
 func _save_settings() -> void:
 	var cfg := ConfigFile.new()
-	cfg.set_value("browser", "home_url", _home_url)
+	cfg.set_value("browser", "startup_mode", _startup_mode)
+	cfg.set_value("browser", "custom_home_url", _custom_home_url)
+	cfg.set_value("browser", "show_favorites_on_new_tab", _show_favorites_on_new_tab)
 	cfg.set_value("browser", "restore_session", _restore_session_enabled)
 	cfg.set_value("browser", "search_template", _search_template)
 	cfg.set_value("browser", "confirm_close_tabs", _confirm_close_tabs)
@@ -2058,7 +2544,7 @@ func _validate_address_text() -> bool:
 		_address_valid = true
 		return true
 	var text := _address.text.strip_edges()
-	_address_valid = text == "" or text.begins_with("http://") or text.begins_with("https://") or text.begins_with("browser://") or text.begins_with("hermes://") or (not text.contains(" ") and text.contains(".")) or text == "home.hermes"
+	_address_valid = text == "" or text.begins_with("http://") or text.begins_with("https://") or text.begins_with("about:") or text.begins_with("browser://") or text.begins_with("hermes://") or (not text.contains(" ") and text.contains(".")) or text == "home.hermes"
 	_address.modulate = Color(1, 1, 1, 1) if _address_valid else Color(1, 0.72, 0.72, 1)
 	return _address_valid
 
@@ -2069,6 +2555,7 @@ func debug_get_state() -> Dictionary:
 		"active_tab": _active_tab,
 		"closed_tab_count": _closed_tabs.size(),
 		"url": get_current_url(),
+		"address_text": _address.text if _address != null else "",
 		"title": get_current_title(),
 		"load_state": str(tab.get("load_state", LOAD_IDLE)),
 		"loading": bool(tab.get("loading", false)),
@@ -2086,7 +2573,9 @@ func debug_get_state() -> Dictionary:
 		},
 		"bridge": _bridge_state_snapshot(),
 		"settings": {
-			"home_url": _home_url,
+			"startup_mode": _startup_mode,
+			"custom_home_url": _custom_home_url,
+			"show_favorites_on_new_tab": _show_favorites_on_new_tab,
 			"restore_session": _restore_session_enabled,
 			"search_template": _search_template,
 			"confirm_close_tabs": _confirm_close_tabs,
@@ -2103,8 +2592,16 @@ func debug_get_state() -> Dictionary:
 	}
 
 func debug_apply_settings(values: Dictionary) -> void:
-	if values.has("home_url"):
-		_home_url = _resolver.normalize_user_url(str(values.get("home_url", DEFAULT_URL)))
+	if values.has("startup_mode"):
+		var mode := str(values.get("startup_mode", STARTUP_MODE_NEW_TAB))
+		if mode == STARTUP_MODE_NEW_TAB or mode == STARTUP_MODE_BLANK or mode == STARTUP_MODE_CUSTOM:
+			_startup_mode = mode
+	if values.has("custom_home_url"):
+		var result := _validate_custom_homepage_url(str(values.get("custom_home_url", DEFAULT_URL)))
+		if bool(result.get("ok", false)):
+			_custom_home_url = str(result.get("url", DEFAULT_URL))
+	if values.has("show_favorites_on_new_tab"):
+		_show_favorites_on_new_tab = bool(values.get("show_favorites_on_new_tab", true))
 	if values.has("restore_session"):
 		_restore_session_enabled = bool(values.get("restore_session", true))
 	if values.has("confirm_close_tabs"):

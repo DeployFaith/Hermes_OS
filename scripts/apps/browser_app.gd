@@ -67,6 +67,12 @@ func reload() -> void:
 		surface.call("reload")
 	_sync_controller_from_surface()
 
+func open_home() -> void:
+	var surface = get_browser_surface()
+	if surface != null and surface.has_method("open_home"):
+		surface.call("open_home")
+	_sync_controller_from_surface()
+
 func agent_browser_get_state(args: Dictionary = {}) -> Dictionary:
 	return _call_surface_agent_method("agent_get_state", args, "browser.get_state")
 
@@ -120,7 +126,7 @@ func get_current_url() -> String:
 	var surface = get_browser_surface()
 	if surface != null and surface.has_method("get_current_url"):
 		return str(surface.call("get_current_url"))
-	return "http://home.hermes/"
+	return "about:newtab"
 
 func get_current_title() -> String:
 	var surface = get_browser_surface()

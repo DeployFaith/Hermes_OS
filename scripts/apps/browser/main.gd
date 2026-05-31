@@ -7,6 +7,14 @@ var _shell: Node = null
 var _fs: Object = null
 var _browser_app: Object = null
 var _surface: Control = null
+var _address_input: LineEdit = null
+var _address_context_menu: PopupMenu = null
+
+const ADDRESS_MENU_CUT := 1001
+const ADDRESS_MENU_COPY := 1002
+const ADDRESS_MENU_PASTE := 1003
+const ADDRESS_MENU_SELECT_ALL := 1004
+const ADDRESS_MENU_CLEAR := 1005
 
 func configure_app_context(context: Dictionary) -> void:
 	_shell = context.get("shell", null) as Node
@@ -14,6 +22,7 @@ func configure_app_context(context: Dictionary) -> void:
 	var browser_value: Variant = context.get("browser_app", null)
 	if browser_value is Object:
 		_browser_app = browser_value as Object
+	_setup_address_context_menu()
 	_setup_surface()
 	sync_from_surface()
 
@@ -29,6 +38,7 @@ func _app_ready() -> void:
 			"forward_disabled": true
 		})
 	_setup_surface()
+	_setup_address_context_menu()
 	sync_from_surface()
 
 func get_browser_surface() -> Control:
@@ -129,8 +139,98 @@ func _setup_surface() -> void:
 	if ui == null:
 		return
 	_surface = ui.by_id("browser-surface")
-	if _surface != null and _surface.has_method("set_chrome_visible"):
-		_surface.call("set_chrome_visible", false)
+	if _surface != null:
+		if _surface.has_signal("navigation_state_changed"):
+			var sync_callable := Callable(self, "sync_from_surface")
+			if not _surface.is_connected("navigation_state_changed", sync_callable):
+				_surface.connect("navigation_state_changed", sync_callable)
+		if _surface.has_method("set_chrome_visible"):
+			_surface.call("set_chrome_visible", false)
+
+func _setup_address_context_menu() -> void:
+	if ui == null:
+		return
+	if _address_input != null and is_instance_valid(_address_input):
+		return
+	var node_value: Variant = ui.by_id("browser-address")
+	if not (node_value is LineEdit):
+		return
+	_address_input = node_value as LineEdit
+	var popup := PopupMenu.new()
+	popup.name = "BrowserAddressContextMenu"
+	popup.add_item("Cut", ADDRESS_MENU_CUT)
+	popup.add_item("Copy", ADDRESS_MENU_COPY)
+	popup.add_item("Paste", ADDRESS_MENU_PASTE)
+	popup.add_separator()
+	popup.add_item("Select All", ADDRESS_MENU_SELECT_ALL)
+	popup.add_item("Clear", ADDRESS_MENU_CLEAR)
+	popup.id_pressed.connect(_on_address_context_id_pressed)
+	if _address_input.get_parent() != null:
+		_address_input.get_parent().add_child(popup)
+	_address_context_menu = popup
+	var input_cb := Callable(self, "_on_address_input_gui_input")
+	if not _address_input.gui_input.is_connected(input_cb):
+		_address_input.gui_input.connect(input_cb)
+
+func _on_address_input_gui_input(event: InputEvent) -> void:
+	if _address_input == null or _address_context_menu == null:
+		return
+	if event is InputEventMouseButton:
+		var mouse_event := event as InputEventMouseButton
+		if mouse_event.button_index == MOUSE_BUTTON_RIGHT and mouse_event.pressed:
+			_show_address_context_menu(mouse_event.global_position)
+			if not _address_input.has_focus():
+				_address_input.grab_focus()
+			var viewport := _address_input.get_viewport()
+			if viewport != null:
+				viewport.set_input_as_handled()
+
+func _show_address_context_menu(global_position: Vector2) -> void:
+	if _address_input == null or _address_context_menu == null:
+		return
+	var has_text: bool = _address_input.text != ""
+	var has_selection: bool = _address_input.has_selection()
+	var can_edit: bool = _address_input.editable
+	var clipboard_available: bool = _clipboard_is_available()
+	var can_paste: bool = can_edit and clipboard_available and DisplayServer.clipboard_get() != ""
+	_address_context_menu.set_item_disabled(_address_context_menu.get_item_index(ADDRESS_MENU_CUT), (not can_edit) or (not has_selection))
+	_address_context_menu.set_item_disabled(_address_context_menu.get_item_index(ADDRESS_MENU_COPY), (not clipboard_available) or (not has_selection))
+	_address_context_menu.set_item_disabled(_address_context_menu.get_item_index(ADDRESS_MENU_PASTE), not can_paste)
+	_address_context_menu.set_item_disabled(_address_context_menu.get_item_index(ADDRESS_MENU_SELECT_ALL), not has_text)
+	_address_context_menu.set_item_disabled(_address_context_menu.get_item_index(ADDRESS_MENU_CLEAR), (not can_edit) or (not has_text))
+	_address_context_menu.position = Vector2i(int(global_position.x), int(global_position.y))
+	_address_context_menu.popup()
+
+func _on_address_context_id_pressed(id: int) -> void:
+	if _address_input == null:
+		return
+	match id:
+		ADDRESS_MENU_CUT:
+			_address_input.cut_text()
+		ADDRESS_MENU_COPY:
+			_address_input.copy_text()
+		ADDRESS_MENU_PASTE:
+			if _clipboard_is_available():
+				_address_input.paste_text()
+		ADDRESS_MENU_SELECT_ALL:
+			_address_input.select_all()
+		ADDRESS_MENU_CLEAR:
+			_address_input.clear()
+	if state != null:
+		state.set("address", _address_input.text)
+
+func _clipboard_is_available() -> bool:
+	return DisplayServer.has_feature(DisplayServer.FEATURE_CLIPBOARD)
+
+func debug_get_address_context_actions() -> Array[String]:
+	if _address_context_menu == null:
+		return []
+	var labels: Array[String] = []
+	for index in _address_context_menu.item_count:
+		if _address_context_menu.is_item_separator(index):
+			continue
+		labels.append(_address_context_menu.get_item_text(index))
+	return labels
 
 func _event_or_address(event) -> String:
 	if event != null and "value" in event and "target_id" in event and str(event.target_id) == "browser-address":

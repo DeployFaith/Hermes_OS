@@ -12,8 +12,20 @@
       "routes": {
         "/": "pages/index.html",
         "/interactive": "pages/interactive.html",
+        "/agent-gauntlet": "pages/agent_gauntlet.html",
         "/games": "pages/games.html",
         "/games/snake": "pages/games_snake.html"
+      },
+      "agent_visible": true
+    },
+    {
+      "domain": "agoramarket.com",
+      "title": "Agora Market",
+      "description": "The public market of WorldWeb.",
+      "root": "res://content/hermes_internet/sites/agoramarket.com",
+      "entry": "/",
+      "routes": {
+        "/": "pages/index.html"
       },
       "agent_visible": true
     }

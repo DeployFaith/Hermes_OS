@@ -31,17 +31,17 @@ func resolve(input_url: String) -> Dictionary:
 	var display_url: String = normalize_user_url(input_url)
 	var host: String = extract_host(display_url)
 	var path: String = extract_path_and_query(display_url)
+	if registry.has_site(host):
+		return {
+			"ok": true,
+			"mode": "hermes_internet",
+			"domain": host,
+			"path": path,
+			"display_url": display_url,
+			"local_url": local_url_for(display_url),
+			"site_found": true
+		}
 	if is_hermes_domain_host(host):
-		if registry.has_site(host):
-			return {
-				"ok": true,
-				"mode": "hermes_internet",
-				"domain": host,
-				"path": path,
-				"display_url": display_url,
-				"local_url": local_url_for(display_url),
-				"site_found": true
-			}
 		return {
 			"ok": true,
 			"mode": "hermes_internet_site_not_found",

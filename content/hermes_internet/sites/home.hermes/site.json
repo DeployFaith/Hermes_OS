@@ -6,6 +6,7 @@
   "routes": {
     "/": "pages/index.html",
     "/interactive": "pages/interactive.html",
+    "/agent-gauntlet": "pages/agent_gauntlet.html",
     "/games": "pages/games.html",
     "/games/snake": "pages/games_snake.html"
   },

@@ -26,21 +26,70 @@
   let food = spawnFood();
   let score = 0;
   let gameOver = false;
+  let lastInputKey = "";
 
   statusNode.textContent = "Running local JavaScript game.";
   scoreNode.textContent = String(score);
 
   document.addEventListener("keydown", (event) => {
-    const key = event.key;
+    applyKey(event.key);
+  });
+
+  function applyKey(rawKey) {
+    const key = String(rawKey || "");
     if (key === "ArrowUp" && direction.y !== 1) nextDirection = { x: 0, y: -1 };
     if (key === "ArrowDown" && direction.y !== -1) nextDirection = { x: 0, y: 1 };
     if (key === "ArrowLeft" && direction.x !== 1) nextDirection = { x: -1, y: 0 };
     if (key === "ArrowRight" && direction.x !== -1) nextDirection = { x: 1, y: 0 };
-
     if (gameOver && key.toLowerCase() === "r") {
       reset();
     }
-  });
+    lastInputKey = key;
+    publishState();
+  }
+
+  function publishState() {
+    if (!(window.ipc && typeof window.ipc.postMessage === "function")) {
+      return;
+    }
+    window.ipc.postMessage(JSON.stringify({
+      source: "hermes_interactive",
+      type: "browser_test_state",
+      click_count: 0,
+      typed_text: "",
+      last_key: lastInputKey,
+      last_action: lastInputKey === "" ? "init" : "key",
+      connected: true,
+      document_loaded: true,
+      dom_ready: true,
+      interactive_ready: true,
+    }));
+  }
+
+  function coerceTestInputMessage(event) {
+    const raw = event && (event.detail !== undefined ? event.detail : event.data);
+    if (!raw) return null;
+    if (typeof raw === "string") {
+      try { return JSON.parse(raw); } catch (_err) { return null; }
+    }
+    if (typeof raw === "object") return raw;
+    return null;
+  }
+
+  function handleTestInputMessage(event) {
+    const data = coerceTestInputMessage(event);
+    if (!data || data.type !== "browser_test_input" || data.source !== "hermes_os") {
+      return;
+    }
+    if (String(data.action || "") !== "key") {
+      return;
+    }
+    const payload = data.payload || {};
+    applyKey(String(payload.key || ""));
+  }
+
+  window.addEventListener("message", handleTestInputMessage);
+  document.addEventListener("message", handleTestInputMessage);
 
   function spawnFood() {
     while (true) {
@@ -128,5 +177,6 @@
   }
 
   draw();
+  publishState();
   setInterval(tick, 115);
 })();
