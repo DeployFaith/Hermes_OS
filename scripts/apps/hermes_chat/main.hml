@@ -6,8 +6,7 @@
           <Title id="chat-title">Hermes Chat</Title>
           <Text id="chat-subtitle">Gateway-native assistant for HermesOS.</Text>
         </Column>
-        <FlowRow id="header-actions" class="header-actions" label="Gateway status">
-          <Text id="gateway-status" class="gateway-status" label="Gateway status">{gateway_display_label}</Text>
+        <FlowRow id="header-actions" class="header-actions" label="Header actions">
           <Button id="clear-history" class="clear-history" label="Clear chat" variant="secondary" on:click="clear_history">Clear</Button>
         </FlowRow>
       </AppHeader>

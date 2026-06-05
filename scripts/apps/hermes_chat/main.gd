@@ -41,11 +41,17 @@ func _append_message(role: String, text: String) -> void:
 	var clean_role: String = role.strip_edges().to_lower()
 	if clean_role != "user" and clean_role != "assistant":
 		clean_role = "assistant"
+	var clean_text: String = str(text)
 	var messages_value = state.get_value("messages", [])
 	var messages: Array = []
 	if messages_value is Array:
 		messages = (messages_value as Array).duplicate(true)
-	messages.append({"role": clean_role, "text": str(text)})
+	# Dedup: skip if last message is same role and same text
+	if not messages.is_empty():
+		var last = messages[messages.size() - 1]
+		if last is Dictionary and str(last.get("role", "")) == clean_role and str(last.get("text", "")) == clean_text:
+			return
+	messages.append({"role": clean_role, "text": clean_text})
 	state.set("messages", messages)
 	state.set("has_messages", messages.size() > 0)
 	_update_messages_text()
@@ -112,13 +118,13 @@ func _format_messages() -> String:
 				continue
 			var message: Dictionary = message_value as Dictionary
 			var role: String = str(message.get("role", "assistant"))
-			var label: String = "You" if role == "user" else "Gateway"
+			var label: String = "You" if role == "user" else "Hermes"
 			lines.append(label + ": " + str(message.get("text", "")))
 	var streaming_text: String = state.get_string("streaming_text", "").strip_edges()
 	if streaming_text != "":
-		lines.append("Gateway: " + streaming_text)
+		lines.append("Hermes: " + streaming_text)
 	elif state.get_bool("is_thinking", false):
-		lines.append("Gateway: Hermes is thinking…")
+		lines.append("Hermes: thinking…")
 	return "\n\n".join(lines)
 
 func _on_draft_changed(value) -> void:
