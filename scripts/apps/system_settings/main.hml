@@ -16,6 +16,7 @@
             <List id="SystemSettingsSidebarList" class="system-settings-sidebar-list" label="Settings sections">
               <ListItem id="system-settings-nav-system" value="system" selected="{active_tab == 'system'}" on:select="select_section">System</ListItem>
               <ListItem id="system-settings-nav-appearance" value="appearance" selected="{active_tab == 'appearance'}" on:select="select_section">Appearance</ListItem>
+              <ListItem id="system-settings-nav-window-management" value="window_management" selected="{active_tab == 'window_management'}" on:select="select_section">Window Management</ListItem>
             </List>
           </Sidebar>
 
@@ -54,13 +55,27 @@
               </SettingsSection>
             </SettingsPage>
 
+              <SettingsPage id="SystemSettingsWindowManagementPage" class="system-settings-page" label="Window management settings page" hidden="{!window_management_visible}">
+                <SettingsSection id="SystemSettingsWindowManagementCard" title="Window Management" subtitle="Snap Assist and keyboard window placement">
+                  <SettingsRow id="SystemSettingsSnapAssistRow" label="Snap Assist">
+                    <Toggle id="SystemSettingsSnapAssistToggle" label="Show snap layout options when dragging windows to the top edge" model="snap_assist_enabled" checked="{snap_assist_enabled}" on:change="snap_assist_changed" />
+                  </SettingsRow>
+                  <Text id="SystemSettingsSnapAssistHelp" class="system-settings-muted" label="Snap Assist help">Drag a window to the top edge for layout choices. Use Ctrl+Alt+Arrow keys to move the focused window through halves and corners.</Text>
+                </SettingsSection>
+              </SettingsPage>
+
               <SettingsPage id="SystemSettingsAppearancePage" class="system-settings-page appearance-page" label="Appearance settings page" hidden="{!appearance_visible}">
                 <SettingsSection id="SystemSettingsAppearanceCard" title="Desktop appearance" subtitle="Theme, wallpaper, selection and drag highlight">
                 <SettingsRow id="SystemSettingsThemeModeRow" label="Mode">
                   <Select id="SystemSettingsThemeMode" label="Theme mode" value="{theme_mode}" options="dark:Dark|light:Light" on:change="theme_mode_changed" />
                 </SettingsRow>
-                <SettingsRow id="SystemSettingsHighlightPresetRow" label="Highlight">
-                  <Select id="SystemSettingsHighlightPreset" label="Highlight preset" value="{highlight_preset}" options="Accent:Accent|Mint green:Mint green|Amber:Amber|Rose:Rose" on:change="highlight_preset_changed" />
+                <SettingsRow id="SystemSettingsAccentPickerRow" label="Accent">
+                  <FlowRow id="AccentColorPickerHost" class="accent-color-picker-host" label="Accent color picker">
+                  </FlowRow>
+                </SettingsRow>
+                <SettingsRow id="SystemSettingsHighlightPresetRow" label="Presets">
+                  <FlowRow id="AccentPresetGrid" class="accent-preset-grid" label="Accent color presets">
+                  </FlowRow>
                 </SettingsRow>
                 <SettingsRow id="SystemSettingsHighlightOpacityRow" label="Opacity">
                   <Slider id="SystemSettingsHighlightOpacity" label="Highlight opacity" min="0.14" max="0.7" step="0.01" value="{highlight_alpha}" on:change="highlight_alpha_changed" />
@@ -71,6 +86,10 @@
                   <Button id="SystemSettingsResetIconLayout" label="Reset icon layout" variant="secondary" on:click="reset_icon_layout">Reset icon layout</Button>
                   <Button id="SystemSettingsResetHighlight" label="Reset highlight" variant="ghost" on:click="reset_highlight">Reset highlight</Button>
                 </FlowRow>
+                <SettingsRow id="SystemSettingsWallpapersRow" label="Wallpapers">
+                  <FlowRow id="WallpaperGrid" class="wallpaper-grid" label="Wallpaper previews">
+                  </FlowRow>
+                </SettingsRow>
                 </SettingsSection>
               </SettingsPage>
             </Column>

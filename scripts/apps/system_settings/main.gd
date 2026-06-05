@@ -3,9 +3,15 @@ extends "res://scripts/ui/hermes_ui/runtime/hermes_app_controller.gd"
 const OSFileSystem = preload("res://scripts/os/os_file_system.gd")
 const GATEWAY_TEST_TIMEOUT_MS := 900
 const MCP_TEST_TIMEOUT_MS := 700
+const WALLPAPER_DIR := "res://assets/wallpapers"
 
 var _shell: Node
 var _fs: Object
+var _selected_wallpaper_index: int = 0
+var _wallpaper_files: Array[String] = []
+var _wallpaper_tiles: Array[PanelContainer] = []
+var _accent_picker: ColorPicker
+var _accent_preset_buttons: Array[Button] = []
 
 func _app_ready() -> void:
 	_shell = os.context.get("shell", null) as Node if os != null else null
@@ -14,6 +20,8 @@ func _app_ready() -> void:
 		_fs = _shell.get("_fs") as Object
 	_initialize_state()
 	refresh_settings()
+	_build_accent_controls()
+	_build_wallpaper_grid()
 
 func refresh_settings() -> void:
 	_refresh_page_visibility()
@@ -30,14 +38,15 @@ func get_settings_state() -> Dictionary:
 		"desktop_highlight_color": [_desktop_highlight_color().r, _desktop_highlight_color().g, _desktop_highlight_color().b, _desktop_highlight_color().a],
 		"gateway": _gateway_state(),
 		"mcp": _mcp_state(),
-		"active_tab": state.get_string("active_tab", "system")
+		"active_tab": state.get_string("active_tab", "system"),
+		"snap_assist_enabled": _snap_assist_enabled()
 	}
 
 func restore_settings_state(saved_state: Dictionary) -> void:
 	if state == null:
 		return
 	var active: String = str(saved_state.get("active_tab", state.get_string("active_tab", "system")))
-	if active != "system" and active != "appearance":
+	if active != "system" and active != "appearance" and active != "window_management":
 		active = "system"
 	state.set("active_tab", active)
 	_refresh_page_visibility()
@@ -47,10 +56,19 @@ func select_section(event) -> void:
 	if state == null:
 		return
 	var selected_id: String = str(event.value if event != null else "")
-	if selected_id != "system" and selected_id != "appearance":
+	if selected_id != "system" and selected_id != "appearance" and selected_id != "window_management":
 		return
 	state.set("active_tab", selected_id)
 	_refresh_page_visibility()
+	_refresh_system_info()
+
+func snap_assist_changed(event) -> void:
+	var enabled: bool = bool(event.value if event != null else true)
+	if _shell != null and _shell.has_method("set_snap_assist_enabled"):
+		_shell.call("set_snap_assist_enabled", enabled)
+	if state != null:
+		state.set("snap_assist_enabled", enabled)
+	_set_status("Snap Assist enabled" if enabled else "Snap Assist disabled", false)
 	_refresh_system_info()
 
 func theme_mode_changed(event) -> void:
@@ -86,6 +104,217 @@ func cycle_wallpaper(_event = null) -> void:
 	_cycle_wallpaper()
 	_set_status("Wallpaper cycled", false)
 	_refresh_system_info()
+
+func set_wallpaper(event) -> void:
+	var idx: int = 0
+	if event != null:
+		idx = int(str(event.value))
+	_select_wallpaper_index(idx)
+
+func _scan_wallpaper_files() -> Array[String]:
+	var result: Array[String] = []
+	var dir := DirAccess.open(WALLPAPER_DIR)
+	if dir == null:
+		return result
+	dir.list_dir_begin()
+	var file_name: String = dir.get_next()
+	while file_name != "":
+		if not dir.current_is_dir():
+			var ext: String = file_name.get_extension().to_lower()
+			if ext in ["jpg", "jpeg", "png", "webp"]:
+				result.append(WALLPAPER_DIR.path_join(file_name))
+		file_name = dir.get_next()
+	dir.list_dir_end()
+	result.sort()
+	return result
+
+func _select_wallpaper_index(idx: int) -> void:
+	if _wallpaper_files.is_empty():
+		_wallpaper_files = _scan_wallpaper_files()
+	if idx < 0 or idx >= _wallpaper_files.size():
+		_set_status("Wallpaper selection unavailable", true)
+		return
+	_selected_wallpaper_index = idx
+	if _shell != null:
+		if _shell.has_method("_set_wallpaper_image"):
+			_shell.call("_set_wallpaper_image", _wallpaper_files[idx])
+		else:
+			_shell.set("_current_wallpaper_image", _wallpaper_files[idx])
+			if _shell.has_method("_apply_wallpaper"):
+				_shell.call("_apply_wallpaper")
+	_refresh_wallpaper_grid_selection()
+	_refresh_accent_controls()
+	_set_status("Wallpaper updated", false)
+	_refresh_system_info()
+
+func _build_wallpaper_grid() -> void:
+	if root_control == null:
+		return
+	var grid: Control = _find_control_by_hermes_id(root_control, "WallpaperGrid")
+	if grid == null:
+		call_deferred("_build_wallpaper_grid")
+		return
+	for child in grid.get_children():
+		child.queue_free()
+	_wallpaper_tiles.clear()
+	_wallpaper_files = _scan_wallpaper_files()
+	if _shell != null:
+		var current_path: String = str(_shell.get("_current_wallpaper_image"))
+		var current_index: int = _wallpaper_files.find(current_path)
+		if current_index >= 0:
+			_selected_wallpaper_index = current_index
+	for i in range(_wallpaper_files.size()):
+		var tile := PanelContainer.new()
+		tile.name = "WallpaperTile%d" % i
+		tile.custom_minimum_size = Vector2(150, 84)
+		tile.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		tile.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		var button := TextureButton.new()
+		button.name = "WallpaperPreview%d" % i
+		button.custom_minimum_size = Vector2(142, 76)
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_COVERED
+		button.ignore_texture_size = true
+		button.tooltip_text = _wallpaper_files[i].get_file().get_basename()
+		button.focus_mode = Control.FOCUS_ALL
+		var tex: Texture2D = load(_wallpaper_files[i]) as Texture2D
+		if tex != null:
+			button.texture_normal = tex
+			button.texture_hover = tex
+			button.texture_pressed = tex
+			button.texture_focused = tex
+		button.pressed.connect(_select_wallpaper_index.bind(i))
+		tile.add_child(button)
+		grid.add_child(tile)
+		_wallpaper_tiles.append(tile)
+	_refresh_wallpaper_grid_selection()
+	_refresh_accent_controls()
+
+func _refresh_wallpaper_grid_selection() -> void:
+	var index: int = 0
+	for tile in _wallpaper_tiles:
+		if tile == null:
+			index += 1
+			continue
+		var selected: bool = index == _selected_wallpaper_index
+		tile.add_theme_stylebox_override("panel", _wallpaper_tile_style(selected))
+		index += 1
+
+func _wallpaper_tile_style(selected: bool) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color.TRANSPARENT
+	style.corner_radius_top_left = 9
+	style.corner_radius_top_right = 9
+	style.corner_radius_bottom_left = 9
+	style.corner_radius_bottom_right = 9
+	style.content_margin_left = 4
+	style.content_margin_top = 4
+	style.content_margin_right = 4
+	style.content_margin_bottom = 4
+	if selected:
+		var accent: Color = _desktop_highlight_color()
+		style.border_color = Color(accent.r, accent.g, accent.b, maxf(accent.a, 0.72))
+		style.border_width_left = 3
+		style.border_width_top = 3
+		style.border_width_right = 3
+		style.border_width_bottom = 3
+	else:
+		style.border_color = Color.TRANSPARENT
+	return style
+
+func _find_control_by_hermes_id(root: Node, target_id: String) -> Control:
+	if root == null:
+		return null
+	if root is Control and root.has_meta("hermes_id") and str(root.get_meta("hermes_id")) == target_id:
+		return root as Control
+	for child in root.get_children():
+		var found: Control = _find_control_by_hermes_id(child, target_id)
+		if found != null:
+			return found
+	return null
+
+func _build_accent_controls() -> void:
+	if root_control == null:
+		return
+	var picker_host: Control = _find_control_by_hermes_id(root_control, "AccentColorPickerHost")
+	var preset_grid: Control = _find_control_by_hermes_id(root_control, "AccentPresetGrid")
+	if picker_host == null or preset_grid == null:
+		call_deferred("_build_accent_controls")
+		return
+	for child in picker_host.get_children():
+		child.queue_free()
+	for child in preset_grid.get_children():
+		child.queue_free()
+	_accent_preset_buttons.clear()
+	_accent_picker = ColorPicker.new()
+	_accent_picker.name = "AccentColorPicker"
+	_accent_picker.custom_minimum_size = Vector2(320, 220)
+	_accent_picker.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_accent_picker.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_accent_picker.edit_alpha = false
+	_accent_picker.color = Color(_desktop_highlight_color().r, _desktop_highlight_color().g, _desktop_highlight_color().b, 1.0)
+	_accent_picker.color_changed.connect(_accent_color_changed)
+	picker_host.add_child(_accent_picker)
+	for preset in _desktop_highlight_presets():
+		var button := Button.new()
+		button.text = ""
+		button.tooltip_text = str(preset.get("label", "Preset"))
+		button.custom_minimum_size = Vector2(34, 34)
+		button.focus_mode = Control.FOCUS_ALL
+		var preset_color: Color = preset.get("color", Color.WHITE)
+		button.pressed.connect(_apply_accent_color.bind(preset_color, str(preset.get("label", "Preset"))))
+		preset_grid.add_child(button)
+		_accent_preset_buttons.append(button)
+	_refresh_accent_controls()
+
+func _accent_color_changed(color: Color) -> void:
+	_apply_accent_color(Color(color.r, color.g, color.b, 1.0), "Custom")
+
+func _apply_accent_color(color: Color, label: String = "Custom") -> void:
+	var current: Color = _desktop_highlight_color()
+	_set_desktop_highlight_color(Color(color.r, color.g, color.b, current.a))
+	_update_system_accent(color)
+	_set_desktop_context_status("Desktop accent updated")
+	_set_status("Accent set to " + label, false)
+	_refresh_appearance_state()
+	_refresh_system_info()
+
+func _refresh_accent_controls() -> void:
+	var current: Color = Color(_desktop_highlight_color().r, _desktop_highlight_color().g, _desktop_highlight_color().b, 1.0)
+	if _accent_picker != null and not _accent_picker.color.is_equal_approx(current):
+		_accent_picker.color = current
+	for i in range(_accent_preset_buttons.size()):
+		var button: Button = _accent_preset_buttons[i]
+		if button == null:
+			continue
+		var preset_color: Color = _desktop_highlight_presets()[i].get("color", Color.WHITE)
+		button.add_theme_stylebox_override("normal", _accent_swatch_style(preset_color, preset_color.is_equal_approx(current)))
+		button.add_theme_stylebox_override("hover", _accent_swatch_style(preset_color, true))
+		button.add_theme_stylebox_override("pressed", _accent_swatch_style(preset_color, true))
+		button.add_theme_stylebox_override("focus", _accent_swatch_style(preset_color, true))
+
+func _accent_swatch_style(color: Color, selected: bool) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = color
+	style.corner_radius_top_left = 17
+	style.corner_radius_top_right = 17
+	style.corner_radius_bottom_left = 17
+	style.corner_radius_bottom_right = 17
+	style.content_margin_left = 0
+	style.content_margin_top = 0
+	style.content_margin_right = 0
+	style.content_margin_bottom = 0
+	if selected:
+		var accent: Color = _desktop_highlight_color()
+		style.border_color = Color(accent.r, accent.g, accent.b, 1.0)
+		style.border_width_left = 3
+		style.border_width_top = 3
+		style.border_width_right = 3
+		style.border_width_bottom = 3
+	else:
+		style.border_color = Color.TRANSPARENT
+	return style
 
 func reset_icon_layout(_event = null) -> void:
 	if _shell != null:
@@ -250,6 +479,8 @@ func _initialize_state() -> void:
 		"active_tab": "system",
 		"system_visible": true,
 		"appearance_visible": false,
+		"window_management_visible": false,
+		"snap_assist_enabled": _snap_assist_enabled(),
 		"system_info": "Loading system information…",
 		"status": "System settings ready.",
 		"status_variant": "info",
@@ -275,7 +506,8 @@ func _refresh_page_visibility() -> void:
 	var active: String = state.get_string("active_tab", "system")
 	state.set_many({
 		"system_visible": active == "system",
-		"appearance_visible": active == "appearance"
+		"appearance_visible": active == "appearance",
+		"window_management_visible": active == "window_management"
 	})
 
 func _refresh_appearance_state() -> void:
@@ -286,8 +518,11 @@ func _refresh_appearance_state() -> void:
 		"theme_mode": _theme_mode(),
 		"highlight_preset": _current_highlight_preset(),
 		"highlight_alpha": highlight.a,
-		"highlight_alpha_label": _alpha_label(highlight.a)
+		"highlight_alpha_label": _alpha_label(highlight.a),
+		"snap_assist_enabled": _snap_assist_enabled()
 	})
+	_refresh_wallpaper_grid_selection()
+	_refresh_accent_controls()
 
 func _refresh_gateway_mcp_status() -> void:
 	if state == null:
@@ -312,6 +547,11 @@ func _refresh_gateway_mcp_status() -> void:
 	})
 	_refresh_system_info()
 
+func _snap_assist_enabled() -> bool:
+	if _shell != null and _shell.has_method("is_snap_assist_enabled"):
+		return bool(_shell.call("is_snap_assist_enabled"))
+	return true
+
 func _refresh_system_info() -> void:
 	if state == null or _shell == null or _fs == null:
 		return
@@ -321,7 +561,8 @@ func _refresh_system_info() -> void:
 	var gateway: Dictionary = _gateway_state()
 	var gateway_kind: String = _gateway_kind(gateway)
 	var mcp_state: Dictionary = _mcp_state()
-	state.set("system_info", "Viewport: %s\nGame window: %s\nWindow mode: %s\nCurrent user: %s\nHome: %s\nUsers: %s\nFilesystem save: %s\nApps: %s\nOpen windows: %s\nGateway status: %s\nGateway endpoint: %s\nGateway model: %s\nMCP status: %s\nMCP endpoint: %s" % [
+	state.set("system_info", "Viewport: %s\nGame window: %s\nWindow mode: %s\nCurrent user: %s\nHome: %s\nUsers: %s\nFilesystem save: %s\nApps: %s\nOpen windows: %s\nGateway status: %s\nGateway endpoint: %s\nGateway model: %s\nMCP status: %s\nMCP endpoint: %s
+Snap Assist: %s" % [
 		str(viewport_size),
 		str(window_size),
 		str(mode),
@@ -335,7 +576,8 @@ func _refresh_system_info() -> void:
 		str(gateway.get("endpoint", "http://127.0.0.1:8643/v1/chat/completions")),
 		(_display_model_name(gateway) if _display_model_name(gateway) != "" else "Unknown"),
 		str(mcp_state.get("label", "unavailable")),
-		str(mcp_state.get("endpoint", "127.0.0.1:9090"))
+		str(mcp_state.get("endpoint", "127.0.0.1:9090")),
+		"enabled" if _snap_assist_enabled() else "disabled"
 	])
 
 func _theme_mode() -> String:
@@ -357,10 +599,16 @@ func _desktop_highlight_color() -> Color:
 
 func _desktop_highlight_presets() -> Array[Dictionary]:
 	return [
-		{"label": "Ocean blue", "color": Color(0.34, 0.45, 0.62, 1.0)},
-		{"label": "Mint green", "color": Color(0.35, 0.63, 0.46, 1.0)},
+		{"label": "Ocean", "color": Color(0.34, 0.45, 0.62, 1.0)},
+		{"label": "Sky", "color": Color(0.28, 0.57, 0.92, 1.0)},
+		{"label": "Cyan", "color": Color(0.18, 0.75, 0.85, 1.0)},
+		{"label": "Mint", "color": Color(0.35, 0.63, 0.46, 1.0)},
+		{"label": "Lime", "color": Color(0.55, 0.78, 0.30, 1.0)},
 		{"label": "Amber", "color": Color(0.73, 0.53, 0.27, 1.0)},
-		{"label": "Rose", "color": Color(0.71, 0.39, 0.54, 1.0)}
+		{"label": "Orange", "color": Color(0.86, 0.39, 0.18, 1.0)},
+		{"label": "Rose", "color": Color(0.71, 0.39, 0.54, 1.0)},
+		{"label": "Violet", "color": Color(0.55, 0.43, 0.86, 1.0)},
+		{"label": "Magenta", "color": Color(0.82, 0.31, 0.74, 1.0)}
 	]
 
 func _current_highlight_preset() -> String:
@@ -368,8 +616,8 @@ func _current_highlight_preset() -> String:
 	for preset in _desktop_highlight_presets():
 		var preset_color: Color = preset.get("color", Color.WHITE)
 		if preset_color.is_equal_approx(current):
-			return str(preset.get("label", "Ocean blue"))
-	return "Ocean blue"
+			return str(preset.get("label", "Ocean"))
+	return "Custom"
 
 func _alpha_label(value: float) -> String:
 	return "%d%%" % int(round(value * 100.0))
