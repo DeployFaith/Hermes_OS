@@ -7,6 +7,13 @@
           <Text id="chat-subtitle">Gateway-native assistant for HermesOS.</Text>
         </Column>
         <Text id="gateway-status" class="gateway-status" label="Gateway status">{gateway_display_label}</Text>
+        <Column id="profile-switcher" class="profile-switcher" label="Gateway profile selector">
+          <Text id="profile-status" class="profile-status" label="Current profile">{profile_label}</Text>
+          <FlowRow id="profile-row" class="profile-row" label="Profile controls">
+            <TextInput id="profile-input" class="profile-input" label="Gateway profile" model="profile_draft" placeholder="Profile hint" on:submit="set_profile" />
+            <Button id="profile-apply" label="Apply profile" variant="secondary" disabled="{is_switching_profile}" on:click="set_profile">Apply</Button>
+          </FlowRow>
+        </Column>
         <Column id="model-switcher" class="model-switcher" label="Gateway model selector">
           <Text id="model-status" class="model-status" label="Current model">{model_label}</Text>
           <Dropdown id="model-selector" class="model-selector" label="Gateway model" model="current_model" items="{model_options}" disabled="{is_switching_model}" on:change="set_model" />
@@ -14,21 +21,6 @@
       </AppHeader>
 
       <AppBody id="chat-body" class="chat-body" label="Chat content body">
-        <Column id="computer-use-status" class="computer-use-status" label="Hermes_OS action status" hidden="{!has_action_status}">
-          <Text id="computer-use-status-title" class="computer-use-status-title">{action_status}</Text>
-          <Text id="computer-use-status-detail" class="computer-use-status-detail">{action_status_detail}</Text>
-        </Column>
-
-        <FlowRow id="computer-use-examples" class="computer-use-examples" label="Try examples">
-          <Button id="example-see" label="What can you see?" variant="secondary" disabled="{is_sending}" on:click="ask_what_can_see">What can you see?</Button>
-          <Button id="example-open-browser" label="Open Browser" variant="secondary" disabled="{is_sending}" on:click="example_open_browser">Open Browser</Button>
-          <Button id="example-home" label="Go to home.hermes" variant="secondary" disabled="{is_sending}" on:click="example_go_home">Go to home.hermes</Button>
-          <Button id="example-windows" label="What apps are open?" variant="secondary" disabled="{is_sending}" on:click="example_list_windows">What apps are open?</Button>
-          <Button id="example-click" label="Click first link" variant="secondary" disabled="{is_sending}" on:click="example_click_first_link">Click first link</Button>
-          <Button id="example-type" label="Type hello from Hermes" variant="secondary" disabled="{is_sending}" on:click="example_type_hello">Type hello from Hermes</Button>
-          <Button id="example-scroll" label="Scroll down" variant="secondary" disabled="{is_sending}" on:click="example_scroll_down">Scroll down</Button>
-        </FlowRow>
-
         <ScrollView id="message-scroll" class="message-scroll" label="Messages">
           <Column id="message-list" class="message-list" label="Message list">
             <Column id="empty-state" class="empty-state" label="Empty state" hidden="{has_messages}">

@@ -86,6 +86,11 @@ func set_gateway_model(model_id: String) -> Dictionary:
 		return {"ok": false, "error": "Gateway client unavailable"}
 	return _gateway_client.set_model(model_id)
 
+func set_gateway_profile(profile_hint: String) -> Dictionary:
+	if _gateway_client == null:
+		return {"ok": false, "error": "Gateway client unavailable"}
+	return _gateway_client.set_profile(profile_hint)
+
 func get_context(options: Dictionary = {}) -> Dictionary:
 	if _context_builder == null:
 		return {}

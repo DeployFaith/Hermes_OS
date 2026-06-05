@@ -16,18 +16,22 @@ func _app_ready() -> void:
 	if state == null:
 		return
 	var gateway_status: Dictionary = _agent_gateway_status()
-	var current_model: String = str(gateway_status.get("model", "hermesos")).strip_edges()
-	if current_model == "":
-		current_model = "hermesos"
+	var current_model: String = str(gateway_status.get("model", "")).strip_edges()
+	var current_profile: String = _gateway_profile_from_status(gateway_status)
+	var display_model: String = _display_model_id(current_model)
 	state.set_many({
 		"draft": "",
 		"can_send": false,
 		"is_sending": false,
 		"is_streaming": false,
-		"current_model": current_model,
-		"model_options": ["hermesos", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"],
-		"model_label": "Model: " + current_model,
+		"current_model": display_model,
+		"model_options": _model_options(current_model),
+		"model_label": "Model: " + display_model,
 		"is_switching_model": false,
+		"current_profile": current_profile,
+		"profile_draft": current_profile,
+		"profile_label": "Profile: " + current_profile,
+		"is_switching_profile": false,
 		"streaming_text": "",
 		"streaming_status": "",
 		"has_messages": false,
@@ -42,6 +46,7 @@ func _app_ready() -> void:
 		"gateway_display_label": _gateway_status_state().get("label", "Gateway: Offline")
 	})
 	_configure_model_selector()
+	_configure_profile_input()
 	state.watch("draft", Callable(self, "_on_draft_changed"))
 
 func _on_draft_changed(value) -> void:
@@ -60,7 +65,16 @@ func set_model(event = null) -> void:
 		return
 	var model_id: String = _event_model_id(event)
 	if model_id == "":
-		model_id = state.get_string("current_model", "hermesos").strip_edges()
+		model_id = state.get_string("current_model", "").strip_edges()
+	if model_id == "hermesos":
+		state.set_many({
+			"has_action_status": true,
+			"action_status": "Model switch blocked",
+			"action_status_detail": "hermesos is a Gateway profile hint, not a selectable model."
+		})
+		if ui != null:
+			ui.set_value("model-selector", state.get_string("current_model", ""))
+		return
 	if state.get_bool("is_sending", false) or state.get_bool("is_streaming", false):
 		state.set_many({
 			"has_action_status": true,
@@ -93,11 +107,60 @@ func set_model(event = null) -> void:
 			"has_action_status": true,
 			"action_status": "Model switch blocked",
 			"action_status_detail": error_text,
-			"current_model": state.get_string("current_model", "hermesos")
+			"current_model": state.get_string("current_model", "")
 		})
 		if ui != null:
-			ui.set_value("model-selector", state.get_string("current_model", "hermesos"))
+			ui.set_value("model-selector", state.get_string("current_model", ""))
 	state.set("is_switching_model", false)
+
+func set_profile(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	var profile_id: String = _event_profile_id(event)
+	if profile_id == "":
+		profile_id = state.get_string("profile_draft", "").strip_edges()
+	if profile_id == "":
+		profile_id = state.get_string("current_profile", "").strip_edges()
+	if profile_id == "":
+		return
+	if state.get_bool("is_sending", false) or state.get_bool("is_streaming", false):
+		state.set_many({
+			"has_action_status": true,
+			"action_status": "Cannot change profile during active request",
+			"action_status_detail": "Wait for the current Gateway/MCP request to finish before switching profiles."
+		})
+		return
+	state.set("is_switching_profile", true)
+	var result := {"ok": false, "error": "Gateway client unavailable"}
+	var agent_service = _resolve_agent_service()
+	if agent_service != null and agent_service.has_method("set_gateway_profile"):
+		var value = agent_service.call("set_gateway_profile", profile_id)
+		if value is Dictionary:
+			result = (value as Dictionary).duplicate(true)
+	if bool(result.get("ok", false)):
+		var next_profile: String = str(result.get("profile_hint", profile_id)).strip_edges()
+		if next_profile == "":
+			next_profile = profile_id
+		state.set_many({
+			"current_profile": next_profile,
+			"profile_draft": next_profile,
+			"profile_label": "Profile: " + next_profile,
+			"has_action_status": true,
+			"action_status": "Profile switched",
+			"action_status_detail": "Hermes Gateway profile hint is now " + next_profile + "."
+		})
+		_set_gateway_state(_gateway_status_state())
+	else:
+		state.set_many({
+			"has_action_status": true,
+			"action_status": "Profile switch blocked",
+			"action_status_detail": _model_switch_error_text(result),
+			"profile_draft": state.get_string("current_profile", "")
+		})
+		if ui != null:
+			ui.set_value("profile-input", state.get_string("current_profile", ""))
+	state.set("is_switching_profile", false)
 
 func send_message(event = null) -> void:
 	last_event = event
@@ -110,6 +173,7 @@ func send_message(event = null) -> void:
 	if state.get_bool("is_sending", false) or state.get_bool("is_streaming", false):
 		return
 	send_invocations.append(draft)
+	print("HermesChat: send_message start streaming_attempt=true prompt_len=", draft.length())
 	state.set_many({
 		"is_sending": true,
 		"is_streaming": false,
@@ -123,6 +187,7 @@ func send_message(event = null) -> void:
 	_set_gateway_state({"label": "Gateway: Sending", "variant": "warning"})
 
 	var stream_result: Dictionary = _send_to_gateway_stream(draft)
+	print("HermesChat: stream request result available=", bool(stream_result.get("available", false)), " ok=", bool(stream_result.get("ok", false)))
 	if bool(stream_result.get("available", false)):
 		gateway_results.append(stream_result.duplicate(true))
 		if bool(stream_result.get("ok", false)):
@@ -154,6 +219,7 @@ func send_message(event = null) -> void:
 			"streaming_status": ""
 		})
 
+	print("HermesChat: falling back to non-streaming gateway send")
 	var result: Dictionary = _send_to_gateway(draft)
 	gateway_results.append(result.duplicate(true))
 	var ok: bool = bool(result.get("ok", false))
@@ -218,7 +284,9 @@ func send_message(event = null) -> void:
 func _send_to_gateway_stream(prompt: String) -> Dictionary:
 	var agent_service = _resolve_agent_service()
 	if agent_service == null or not agent_service.has_method("send_user_message_stream"):
+		print("HermesChat: send_user_message_stream unavailable")
 		return {"available": false, "ok": false}
+	print("HermesChat: calling send_user_message_stream")
 	var value = agent_service.call("send_user_message_stream", prompt, {"source": "hermes_chat"})
 	if value is Dictionary:
 		var result: Dictionary = (value as Dictionary).duplicate(true)
@@ -367,6 +435,7 @@ func _on_agent_event(event_name: StringName, payload: Dictionary) -> void:
 			})
 
 func _on_stream_delta(payload: Dictionary) -> void:
+	print("HermesChat: stream_delta_received")
 	if state == null:
 		return
 	var partial: String = str(payload.get("assistant_text_partial", ""))
@@ -430,49 +499,6 @@ func _on_stream_error(payload: Dictionary) -> void:
 		"action_status_detail": error_text
 	})
 	_set_gateway_state({"label": "Gateway: Offline", "variant": "danger"})
-
-func ask_what_can_see(event = null) -> void:
-	last_event = event
-	_send_example("what can you see?")
-
-func example_open_browser(event = null) -> void:
-	last_event = event
-	_send_example("open the browser")
-
-func example_go_home(event = null) -> void:
-	last_event = event
-	_send_example("go to home.hermes")
-
-func example_list_windows(event = null) -> void:
-	last_event = event
-	_send_example("what apps are open?")
-
-func example_click_first_link(event = null) -> void:
-	last_event = event
-	_send_example("click the first link")
-
-func example_type_hello(event = null) -> void:
-	last_event = event
-	_send_example("type hello from Hermes")
-
-func example_scroll_down(event = null) -> void:
-	last_event = event
-	_send_example("scroll down")
-
-func _send_example(prompt: String) -> void:
-	if state == null:
-		return
-	if state.get_bool("is_sending", false) or state.get_bool("is_streaming", false):
-		state.set_many({
-			"has_action_status": true,
-			"action_status": "Hermes_OS action already running",
-			"action_status_detail": "Wait for the current Gateway/MCP request to finish before starting another example."
-		})
-		return
-	state.set("draft", prompt)
-	if ui != null:
-		ui.set_value("message-input", prompt)
-	send_message({"source": "example", "prompt": prompt})
 
 func _action_intent_text(prompt: String) -> String:
 	var lower := prompt.to_lower()
@@ -601,13 +627,42 @@ func _set_gateway_state(value: Dictionary) -> void:
 	state.set("gateway", next)
 	state.set("gateway_display_label", str(next.get("label", "Gateway: Offline")))
 	var gateway_status: Dictionary = _agent_gateway_status()
-	var model: String = str(gateway_status.get("model", state.get_string("current_model", "hermesos"))).strip_edges()
-	if model == "":
-		model = "hermesos"
+	var model: String = _display_model_id(str(gateway_status.get("model", state.get_string("current_model", ""))).strip_edges())
 	state.set("current_model", model)
+	state.set("model_options", _model_options(model))
 	state.set("model_label", "Model: " + model)
+	var profile: String = _gateway_profile_from_status(gateway_status)
+	state.set("current_profile", profile)
+	state.set("profile_draft", profile)
+	state.set("profile_label", "Profile: " + profile)
 	if ui != null:
+		_configure_model_selector()
 		ui.set_value("model-selector", model)
+		ui.set_value("profile-input", profile)
+
+func _display_model_id(model_id: String) -> String:
+	var clean: String = model_id.strip_edges()
+	if clean == "" or clean == "hermesos":
+		return "Gateway default"
+	return clean
+
+func _model_options(current_model: String = "") -> Array[String]:
+	var options: Array[String] = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
+	var clean: String = current_model.strip_edges()
+	if clean != "" and clean != "hermesos" and clean != "Gateway default" and not options.has(clean):
+		options.insert(0, clean)
+	return options
+
+func _gateway_profile_from_status(status: Dictionary) -> String:
+	var profile: String = str(status.get("profile_hint", "")).strip_edges()
+	if profile == "":
+		profile = "hermesos"
+	return profile
+
+func _configure_profile_input() -> void:
+	if state == null or ui == null:
+		return
+	ui.set_value("profile-input", state.get_string("profile_draft", state.get_string("current_profile", "")))
 
 func _configure_model_selector() -> void:
 	if state == null or ui == null:
@@ -627,13 +682,24 @@ func _configure_model_selector() -> void:
 		dropdown.add_item(model_id)
 		var idx: int = dropdown.item_count - 1
 		dropdown.set_item_metadata(idx, model_id)
-	ui.set_value("model-selector", state.get_string("current_model", "hermesos"))
+	ui.set_value("model-selector", state.get_string("current_model", ""))
 
 func _event_model_id(event) -> String:
 	if event == null:
 		return ""
 	if event is Dictionary:
 		for key in ["value", "model", "model_id", "id"]:
+			if (event as Dictionary).has(key):
+				return str((event as Dictionary).get(key, "")).strip_edges()
+	if event is HermesEvent:
+		return str((event as HermesEvent).value).strip_edges()
+	return str(event).strip_edges()
+
+func _event_profile_id(event) -> String:
+	if event == null:
+		return ""
+	if event is Dictionary:
+		for key in ["value", "profile", "profile_hint", "profile_id", "id"]:
 			if (event as Dictionary).has(key):
 				return str((event as Dictionary).get(key, "")).strip_edges()
 	if event is HermesEvent:
@@ -664,7 +730,7 @@ func _agent_gateway_status() -> Dictionary:
 			var gateway_value = (value as Dictionary).get("gateway", {})
 			if gateway_value is Dictionary:
 				return (gateway_value as Dictionary).duplicate(true)
-	return {"configured": false, "busy": false, "model": ""}
+	return {"configured": false, "busy": false, "model": "", "profile_hint": "hermesos"}
 
 func _gateway_result_text(result: Dictionary) -> String:
 	var terminal_result: String = str(result.get("terminal_result", "")).strip_edges()
