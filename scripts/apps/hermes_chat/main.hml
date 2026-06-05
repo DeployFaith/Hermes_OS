@@ -8,6 +8,7 @@
         </Column>
         <FlowRow id="header-actions" class="header-actions" label="Gateway status and settings">
           <Text id="gateway-status" class="gateway-status" label="Gateway status">{gateway_display_label}</Text>
+          <Button id="clear-history" class="clear-history" label="Clear chat" variant="secondary" on:click="clear_history">Clear</Button>
           <Button id="settings-toggle" class="settings-toggle" label="Toggle settings" variant="secondary" on:click="toggle_settings">⚙ Settings</Button>
         </FlowRow>
       </AppHeader>
@@ -38,17 +39,7 @@
               <Text id="empty-body">Ask Hermes to inspect, explain, or operate inside this OS.</Text>
             </Column>
 
-            <Column id="latest-user-message" class="message-card user-message" label="Latest user message" hidden="{!has_user_message}">
-              <Text id="latest-user-label">You</Text>
-              <Text id="latest-user-text">{last_user_message}</Text>
-            </Column>
-
-            <Column id="latest-gateway-message" class="message-card gateway-message" label="Latest Gateway message" hidden="{!has_gateway_message}">
-              <Text id="latest-gateway-label">Gateway</Text>
-              <Text id="thinking-indicator" class="thinking-indicator" hidden="{!is_thinking}">Hermes is thinking…</Text>
-              <Text id="latest-gateway-text">{last_gateway_message}</Text>
-              <Text id="streaming-cursor" class="streaming-cursor" hidden="{!is_streaming}">▌</Text>
-            </Column>
+            <Text id="message-history" class="message-history" label="Message history" hidden="{!has_messages}">{messages_text}</Text>
           </Column>
         </ScrollView>
       </AppBody>

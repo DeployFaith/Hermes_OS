@@ -55,10 +55,15 @@
   align-items: center;
 }
 
-.settings-toggle {
+.settings-toggle,
+.clear-history {
   min-width: 104px;
   min-height: 32px;
   padding: 6px 10px;
+}
+
+.clear-history {
+  min-width: 76px;
 }
 
 .settings-panel {
@@ -148,47 +153,12 @@
   font-size: var(--font-md);
 }
 
-.message-card {
+.message-history {
   padding: var(--space-4);
   border-radius: var(--radius-lg);
   border-width: 1px;
-  border-color: rgba(127, 176, 255, 0.16);
-}
-
-.user-message {
-  background: rgba(127, 176, 255, 0.12);
-  border-color: rgba(127, 176, 255, 0.44);
-}
-
-.gateway-message {
-  background: #151b28;
   border-color: #2b354d;
-}
-
-.streaming-cursor {
-  color: #7fb0ff;
-  font-size: var(--font-md);
-}
-
-.thinking-indicator {
-  color: #7fb0ff;
-  font-size: var(--font-md);
-  opacity: 0.7;
-}
-
-.message-card-body {
-  gap: var(--space-2);
-  align-items: stretch;
-}
-
-#latest-user-label,
-#latest-gateway-label {
-  color: #aeb9ce;
-  font-size: var(--font-sm);
-}
-
-#latest-user-text,
-#latest-gateway-text {
+  background: #151b28;
   color: var(--text);
   font-size: var(--font-md);
 }
