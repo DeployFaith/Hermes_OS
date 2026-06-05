@@ -24,6 +24,7 @@ func _app_ready() -> void:
 		"can_send": false,
 		"is_sending": false,
 		"is_streaming": false,
+		"is_thinking": false,
 		"settings_open": false,
 		"current_model": display_model,
 		"model_options": _model_options(current_model),
@@ -121,6 +122,7 @@ func send_message(event = null) -> void:
 	state.set_many({
 		"is_sending": true,
 		"is_streaming": false,
+		"is_thinking": false,
 		"streaming_text": "",
 		"streaming_status": "",
 		"can_send": false,
@@ -141,8 +143,9 @@ func send_message(event = null) -> void:
 				"draft": "",
 				"is_sending": true,
 				"is_streaming": true,
+				"is_thinking": true,
 				"streaming_text": "",
-				"streaming_status": "Hermes is responding…",
+				"streaming_status": "Hermes is thinking…",
 				"can_send": false,
 				"has_messages": true,
 				"has_user_message": true,
@@ -150,14 +153,15 @@ func send_message(event = null) -> void:
 				"last_user_message": draft,
 				"last_gateway_message": "",
 				"has_action_status": true,
-				"action_status": "Hermes is responding…",
-				"action_status_detail": "Receiving live response chunks from Hermes Gateway."
+				"action_status": "Hermes is thinking…",
+				"action_status_detail": "Hermes is working on your request before response text is available."
 			})
 			_set_gateway_state({"label": "Gateway: Streaming", "variant": "warning"})
 			return
 		state.set_many({
 			"is_sending": false,
 			"is_streaming": false,
+			"is_thinking": false,
 			"streaming_text": "",
 			"streaming_status": ""
 		})
@@ -174,6 +178,7 @@ func send_message(event = null) -> void:
 				"draft": "",
 				"is_sending": true,
 				"is_streaming": false,
+				"is_thinking": false,
 				"streaming_text": "",
 				"streaming_status": "",
 				"can_send": false,
@@ -192,6 +197,7 @@ func send_message(event = null) -> void:
 			"draft": "",
 			"is_sending": false,
 			"is_streaming": false,
+			"is_thinking": false,
 			"streaming_text": "",
 			"streaming_status": "",
 			"can_send": false,
@@ -209,6 +215,7 @@ func send_message(event = null) -> void:
 	state.set_many({
 		"is_sending": false,
 		"is_streaming": false,
+		"is_thinking": false,
 		"streaming_text": "",
 		"streaming_status": "",
 		"can_send": draft != "",
@@ -323,6 +330,7 @@ func _on_agent_event(event_name: StringName, payload: Dictionary) -> void:
 			state.set_many({
 				"is_sending": false,
 				"is_streaming": false,
+				"is_thinking": false,
 				"streaming_text": "",
 				"streaming_status": "",
 				"can_send": state.get_string("draft", "").strip_edges() != "",
@@ -341,6 +349,7 @@ func _on_agent_event(event_name: StringName, payload: Dictionary) -> void:
 			state.set_many({
 				"is_sending": false,
 				"is_streaming": false,
+				"is_thinking": false,
 				"streaming_text": "",
 				"streaming_status": "",
 				"can_send": state.get_string("draft", "").strip_edges() != "",
@@ -384,6 +393,7 @@ func _on_stream_delta(payload: Dictionary) -> void:
 	state.set_many({
 		"is_streaming": true,
 		"is_sending": true,
+		"is_thinking": false,
 		"streaming_text": accumulated,
 		"streaming_status": "Hermes is responding…",
 		"has_messages": true,
@@ -406,6 +416,7 @@ func _on_stream_completed(payload: Dictionary) -> void:
 	state.set_many({
 		"is_streaming": false,
 		"is_sending": false,
+		"is_thinking": false,
 		"streaming_text": "",
 		"streaming_status": "",
 		"can_send": state.get_string("draft", "").strip_edges() != "",
@@ -427,6 +438,7 @@ func _on_stream_error(payload: Dictionary) -> void:
 	state.set_many({
 		"is_streaming": false,
 		"is_sending": false,
+		"is_thinking": false,
 		"streaming_text": "",
 		"streaming_status": "",
 		"can_send": state.get_string("draft", "").strip_edges() != "",

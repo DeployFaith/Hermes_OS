@@ -45,6 +45,7 @@
 
             <Column id="latest-gateway-message" class="message-card gateway-message" label="Latest Gateway message" hidden="{!has_gateway_message}">
               <Text id="latest-gateway-label">Gateway</Text>
+              <Text id="thinking-indicator" class="thinking-indicator" hidden="{!is_thinking}">Hermes is thinking…</Text>
               <Text id="latest-gateway-text">{last_gateway_message}</Text>
               <Text id="streaming-cursor" class="streaming-cursor" hidden="{!is_streaming}">▌</Text>
             </Column>
