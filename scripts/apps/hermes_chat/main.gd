@@ -15,22 +15,12 @@ func _app_ready() -> void:
 	_attach_agent_events()
 	if state == null:
 		return
-	var gateway_status: Dictionary = _agent_gateway_status()
-	var current_model: String = str(gateway_status.get("model", "")).strip_edges()
-	var current_profile: String = _profile_label_from_status(gateway_status)
-	var display_model: String = _display_model_id(current_model)
 	state.set_many({
 		"draft": "",
 		"can_send": false,
 		"is_sending": false,
 		"is_streaming": false,
 		"is_thinking": false,
-		"settings_open": false,
-		"current_model": display_model,
-		"model_options": _model_options(current_model),
-		"model_label": "Model: " + display_model,
-		"is_switching_model": false,
-		"profile_label": current_profile,
 		"messages": [],
 		"messages_text": "",
 		"streaming_text": "",
@@ -42,7 +32,6 @@ func _app_ready() -> void:
 		"gateway": _gateway_status_state(),
 		"gateway_display_label": _gateway_status_state().get("label", "Gateway: Offline")
 	})
-	_configure_model_selector()
 	state.watch("draft", Callable(self, "_on_draft_changed"))
 
 func _append_message(role: String, text: String) -> void:
@@ -131,12 +120,6 @@ func _format_messages() -> String:
 		lines.append("Gateway: Hermes is thinking…")
 	return "\n\n".join(lines)
 
-func toggle_settings(event = null) -> void:
-	last_event = event
-	if state == null:
-		return
-	state.set("settings_open", not state.get_bool("settings_open", false))
-
 func _on_draft_changed(value) -> void:
 	if state == null:
 		return
@@ -146,51 +129,6 @@ func _on_draft_changed(value) -> void:
 func handle_input(event) -> void:
 	last_event = event
 	input_events.append(str(event.value))
-
-func set_model(event = null) -> void:
-	last_event = event
-	if state == null:
-		return
-	var model_id: String = _event_model_id(event)
-	if model_id == "":
-		model_id = state.get_string("current_model", "").strip_edges()
-	if state.get_bool("is_sending", false) or state.get_bool("is_streaming", false):
-		state.set_many({
-			"has_action_status": true,
-			"action_status": "Cannot change model during active request",
-			"action_status_detail": "Wait for the current Gateway/MCP request to finish before switching models."
-		})
-		return
-	state.set("is_switching_model", true)
-	var result := {"ok": false, "error": "Gateway client unavailable"}
-	var agent_service = _resolve_agent_service()
-	if agent_service != null and agent_service.has_method("set_gateway_model"):
-		var value = agent_service.call("set_gateway_model", model_id)
-		if value is Dictionary:
-			result = (value as Dictionary).duplicate(true)
-	if bool(result.get("ok", false)):
-		var next_model: String = str(result.get("model", model_id)).strip_edges()
-		if next_model == "":
-			next_model = model_id
-		state.set_many({
-			"current_model": next_model,
-			"model_label": "Model: " + next_model,
-			"has_action_status": true,
-			"action_status": "Model display updated",
-			"action_status_detail": "Model display only — changing requires Docker config restart"
-		})
-		_set_gateway_state(_gateway_status_state())
-	else:
-		var error_text: String = _model_switch_error_text(result)
-		state.set_many({
-			"has_action_status": true,
-			"action_status": "Model switch blocked",
-			"action_status_detail": error_text,
-			"current_model": state.get_string("current_model", "")
-		})
-		if ui != null:
-			ui.set_value("model-selector", state.get_string("current_model", ""))
-	state.set("is_switching_model", false)
 
 func send_message(event = null) -> void:
 	last_event = event
@@ -640,71 +578,6 @@ func _set_gateway_state(value: Dictionary) -> void:
 	var next: Dictionary = value.duplicate(true)
 	state.set("gateway", next)
 	state.set("gateway_display_label", str(next.get("label", "Gateway: Offline")))
-	var gateway_status: Dictionary = _agent_gateway_status()
-	var model: String = _display_model_id(str(gateway_status.get("model", state.get_string("current_model", ""))).strip_edges())
-	state.set("current_model", model)
-	state.set("model_options", _model_options(model))
-	state.set("model_label", "Model: " + model)
-	state.set("profile_label", _profile_label_from_status(gateway_status))
-	if ui != null:
-		_configure_model_selector()
-		ui.set_value("model-selector", model)
-
-func _display_model_id(model_id: String) -> String:
-	var clean: String = model_id.strip_edges()
-	if clean == "":
-		return "gpt-5.3-codex-spark"
-	return clean
-
-func _model_options(current_model: String = "") -> Array[String]:
-	var options: Array[String] = ["gpt-5.3-codex-spark", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5"]
-	var clean: String = current_model.strip_edges()
-	if clean != "" and not options.has(clean):
-		options.insert(0, clean)
-	return options
-
-func _profile_label_from_status(status: Dictionary) -> String:
-	var profile: String = str(status.get("profile_hint", "")).strip_edges()
-	if profile == "":
-		profile = "hermesos"
-	return profile
-
-func _configure_model_selector() -> void:
-	if state == null or ui == null:
-		return
-	var control: Control = ui.by_id("model-selector")
-	if not (control is OptionButton):
-		return
-	var dropdown := control as OptionButton
-	dropdown.clear()
-	var options = state.get_value("model_options", [])
-	if not (options is Array):
-		options = []
-	for option in options:
-		var model_id: String = str(option).strip_edges()
-		if model_id == "":
-			continue
-		dropdown.add_item(model_id)
-		var idx: int = dropdown.item_count - 1
-		dropdown.set_item_metadata(idx, model_id)
-	ui.set_value("model-selector", state.get_string("current_model", ""))
-
-func _event_model_id(event) -> String:
-	if event == null:
-		return ""
-	if event is Dictionary:
-		for key in ["value", "model", "model_id", "id"]:
-			if (event as Dictionary).has(key):
-				return str((event as Dictionary).get(key, "")).strip_edges()
-	if event is HermesEvent:
-		return str((event as HermesEvent).value).strip_edges()
-	return str(event).strip_edges()
-
-func _model_switch_error_text(result: Dictionary) -> String:
-	var error_value = result.get("error", "Model switch failed")
-	if error_value is Dictionary:
-		return str((error_value as Dictionary).get("message", "Model switch failed")).strip_edges()
-	return str(error_value).strip_edges()
 
 func _resolve_agent_service():
 	if os != null:

@@ -81,11 +81,6 @@ func get_status() -> Dictionary:
 		"operation_router_initialized": _operation_router != null and _operation_router.is_initialized()
 	}
 
-func set_gateway_model(model_id: String) -> Dictionary:
-	if _gateway_client == null:
-		return {"ok": false, "error": "Gateway client unavailable"}
-	return _gateway_client.set_model(model_id)
-
 func get_context(options: Dictionary = {}) -> Dictionary:
 	if _context_builder == null:
 		return {}

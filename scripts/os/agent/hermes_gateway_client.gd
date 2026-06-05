@@ -59,7 +59,7 @@ func configure(config: Dictionary = {}) -> void:
 	if not _path.begins_with("/"):
 		_path = "/" + _path
 	_model = str(config.get("gateway_model", _model)).strip_edges()
-	if _model == "" or _model == "hermesos":
+	if _model == "":
 		_model = DEFAULT_MODEL
 	_profile_hint = str(config.get("gateway_profile_hint", _profile_hint)).strip_edges()
 	if _profile_hint == "":
@@ -89,18 +89,6 @@ func get_status() -> Dictionary:
 		"last_error": _last_error.duplicate(true),
 		"last_response": _last_response.duplicate(true)
 	}
-
-func set_model(model_id: String) -> Dictionary:
-	if _busy:
-		return {"ok": false, "error": "Cannot change model while request is in progress"}
-	var clean := model_id.strip_edges()
-	if clean == "":
-		return {"ok": false, "error": "Model cannot be empty"}
-	if clean == "hermesos":
-		return {"ok": false, "error": "hermesos is a Gateway profile hint, not a model"}
-	_model = clean
-	_emit_status_changed()
-	return {"ok": true, "model": _model}
 
 func send_message(prompt: String, options: Dictionary = {}) -> Dictionary:
 	var clean_prompt := prompt.strip_edges()

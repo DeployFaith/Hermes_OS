@@ -6,30 +6,11 @@
           <Title id="chat-title">Hermes Chat</Title>
           <Text id="chat-subtitle">Gateway-native assistant for HermesOS.</Text>
         </Column>
-        <FlowRow id="header-actions" class="header-actions" label="Gateway status and settings">
+        <FlowRow id="header-actions" class="header-actions" label="Gateway status">
           <Text id="gateway-status" class="gateway-status" label="Gateway status">{gateway_display_label}</Text>
           <Button id="clear-history" class="clear-history" label="Clear chat" variant="secondary" on:click="clear_history">Clear</Button>
-          <Button id="settings-toggle" class="settings-toggle" label="Toggle settings" variant="secondary" on:click="toggle_settings">⚙ Settings</Button>
         </FlowRow>
       </AppHeader>
-
-      <Column id="settings-panel" class="settings-panel" label="Gateway settings" hidden="{!settings_open}">
-        <FlowRow id="settings-row" class="settings-row" label="Gateway profile and model controls">
-          <Column id="settings-status" class="settings-field" label="Gateway status details">
-            <Text id="settings-status-label" class="settings-label">Gateway</Text>
-            <Text id="settings-gateway-status" class="settings-value" label="Gateway status">{gateway_display_label}</Text>
-          </Column>
-          <Column id="profile-summary" class="settings-field" label="Gateway profile summary">
-            <Text id="profile-status" class="settings-label" label="Current profile">Profile</Text>
-            <Text id="profile-value" class="settings-value" label="Gateway profile">{profile_label}</Text>
-          </Column>
-          <Column id="model-switcher" class="settings-field model-switcher" label="Gateway model selector">
-            <Text id="model-status" class="settings-label model-status" label="Current model">Model</Text>
-            <Dropdown id="model-selector" class="model-selector" label="Gateway model" model="current_model" items="{model_options}" disabled="{is_switching_model}" on:change="set_model" />
-            <Text id="model-note" class="settings-note" label="Model change note">Model display only — changing requires Docker config restart</Text>
-          </Column>
-        </FlowRow>
-      </Column>
 
       <AppBody id="chat-body" class="chat-body" label="Chat content body">
         <ScrollView id="message-scroll" class="message-scroll" label="Messages">

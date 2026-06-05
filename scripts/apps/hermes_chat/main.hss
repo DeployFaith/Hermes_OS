@@ -55,7 +55,6 @@
   align-items: center;
 }
 
-.settings-toggle,
 .clear-history {
   min-width: 104px;
   min-height: 32px;
@@ -64,56 +63,6 @@
 
 .clear-history {
   min-width: 76px;
-}
-
-.settings-panel {
-  gap: var(--space-2);
-  padding: var(--space-3);
-  background: rgba(127, 176, 255, 0.055);
-  border-color: rgba(127, 176, 255, 0.16);
-  border-width: 1px;
-  border-radius: var(--radius-lg);
-}
-
-.settings-row {
-  gap: var(--space-3);
-  align-items: end;
-}
-
-.settings-field,
-.model-switcher {
-  min-width: 190px;
-  gap: var(--space-1);
-  align-items: stretch;
-}
-
-.settings-label,
-.model-status {
-  color: #b4bfd3;
-  font-size: var(--font-sm);
-}
-
-.settings-value {
-  color: var(--text);
-  font-size: var(--font-md);
-  min-height: 36px;
-  padding: 9px 0px;
-}
-
-.settings-note {
-  color: #8d99af;
-  font-size: var(--font-sm);
-  min-height: 20px;
-}
-
-.model-selector {
-  min-width: 190px;
-  min-height: 36px;
-  background: #0a0f17;
-  color: var(--text);
-  border-color: #34405c;
-  border-width: 1px;
-  border-radius: var(--radius-md);
 }
 
 .message-scroll {
