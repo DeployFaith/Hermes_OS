@@ -9,6 +9,7 @@ var gateway_results: Array[Dictionary] = []
 var last_event = null
 var _event_bus = null
 var _agent_service = null
+var _stream_handled: bool = false
 
 func _app_ready() -> void:
 	ready_called = true
@@ -141,6 +142,7 @@ func send_message(event = null) -> void:
 	if state.get_bool("is_sending", false) or state.get_bool("is_streaming", false):
 		return
 	send_invocations.append(draft)
+	_stream_handled = false
 	_append_message("user", draft)
 	state.set_many({
 		"is_sending": true,
@@ -330,6 +332,9 @@ func _on_agent_event(event_name: StringName, payload: Dictionary) -> void:
 		return
 	match event_name:
 		OSEventBus.AGENT_RESPONSE_RECEIVED:
+			if _stream_handled:
+				_stream_handled = false
+				return
 			if not state.get_bool("is_sending", false) and not state.get_bool("is_streaming", false):
 				return
 			var assistant_text: String = _clean_user_facing_text(str(payload.get("assistant_text", "")).strip_edges())
@@ -349,6 +354,9 @@ func _on_agent_event(event_name: StringName, payload: Dictionary) -> void:
 				_append_message("assistant", response_text)
 			_set_gateway_state(_gateway_status_state())
 		OSEventBus.AGENT_ERROR:
+			if _stream_handled:
+				_stream_handled = false
+				return
 			if not state.get_bool("is_sending", false) and not state.get_bool("is_streaming", false):
 				return
 			var error_text: String = _clean_user_facing_text(str(payload.get("message", "Hermes Gateway error")))
@@ -429,6 +437,7 @@ func _on_stream_completed(payload: Dictionary) -> void:
 		"action_status": "Hermes reported a result",
 		"action_status_detail": _compact_status_detail(assistant_text)
 	})
+	_stream_handled = true
 	_append_message("assistant", assistant_text)
 	_set_gateway_state(_gateway_status_state())
 
@@ -449,6 +458,7 @@ func _on_stream_error(payload: Dictionary) -> void:
 		"action_status": "Hermes_OS action blocked",
 		"action_status_detail": error_text
 	})
+	_stream_handled = true
 	_append_message("assistant", error_text)
 	_set_gateway_state({"label": "Gateway: Offline", "variant": "danger"})
 
