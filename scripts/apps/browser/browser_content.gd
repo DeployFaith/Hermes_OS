@@ -101,6 +101,8 @@ var _last_browser_overlay_menu_action: Dictionary = {}
 var _last_loaded_document: Dictionary = {}
 var _native_webview_window_visible := true
 var _native_webview_last_rect := Rect2()
+var _native_bounds_debug_enabled := false
+var _native_bounds_debug_last_msec := 0
 var _native_render_debug: Dictionary = {
 	"webview_present": false,
 	"webview_visible": false,
@@ -149,6 +151,7 @@ var _max_closed_tabs := 30
 var _confirm_close_tabs := false
 
 func _ready() -> void:
+	_native_bounds_debug_enabled = OS.get_environment("HERMESOS_BROWSER_BOUNDS_DEBUG") != ""
 	set_meta("window_min_size", Vector2(760, 540))
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -611,6 +614,7 @@ func _build_surface() -> void:
 		_set_status_text("blocked: " + str(diagnosis.get("code", "webview unavailable")))
 	else:
 		_webview = view
+		_prepare_embedded_webview_control()
 		_configure_webview_layout()
 		_webview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_webview.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -1080,11 +1084,28 @@ func _settings_body_label(text: String) -> Label:
 func _configure_webview_layout() -> void:
 	if _webview == null:
 		return
+	_prepare_embedded_webview_control()
 	if "full_window_size" in _webview:
 		_webview.set("full_window_size", false)
 	elif _webview.has_method("set_full_window_size"):
 		_webview.call("set_full_window_size", false)
 	_sync_native_webview_window_state(true)
+
+func _prepare_embedded_webview_control() -> void:
+	if _webview == null or not is_instance_valid(_webview):
+		return
+	if _webview is Control:
+		var control := _webview as Control
+		control.anchor_left = 0.0
+		control.anchor_top = 0.0
+		control.anchor_right = 0.0
+		control.anchor_bottom = 0.0
+		control.offset_left = 0.0
+		control.offset_top = 0.0
+		control.offset_right = 0.0
+		control.offset_bottom = 0.0
+		control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		control.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 func _sync_native_webview_window_state(force := false) -> void:
 	if _webview == null or not is_instance_valid(_webview):
@@ -1092,9 +1113,11 @@ func _sync_native_webview_window_state(force := false) -> void:
 		_native_render_debug["webview_visible"] = false
 		return
 	_native_render_debug["webview_present"] = true
+	_sync_embedded_webview_control_rect()
 	var should_show := _should_show_native_webview()
-	var current_rect := get_global_rect()
+	var current_rect := _native_webview_target_rect()
 	var rect_changed := current_rect != _native_webview_last_rect
+	_log_native_bounds_debug(force, rect_changed, should_show, current_rect)
 	if force or should_show != _native_webview_window_visible:
 		_native_webview_window_visible = should_show
 		if _webview is CanvasItem:
@@ -1115,6 +1138,96 @@ func _sync_native_webview_window_state(force := false) -> void:
 		}
 		if _webview.has_method("resize"):
 			_webview.call("resize")
+
+func _sync_embedded_webview_control_rect() -> void:
+	if _webview == null or not is_instance_valid(_webview) or not (_webview is Control):
+		return
+	var control := _webview as Control
+	if _content_host == null or not is_instance_valid(_content_host):
+		return
+	var visible_rect := _native_webview_visible_global_rect()
+	control.position = visible_rect.position - _content_host.global_position
+	control.size = visible_rect.size
+
+func _native_webview_target_rect() -> Rect2:
+	if _content_host != null and is_instance_valid(_content_host):
+		var visible_rect := _native_webview_visible_global_rect()
+		if visible_rect.size.x > 1.0 and visible_rect.size.y > 1.0:
+			return visible_rect
+	if _webview != null and is_instance_valid(_webview) and _webview is Control:
+		var webview_rect := (_webview as Control).get_global_rect()
+		if webview_rect.size.x > 1.0 and webview_rect.size.y > 1.0:
+			return webview_rect
+	return get_global_rect()
+
+func _native_webview_visible_global_rect() -> Rect2:
+	if _content_host == null or not is_instance_valid(_content_host):
+		return get_global_rect()
+	var rect := _content_host.get_global_rect()
+	var node: Node = _content_host
+	while node != null:
+		if node is Control:
+			var control := node as Control
+			if control.clip_contents:
+				rect = _intersect_rects(rect, control.get_global_rect())
+		node = node.get_parent()
+	return rect
+
+func _intersect_rects(a: Rect2, b: Rect2) -> Rect2:
+	var left := maxf(a.position.x, b.position.x)
+	var top := maxf(a.position.y, b.position.y)
+	var right := minf(a.position.x + a.size.x, b.position.x + b.size.x)
+	var bottom := minf(a.position.y + a.size.y, b.position.y + b.size.y)
+	return Rect2(Vector2(left, top), Vector2(maxf(right - left, 0.0), maxf(bottom - top, 0.0)))
+
+func _rect_debug_payload(rect: Rect2) -> Dictionary:
+	return {
+		"x": rect.position.x,
+		"y": rect.position.y,
+		"w": rect.size.x,
+		"h": rect.size.y
+	}
+
+func _control_rect_debug(control: Control) -> Dictionary:
+	if control == null or not is_instance_valid(control):
+		return {}
+	return _rect_debug_payload(control.get_global_rect())
+
+func _log_native_bounds_debug(force: bool, rect_changed: bool, should_show: bool, target_rect: Rect2) -> void:
+	if not _native_bounds_debug_enabled:
+		return
+	var now := Time.get_ticks_msec()
+	if not force and not rect_changed and now - _native_bounds_debug_last_msec < 160:
+		return
+	_native_bounds_debug_last_msec = now
+	var webview_rect := {}
+	var webview_local := {}
+	if _webview != null and is_instance_valid(_webview) and _webview is Control:
+		var webview_control := _webview as Control
+		webview_rect = _control_rect_debug(webview_control)
+		webview_local = {
+			"x": webview_control.position.x,
+			"y": webview_control.position.y,
+			"w": webview_control.size.x,
+			"h": webview_control.size.y
+		}
+	var window := _find_os_window_ancestor()
+	var payload := {
+		"tag": "browser_bounds",
+		"msec": now,
+		"force": force,
+		"rect_changed": rect_changed,
+		"should_show": should_show,
+		"target": _rect_debug_payload(target_rect),
+		"browser_root": _control_rect_debug(self),
+		"content_host": _control_rect_debug(_content_host),
+		"webview": webview_rect,
+		"webview_local": webview_local,
+		"os_window": _control_rect_debug(window),
+		"visible_in_tree": is_visible_in_tree(),
+		"content_host_visible": _content_host.is_visible_in_tree() if _content_host != null and is_instance_valid(_content_host) else false
+	}
+	print("HERMESOS_BROWSER_BOUNDS_DEBUG ", JSON.stringify(payload))
 
 func _should_show_native_webview() -> bool:
 	if _webview == null or not is_instance_valid(_webview):
