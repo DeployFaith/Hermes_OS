@@ -230,8 +230,9 @@ static func dock_pill(radius: int) -> StyleBoxFlat:
 	return style
 
 static func top_panel() -> StyleBoxFlat:
-	# Thin, subtle bottom divider only. No boxed backgrounds behind labels/icons.
-	var style := build(Color.TRANSPARENT, Color.TRANSPARENT, 0, 0)
+	# Subtle black glass so wallpapers remain visible while topbar controls stay legible.
+	# Alpha 0.25 = roughly 75% transparent.
+	var style := build(Color(0, 0, 0, 0.25), Color.TRANSPARENT, 0, 0)
 	style.border_width_bottom = 1
 	style.border_color = Tokens.alpha(Tokens.BORDER_ACTIVE, 0.35)
 	style.content_margin_left = 0

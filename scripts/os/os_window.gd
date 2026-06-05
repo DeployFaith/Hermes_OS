@@ -4,6 +4,10 @@ extends Panel
 signal close_requested(window: OSWindow)
 signal minimize_requested(window: OSWindow)
 signal focused(window: OSWindow)
+signal float_requested(window: OSWindow)
+signal snap_assist_requested(window: OSWindow, local_mouse: Vector2)
+signal snap_assist_released(window: OSWindow, local_mouse: Vector2)
+signal snap_assist_cancelled(window: OSWindow)
 
 var app_id: String = ""
 var app_title: String = ""
@@ -27,6 +31,14 @@ var _snapped: bool = false
 var _snap_direction: String = ""
 var _snap_restore_position: Vector2 = Vector2.ZERO
 var _snap_restore_size: Vector2 = Vector2.ZERO
+var _tiled: bool = false
+var _tile_restore_position: Vector2 = Vector2.ZERO
+var _tile_restore_size: Vector2 = Vector2.ZERO
+var _has_tile_restore_bounds: bool = false
+var _floating_custom_minimum_size: Vector2 = Vector2.ZERO
+var _pending_tiled_rect: Rect2 = Rect2()
+var _tile_rect_reapply_queued: bool = false
+var _snap_zone_id: String = ""
 
 const MIN_SIZE := Vector2(420, 280)
 const SNAP_THRESHOLD := 16.0
@@ -58,6 +70,103 @@ func set_window_size(requested_size: Vector2) -> void:
 	var min_size := minimum_window_size()
 	size = Vector2(maxf(requested_size.x, min_size.x), maxf(requested_size.y, min_size.y))
 
+func is_tiled() -> bool:
+	return _tiled
+
+func is_floating() -> bool:
+	return not _tiled
+
+func can_tile() -> bool:
+	return true
+
+func set_snap_bounds(zone_id: String, rect: Rect2) -> void:
+	_save_snap_state()
+	_tiled = false
+	_maximized = false
+	_snapped = true
+	_snap_direction = zone_id
+	_snap_zone_id = zone_id
+	custom_minimum_size = Vector2.ZERO
+	position = rect.position
+	size = rect.size
+	if _maximize_button:
+		_maximize_button.text = "□"
+	if _resize_handle:
+		_resize_handle.visible = false
+
+func get_snap_zone_id() -> String:
+	return _snap_zone_id
+
+func restore_from_snap() -> void:
+	if _snapped:
+		position = _snap_restore_position
+		set_window_size(_snap_restore_size)
+	_snapped = false
+	_snap_direction = ""
+	_snap_zone_id = ""
+	custom_minimum_size = _minimum_window_size
+	if _resize_handle and not _maximized:
+		_resize_handle.visible = true
+
+func set_tiled_bounds(rect: Rect2) -> void:
+	if not _tiled:
+		_tile_restore_position = position
+		_tile_restore_size = size
+		_floating_custom_minimum_size = custom_minimum_size
+		_has_tile_restore_bounds = true
+	_tiled = true
+	custom_minimum_size = Vector2.ZERO
+	_maximized = false
+	_snapped = false
+	_snap_direction = ""
+	_snap_zone_id = ""
+	_pending_tiled_rect = rect
+	_apply_tiled_rect(rect)
+	_queue_tiled_rect_reapply()
+	if _maximize_button:
+		_maximize_button.text = "□"
+	if _resize_handle:
+		_resize_handle.visible = false
+
+func _apply_tiled_rect(rect: Rect2) -> void:
+	position = rect.position
+	size = rect.size
+
+func _queue_tiled_rect_reapply() -> void:
+	if _tile_rect_reapply_queued or not is_inside_tree():
+		return
+	_tile_rect_reapply_queued = true
+	var tree := get_tree()
+	if tree == null:
+		_tile_rect_reapply_queued = false
+		return
+	var timer := tree.create_timer(0.18)
+	timer.timeout.connect(func() -> void:
+		_tile_rect_reapply_queued = false
+		if _tiled and is_instance_valid(self):
+			_apply_tiled_rect(_pending_tiled_rect)
+	)
+
+func restore_from_tiling() -> void:
+	if _has_tile_restore_bounds:
+		custom_minimum_size = _floating_custom_minimum_size
+		position = _tile_restore_position
+		set_window_size(_tile_restore_size)
+	else:
+		custom_minimum_size = _minimum_window_size
+	_tiled = false
+	_tile_rect_reapply_queued = false
+	_snap_zone_id = ""
+	if _resize_handle and not _maximized:
+		_resize_handle.visible = true
+
+func mark_floating_from_user_action() -> void:
+	if not _tiled:
+		return
+	float_requested.emit(self)
+	if _tiled:
+		restore_from_tiling()
+
 func set_active(active: bool) -> void:
 	var border: Color = Tokens.BORDER_ACTIVE if active else Tokens.BORDER
 	add_theme_stylebox_override("panel", _window_style(border, active))
@@ -74,6 +183,9 @@ func set_app_title(title: String) -> void:
 		_title_label.text = app_title
 
 func toggle_maximize() -> void:
+	if _tiled:
+		mark_floating_from_user_action()
+		return
 	var parent_control := get_parent() as Control
 	if parent_control == null:
 		return
@@ -207,6 +319,8 @@ func _on_title_bar_gui_input(event: InputEvent) -> void:
 			toggle_maximize()
 			return
 		if event.pressed:
+			if _tiled:
+				mark_floating_from_user_action()
 			_dragging = true
 			_drag_offset = get_global_mouse_position() - global_position
 			if _snapped:
@@ -219,7 +333,7 @@ func _on_title_bar_gui_input(event: InputEvent) -> void:
 				var parent_control := get_parent() as Control
 				if parent_control:
 					var local_mouse := get_global_mouse_position() - parent_control.global_position
-					_try_snap(local_mouse, parent_control.size)
+					snap_assist_released.emit(self, local_mouse)
 	elif event is InputEventMouseMotion and _dragging and not _maximized:
 		var parent_control := get_parent() as Control
 		var target := get_global_mouse_position() - _drag_offset
@@ -228,6 +342,9 @@ func _on_title_bar_gui_input(event: InputEvent) -> void:
 			var max_x: float = maxf(parent_control.size.x - 80.0, 0.0)
 			var max_y: float = maxf(parent_control.size.y - TITLE_HEIGHT, 0.0)
 			position = Vector2(clampf(local_target.x, 0.0, max_x), clampf(local_target.y, 0.0, max_y))
+			var local_mouse := get_global_mouse_position() - parent_control.global_position
+			if local_mouse.y < SNAP_THRESHOLD:
+				snap_assist_requested.emit(self, local_mouse)
 		else:
 			global_position = target
 
@@ -236,6 +353,8 @@ func _on_resize_handle_gui_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
+			if _tiled:
+				mark_floating_from_user_action()
 			_resizing = true
 			_resize_start_mouse = get_global_mouse_position()
 			_resize_start_size = size
@@ -310,8 +429,11 @@ func _base_minimum_size(content: Control) -> Vector2:
 	return MIN_SIZE
 
 func _unsnap_for_drag() -> void:
+	snap_assist_cancelled.emit(self)
 	_snapped = false
 	_snap_direction = ""
+	_snap_zone_id = ""
+	custom_minimum_size = _minimum_window_size
 	var mouse_global := get_global_mouse_position()
 	var new_pos := mouse_global - _snap_restore_size / 2.0
 	var parent_control := get_parent() as Control

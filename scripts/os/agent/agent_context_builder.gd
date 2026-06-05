@@ -75,7 +75,11 @@ func get_visible_windows() -> Array:
 			"app_id": str(window.get("app_id", "")),
 			"title": str(window.get("title", "")),
 			"focused": bool(window.get("focused", false)),
-			"visible": bool(window.get("visible", false))
+			"visible": bool(window.get("visible", false)),
+			"tiled": bool(window.get("tiled", false)),
+			"floating": bool(window.get("floating", true)),
+			"tileable": bool(window.get("tileable", true)),
+			"tiling_layout": str(window.get("tiling_layout", ""))
 		})
 	return result
 

@@ -104,6 +104,18 @@ func _route_operation(operation: String, args: Dictionary) -> Dictionary:
 			return _route_windows_open_app(operation, args)
 		"windows.focus", "windows.focus_window":
 			return _route_windows_focus(operation, args)
+		"windows.tiling.get_state":
+			return _route_windows_tiling_get_state(operation, args)
+		"windows.tiling.toggle":
+			return _route_windows_tiling_toggle(operation, args)
+		"windows.tiling.set_enabled":
+			return _route_windows_tiling_set_enabled(operation, args)
+		"windows.tiling.float_window":
+			return _route_windows_tiling_float_window(operation, args)
+		"windows.tiling.tile_window":
+			return _route_windows_tiling_tile_window(operation, args)
+		"windows.tiling.set_layout":
+			return _route_windows_tiling_set_layout(operation, args)
 		"browser.get_state":
 			return _route_browser_operation(operation, args, "agent_browser_get_state", false)
 		"browser.navigate":
@@ -268,6 +280,47 @@ func _route_windows_focus(operation: String, args: Dictionary) -> Dictionary:
 		return _make_error(operation, "WINDOW_NOT_FOUND", "Window not found")
 	_focus_window_object(target_window)
 	return _make_result(operation, {"window_id": _window_id_for(target_window), "app_id": str(target_window.get("app_id")) if target_window is Object else focus_app_id})
+
+func _route_windows_tiling_get_state(operation: String, _args: Dictionary) -> Dictionary:
+	if _window_manager == null or not _window_manager.has_method("get_tiling_state"):
+		return _make_error(operation, "WINDOW_MANAGER_UNAVAILABLE", "Window manager tiling state is unavailable")
+	return _make_result(operation, {"tiling": _window_manager.call("get_tiling_state")})
+
+func _route_windows_tiling_toggle(operation: String, _args: Dictionary) -> Dictionary:
+	if _window_manager == null or not _window_manager.has_method("toggle_tiling"):
+		return _make_error(operation, "WINDOW_MANAGER_UNAVAILABLE", "Window manager tiling toggle is unavailable")
+	_window_manager.call("toggle_tiling")
+	return _route_windows_tiling_get_state(operation, {})
+
+func _route_windows_tiling_set_enabled(operation: String, args: Dictionary) -> Dictionary:
+	if _window_manager == null or not _window_manager.has_method("set_tiling_enabled"):
+		return _make_error(operation, "WINDOW_MANAGER_UNAVAILABLE", "Window manager tiling set_enabled is unavailable")
+	_window_manager.call("set_tiling_enabled", bool(args.get("enabled", false)))
+	return _route_windows_tiling_get_state(operation, {})
+
+func _route_windows_tiling_float_window(operation: String, args: Dictionary) -> Dictionary:
+	if _window_manager == null or not _window_manager.has_method("float_window"):
+		return _make_error(operation, "WINDOW_MANAGER_UNAVAILABLE", "Window manager tiling float_window is unavailable")
+	var window_id := int(args.get("window_id", 0))
+	if window_id <= 0:
+		return _make_error(operation, "MISSING_ARG", "windows.tiling.float_window requires numeric window_id")
+	_window_manager.call("float_window", window_id)
+	return _route_windows_tiling_get_state(operation, {})
+
+func _route_windows_tiling_tile_window(operation: String, args: Dictionary) -> Dictionary:
+	if _window_manager == null or not _window_manager.has_method("tile_window"):
+		return _make_error(operation, "WINDOW_MANAGER_UNAVAILABLE", "Window manager tiling tile_window is unavailable")
+	var window_id := int(args.get("window_id", 0))
+	if window_id <= 0:
+		return _make_error(operation, "MISSING_ARG", "windows.tiling.tile_window requires numeric window_id")
+	_window_manager.call("tile_window", window_id)
+	return _route_windows_tiling_get_state(operation, {})
+
+func _route_windows_tiling_set_layout(operation: String, args: Dictionary) -> Dictionary:
+	if _window_manager == null or not _window_manager.has_method("set_tiling_layout"):
+		return _make_error(operation, "WINDOW_MANAGER_UNAVAILABLE", "Window manager tiling set_layout is unavailable")
+	_window_manager.call("set_tiling_layout", str(args.get("layout", "tall")))
+	return _route_windows_tiling_get_state(operation, {})
 
 func _route_browser_operation(operation: String, args: Dictionary, method_name: String, open_if_missing: bool) -> Dictionary:
 	var target := _ensure_browser_operation_target(operation, open_if_missing)

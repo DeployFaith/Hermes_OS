@@ -62,6 +62,7 @@ var _agent_operation_router: AgentOperationRouter
 var _fs: OSFileSystem
 
 var _desktop_bg: ColorRect
+var _desktop_wallpaper: TextureRect
 var _desktop_layer: Control
 var _desktop_icons: Control
 var _desktop_context_menu: Panel
@@ -87,6 +88,7 @@ var _user_accent_color: Color = Tokens.ACCENT
 var _window_layer: Control
 var _taskbar_windows: Control
 var _top_panel: Panel
+var _snap_assist_enabled: bool = true
 var _dock_panel: Panel
 var _start_button: Button
 var _status_icons_row: HBoxContainer
@@ -148,6 +150,8 @@ var _light_wallpaper_colors: Array[Color] = [
 	Color("f2e8ef"),
 	Color("edf0f6")
 ]
+var _wallpaper_images: Array[String] = []
+var _current_wallpaper_image: String = ""
 var _files_shortcuts: Array[Dictionary] = []
 var _notes_active_note_id := ""
 var _notes_open_notes: Array[String] = []
@@ -257,6 +261,7 @@ func _ready() -> void:
 	_notification_center.setup(_event_bus)
 	_fs = OSFileSystem.new()
 	_fs.load_or_create()
+	_load_wallpaper_images()
 	_apply_theme_mode(_theme_mode, false)
 	_console_history = ["Type 'help' for commands. Current user: " + _fs.current_user()]
 	_register_apps()
@@ -305,6 +310,7 @@ func _setup_window_manager() -> void:
 	_window_manager.window_focused.connect(_on_window_manager_window_focused)
 	_window_manager.window_minimized.connect(_on_window_manager_window_minimized)
 	_window_manager.window_restored.connect(_on_window_manager_window_restored)
+	_window_manager.set_snap_assist_enabled(_snap_assist_enabled)
 
 func _setup_hermes_agent_service() -> void:
 	_hermes_agent_service = HermesAgentService.new()
@@ -784,6 +790,30 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	elif key_event.keycode == KEY_META or (key_event.ctrl_pressed and key_event.keycode == KEY_SPACE):
 		_toggle_launcher()
 		get_viewport().set_input_as_handled()
+	elif key_event.ctrl_pressed and key_event.alt_pressed and key_event.keycode == KEY_T:
+		_toggle_window_tiling_mode()
+		get_viewport().set_input_as_handled()
+	elif key_event.ctrl_pressed and key_event.alt_pressed and key_event.keycode == KEY_F:
+		_toggle_focused_window_floating()
+		get_viewport().set_input_as_handled()
+	elif key_event.ctrl_pressed and key_event.alt_pressed and key_event.keycode == KEY_LEFT:
+		_snap_focused_window("left")
+		get_viewport().set_input_as_handled()
+	elif key_event.ctrl_pressed and key_event.alt_pressed and key_event.keycode == KEY_RIGHT:
+		_snap_focused_window("right")
+		get_viewport().set_input_as_handled()
+	elif key_event.ctrl_pressed and key_event.alt_pressed and key_event.keycode == KEY_UP:
+		_snap_focused_window("up")
+		get_viewport().set_input_as_handled()
+	elif key_event.ctrl_pressed and key_event.alt_pressed and key_event.keycode == KEY_DOWN:
+		_snap_focused_window("down")
+		get_viewport().set_input_as_handled()
+	elif key_event.ctrl_pressed and key_event.alt_pressed and key_event.keycode == KEY_H:
+		_focus_relative_tiled_window(-1)
+		get_viewport().set_input_as_handled()
+	elif key_event.ctrl_pressed and key_event.alt_pressed and key_event.keycode == KEY_L:
+		_focus_relative_tiled_window(1)
+		get_viewport().set_input_as_handled()
 	elif _focused_text_control_should_keep_key(key_event):
 		get_viewport().set_input_as_handled()
 	elif _launcher and _launcher.visible and key_event.keycode == KEY_DOWN:
@@ -855,10 +885,12 @@ func export_state() -> Dictionary:
 			"active": _session_active,
 			"theme_mode": _theme_mode,
 			"wallpaper_index": _wallpaper_index,
+			"current_wallpaper_image": _current_wallpaper_image,
 			"desktop_icon_positions": _desktop_icon_positions.duplicate(true),
 			"desktop_highlight_color": [_desktop_highlight_color.r, _desktop_highlight_color.g, _desktop_highlight_color.b, _desktop_highlight_color.a],
 			"accent_color": [_user_accent_color.r, _user_accent_color.g, _user_accent_color.b],
-			"files_shortcuts": _files_shortcuts.duplicate(true)
+			"files_shortcuts": _files_shortcuts.duplicate(true),
+			"snap_assist_enabled": _snap_assist_enabled
 		}
 	}
 
@@ -884,6 +916,10 @@ func import_state(state: Dictionary) -> String:
 	var session: Dictionary = state.get("session", {}) if state.get("session", {}) is Dictionary else {}
 	_apply_theme_mode(str(session.get("theme_mode", _theme_mode)), false)
 	_wallpaper_index = clampi(int(session.get("wallpaper_index", _wallpaper_index)), 0, _wallpaper_colors.size() - 1)
+	_current_wallpaper_image = str(session.get("current_wallpaper_image", _current_wallpaper_image))
+	_snap_assist_enabled = bool(session.get("snap_assist_enabled", _snap_assist_enabled))
+	if _window_manager != null:
+		_window_manager.set_snap_assist_enabled(_snap_assist_enabled)
 	_session_active = bool(session.get("active", _session_active))
 	_desktop_icon_positions = session.get("desktop_icon_positions", {}).duplicate(true) if session.get("desktop_icon_positions", {}) is Dictionary else {}
 	_set_desktop_highlight_color(_color_from_variant(session.get("desktop_highlight_color", []), _desktop_highlight_color))
@@ -1027,6 +1063,27 @@ func _refresh_shell_icons() -> void:
 func _apply_wallpaper() -> void:
 	if not _desktop_bg:
 		return
+	if _current_wallpaper_image != "":
+		if _desktop_wallpaper == null:
+			_desktop_wallpaper = TextureRect.new()
+			_desktop_wallpaper.set_anchors_preset(Control.PRESET_FULL_RECT)
+			_desktop_wallpaper.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			_desktop_wallpaper.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+			_desktop_wallpaper.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+			_desktop_wallpaper.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			add_child(_desktop_wallpaper)
+		var tex := load(_current_wallpaper_image) as Texture2D
+		if tex:
+			_desktop_wallpaper.texture = tex
+			_desktop_wallpaper.visible = true
+			_desktop_bg.visible = false
+			if _desktop_layer and _desktop_wallpaper.get_parent() == self:
+				move_child(_desktop_wallpaper, 0)
+			return
+	# color mode
+	if _desktop_wallpaper:
+		_desktop_wallpaper.visible = false
+	_desktop_bg.visible = true
 	if _wallpaper_colors.is_empty():
 		_desktop_bg.color = Tokens.DESKTOP_GRADIENT_TOP
 		return
@@ -2326,10 +2383,49 @@ func _unique_child_path(parent_path: String, base_name: String) -> String:
 	return _fs.join_path(clean_parent, candidate_name)
 
 func _cycle_wallpaper() -> void:
-	_wallpaper_index = (_wallpaper_index + 1) % _wallpaper_colors.size()
+	_load_wallpaper_images()
+	if not _wallpaper_images.is_empty():
+		var next_index: int = 0
+		if _current_wallpaper_image != "":
+			var current_index: int = _wallpaper_images.find(_current_wallpaper_image)
+			if current_index >= 0:
+				next_index = (current_index + 1) % _wallpaper_images.size()
+		_current_wallpaper_image = _wallpaper_images[next_index]
+	else:
+		_current_wallpaper_image = ""
+		_wallpaper_index = (_wallpaper_index + 1) % _wallpaper_colors.size()
 	_apply_wallpaper()
 	_set_desktop_context_status("Wallpaper changed")
 	_queue_state_save()
+
+func _set_wallpaper_image(path: String) -> void:
+	var clean_path: String = path.strip_edges()
+	if clean_path == "":
+		return
+	_load_wallpaper_images()
+	if not _wallpaper_images.has(clean_path):
+		return
+	_current_wallpaper_image = clean_path
+	_apply_wallpaper()
+	_set_desktop_context_status("Wallpaper changed")
+	_queue_state_save()
+
+func _load_wallpaper_images() -> void:
+	_wallpaper_images.clear()
+	var wallpaper_dir := "res://assets/wallpapers"
+	var dir := DirAccess.open(wallpaper_dir)
+	if dir == null:
+		return
+	dir.list_dir_begin()
+	var file_name: String = dir.get_next()
+	while file_name != "":
+		if not dir.current_is_dir():
+			var ext: String = file_name.get_extension().to_lower()
+			if ext in ["jpg", "jpeg", "png", "webp"]:
+				_wallpaper_images.append(wallpaper_dir.path_join(file_name))
+		file_name = dir.get_next()
+	dir.list_dir_end()
+	_wallpaper_images.sort()
 
 func _set_desktop_context_status(message: String, is_error := false) -> void:
 	if not _desktop_status_label:
@@ -2609,10 +2705,13 @@ func _layout() -> void:
 	_clamp_all_desktop_icon_positions()
 	if _desktop_drag_rect and _desktop_drag_selecting:
 		_update_desktop_drag_rect_visual()
-	for key in _open_windows.keys():
-		var window := _open_windows[key] as OSWindow
-		if is_instance_valid(window) and window.visible:
-			_clamp_window_to_layer(window)
+	if _window_manager != null and _window_manager.is_tiling_enabled():
+		_window_manager.reflow_tiled_windows()
+	else:
+		for key in _open_windows.keys():
+			var window := _open_windows[key] as OSWindow
+			if is_instance_valid(window) and window.visible:
+				_clamp_window_to_layer(window)
 
 func _resolve_window_launch_options(app_id: String, app: Dictionary, content: Control) -> Dictionary:
 	var default_size := _default_window_size(app_id, app, content)
@@ -2737,6 +2836,35 @@ func _clamp_window_to_layer(window: OSWindow) -> void:
 	var max_x := maxf(_window_layer.size.x - window.size.x, 0.0)
 	var max_y := maxf(_window_layer.size.y - window.size.y, 0.0)
 	window.position = Vector2(clampf(window.position.x, 0.0, max_x), clampf(window.position.y, 0.0, max_y))
+
+func _toggle_window_tiling_mode() -> void:
+	if _window_manager == null:
+		return
+	_window_manager.toggle_tiling()
+
+func _toggle_focused_window_floating() -> void:
+	if _window_manager == null:
+		return
+	_window_manager.toggle_focused_window_floating()
+
+func _focus_relative_tiled_window(direction: int) -> void:
+	if _window_manager == null:
+		return
+	_window_manager.focus_next_tiled_window(direction)
+
+func set_snap_assist_enabled(enabled: bool) -> void:
+	_snap_assist_enabled = enabled
+	if _window_manager != null:
+		_window_manager.set_snap_assist_enabled(enabled)
+	_queue_state_save()
+
+func is_snap_assist_enabled() -> bool:
+	return _snap_assist_enabled
+
+func _snap_focused_window(direction: String) -> void:
+	if not _snap_assist_enabled or _window_manager == null:
+		return
+	_window_manager.snap_focused_window(direction)
 
 func _focus_window(window: OSWindow) -> void:
 	if _window_manager != null:
