@@ -70,6 +70,27 @@
   font-size: var(--font-sm);
 }
 
+.model-switcher {
+  min-width: 210px;
+  gap: var(--space-1);
+  align-items: stretch;
+}
+
+.model-status {
+  color: #b4bfd3;
+  font-size: var(--font-sm);
+}
+
+.model-selector {
+  min-width: 210px;
+  min-height: 36px;
+  background: #0a0f17;
+  color: var(--text);
+  border-color: #34405c;
+  border-width: 1px;
+  border-radius: var(--radius-md);
+}
+
 .message-scroll {
   flex: 1;
   min-height: 300px;
@@ -122,6 +143,11 @@
 .gateway-message {
   background: #151b28;
   border-color: #2b354d;
+}
+
+.streaming-cursor {
+  color: #7fb0ff;
+  font-size: var(--font-md);
 }
 
 .message-card-body {

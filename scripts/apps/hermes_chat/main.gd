@@ -8,16 +8,28 @@ var send_invocations: Array[String] = []
 var gateway_results: Array[Dictionary] = []
 var last_event = null
 var _event_bus = null
+var _agent_service = null
 
 func _app_ready() -> void:
 	ready_called = true
 	_attach_agent_events()
 	if state == null:
 		return
+	var gateway_status: Dictionary = _agent_gateway_status()
+	var current_model: String = str(gateway_status.get("model", "hermesos")).strip_edges()
+	if current_model == "":
+		current_model = "hermesos"
 	state.set_many({
 		"draft": "",
 		"can_send": false,
 		"is_sending": false,
+		"is_streaming": false,
+		"current_model": current_model,
+		"model_options": ["hermesos", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"],
+		"model_label": "Model: " + current_model,
+		"is_switching_model": false,
+		"streaming_text": "",
+		"streaming_status": "",
 		"has_messages": false,
 		"has_user_message": false,
 		"has_gateway_message": false,
@@ -26,19 +38,66 @@ func _app_ready() -> void:
 		"has_action_status": true,
 		"action_status": "Ready for Hermes_OS actions",
 		"action_status_detail": "Try an example: see the OS, open Browser, go to home.hermes, click, type, or scroll.",
-		"gateway": _gateway_status_state()
+		"gateway": _gateway_status_state(),
+		"gateway_display_label": _gateway_status_state().get("label", "Gateway: Offline")
 	})
+	_configure_model_selector()
 	state.watch("draft", Callable(self, "_on_draft_changed"))
 
 func _on_draft_changed(value) -> void:
 	if state == null:
 		return
 	var clean: String = str(value).strip_edges()
-	state.set("can_send", clean != "" and not state.get_bool("is_sending", false))
+	state.set("can_send", clean != "" and not state.get_bool("is_sending", false) and not state.get_bool("is_streaming", false))
 
 func handle_input(event) -> void:
 	last_event = event
 	input_events.append(str(event.value))
+
+func set_model(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	var model_id: String = _event_model_id(event)
+	if model_id == "":
+		model_id = state.get_string("current_model", "hermesos").strip_edges()
+	if state.get_bool("is_sending", false) or state.get_bool("is_streaming", false):
+		state.set_many({
+			"has_action_status": true,
+			"action_status": "Cannot change model during active request",
+			"action_status_detail": "Wait for the current Gateway/MCP request to finish before switching models."
+		})
+		return
+	state.set("is_switching_model", true)
+	var result := {"ok": false, "error": "Gateway client unavailable"}
+	var agent_service = _resolve_agent_service()
+	if agent_service != null and agent_service.has_method("set_gateway_model"):
+		var value = agent_service.call("set_gateway_model", model_id)
+		if value is Dictionary:
+			result = (value as Dictionary).duplicate(true)
+	if bool(result.get("ok", false)):
+		var next_model: String = str(result.get("model", model_id)).strip_edges()
+		if next_model == "":
+			next_model = model_id
+		state.set_many({
+			"current_model": next_model,
+			"model_label": "Model: " + next_model,
+			"has_action_status": true,
+			"action_status": "Model switched",
+			"action_status_detail": "Hermes Gateway model is now " + next_model + "."
+		})
+		_set_gateway_state(_gateway_status_state())
+	else:
+		var error_text: String = _model_switch_error_text(result)
+		state.set_many({
+			"has_action_status": true,
+			"action_status": "Model switch blocked",
+			"action_status_detail": error_text,
+			"current_model": state.get_string("current_model", "hermesos")
+		})
+		if ui != null:
+			ui.set_value("model-selector", state.get_string("current_model", "hermesos"))
+	state.set("is_switching_model", false)
 
 func send_message(event = null) -> void:
 	last_event = event
@@ -46,19 +105,55 @@ func send_message(event = null) -> void:
 		return
 	var draft: String = state.get_string("draft", "").strip_edges()
 	if draft == "":
-		state.set("gateway", {"label": "Gateway: enter a message", "variant": "warning"})
+		_set_gateway_state({"label": "Gateway: enter a message", "variant": "warning"})
 		return
-	if state.get_bool("is_sending", false):
+	if state.get_bool("is_sending", false) or state.get_bool("is_streaming", false):
 		return
 	send_invocations.append(draft)
 	state.set_many({
 		"is_sending": true,
+		"is_streaming": false,
+		"streaming_text": "",
+		"streaming_status": "",
 		"can_send": false,
 		"has_action_status": true,
 		"action_status": "Attempting Hermes_OS action…",
-		"action_status_detail": _action_intent_text(draft),
-		"gateway": {"label": "Gateway: Sending", "variant": "warning"}
+		"action_status_detail": _action_intent_text(draft)
 	})
+	_set_gateway_state({"label": "Gateway: Sending", "variant": "warning"})
+
+	var stream_result: Dictionary = _send_to_gateway_stream(draft)
+	if bool(stream_result.get("available", false)):
+		gateway_results.append(stream_result.duplicate(true))
+		if bool(stream_result.get("ok", false)):
+			if ui != null:
+				ui.set_value("message-input", "")
+				ui.focus("message-input")
+			state.set_many({
+				"draft": "",
+				"is_sending": true,
+				"is_streaming": true,
+				"streaming_text": "",
+				"streaming_status": "Hermes is responding…",
+				"can_send": false,
+				"has_messages": true,
+				"has_user_message": true,
+				"has_gateway_message": true,
+				"last_user_message": draft,
+				"last_gateway_message": "",
+				"has_action_status": true,
+				"action_status": "Hermes is responding…",
+				"action_status_detail": "Receiving live response chunks from Hermes Gateway."
+			})
+			_set_gateway_state({"label": "Gateway: Streaming", "variant": "warning"})
+			return
+		state.set_many({
+			"is_sending": false,
+			"is_streaming": false,
+			"streaming_text": "",
+			"streaming_status": ""
+		})
+
 	var result: Dictionary = _send_to_gateway(draft)
 	gateway_results.append(result.duplicate(true))
 	var ok: bool = bool(result.get("ok", false))
@@ -70,6 +165,9 @@ func send_message(event = null) -> void:
 			state.set_many({
 				"draft": "",
 				"is_sending": true,
+				"is_streaming": false,
+				"streaming_text": "",
+				"streaming_status": "",
 				"can_send": false,
 				"has_messages": true,
 				"has_user_message": true,
@@ -78,13 +176,16 @@ func send_message(event = null) -> void:
 				"last_gateway_message": "Waiting for Hermes Gateway response…",
 				"has_action_status": true,
 				"action_status": "Hermes is working in Hermes_OS…",
-				"action_status_detail": "Waiting for Gateway/MCP tool results. If blocked, Hermes will report the exact Hermes_OS tool or gate.",
-				"gateway": {"label": "Gateway: Sending", "variant": "warning"}
+				"action_status_detail": "Waiting for Gateway/MCP tool results. If blocked, Hermes will report the exact Hermes_OS tool or gate."
 			})
+			_set_gateway_state({"label": "Gateway: Sending", "variant": "warning"})
 			return
 		state.set_many({
 			"draft": "",
 			"is_sending": false,
+			"is_streaming": false,
+			"streaming_text": "",
+			"streaming_status": "",
 			"can_send": false,
 			"has_messages": true,
 			"has_user_message": true,
@@ -93,12 +194,15 @@ func send_message(event = null) -> void:
 			"last_gateway_message": _gateway_result_text(result),
 			"has_action_status": true,
 			"action_status": "Hermes reported a result",
-			"action_status_detail": _gateway_result_text(result),
-			"gateway": _gateway_status_state()
+			"action_status_detail": _gateway_result_text(result)
 		})
+		_set_gateway_state(_gateway_status_state())
 		return
 	state.set_many({
 		"is_sending": false,
+		"is_streaming": false,
+		"streaming_text": "",
+		"streaming_status": "",
 		"can_send": draft != "",
 		"has_messages": true,
 		"has_user_message": true,
@@ -107,9 +211,20 @@ func send_message(event = null) -> void:
 		"last_gateway_message": _gateway_error_text(result),
 		"has_action_status": true,
 		"action_status": "Hermes_OS action blocked",
-		"action_status_detail": _gateway_error_text(result),
-		"gateway": {"label": "Gateway: Offline", "variant": "danger"}
+		"action_status_detail": _gateway_error_text(result)
 	})
+	_set_gateway_state({"label": "Gateway: Offline", "variant": "danger"})
+
+func _send_to_gateway_stream(prompt: String) -> Dictionary:
+	var agent_service = _resolve_agent_service()
+	if agent_service == null or not agent_service.has_method("send_user_message_stream"):
+		return {"available": false, "ok": false}
+	var value = agent_service.call("send_user_message_stream", prompt, {"source": "hermes_chat"})
+	if value is Dictionary:
+		var result: Dictionary = (value as Dictionary).duplicate(true)
+		result["available"] = true
+		return result
+	return {"available": true, "ok": false, "terminal_result": "Hermes Gateway stream request failed", "error": {"code": "STREAM_RESULT_INVALID", "message": "Hermes Gateway stream request failed"}}
 
 func _send_to_gateway(prompt: String) -> Dictionary:
 	if os != null and os.gateway != null and os.gateway.has_method("send_chat"):
@@ -130,6 +245,7 @@ func _gateway_result_is_async(result: Dictionary) -> bool:
 	return terminal_result.contains("sent to hermes gateway")
 
 func _attach_agent_events() -> void:
+	_attach_streaming_events()
 	if os == null or not (os.context is Dictionary):
 		return
 	var bus_value = os.context.get("event_bus", null)
@@ -143,6 +259,38 @@ func _attach_agent_events() -> void:
 	_event_bus.subscribe(OSEventBus.AGENT_OPERATION_COMPLETED, self, "_on_agent_event")
 	_event_bus.subscribe(OSEventBus.AGENT_OPERATION_FAILED, self, "_on_agent_event")
 
+func _attach_streaming_events() -> void:
+	var agent_service = _resolve_agent_service()
+	if agent_service == null:
+		return
+	_agent_service = agent_service
+	if agent_service.has_signal("stream_delta_received"):
+		var delta_callable := Callable(self, "_on_stream_delta")
+		if not agent_service.is_connected("stream_delta_received", delta_callable):
+			agent_service.connect("stream_delta_received", delta_callable)
+	if agent_service.has_signal("stream_completed"):
+		var completed_callable := Callable(self, "_on_stream_completed")
+		if not agent_service.is_connected("stream_completed", completed_callable):
+			agent_service.connect("stream_completed", completed_callable)
+	if agent_service.has_signal("stream_error"):
+		var error_callable := Callable(self, "_on_stream_error")
+		if not agent_service.is_connected("stream_error", error_callable):
+			agent_service.connect("stream_error", error_callable)
+
+func _detach_streaming_events() -> void:
+	if _agent_service == null:
+		return
+	var delta_callable := Callable(self, "_on_stream_delta")
+	if _agent_service.has_signal("stream_delta_received") and _agent_service.is_connected("stream_delta_received", delta_callable):
+		_agent_service.disconnect("stream_delta_received", delta_callable)
+	var completed_callable := Callable(self, "_on_stream_completed")
+	if _agent_service.has_signal("stream_completed") and _agent_service.is_connected("stream_completed", completed_callable):
+		_agent_service.disconnect("stream_completed", completed_callable)
+	var error_callable := Callable(self, "_on_stream_error")
+	if _agent_service.has_signal("stream_error") and _agent_service.is_connected("stream_error", error_callable):
+		_agent_service.disconnect("stream_error", error_callable)
+	_agent_service = null
+
 func app_unmounted() -> void:
 	if _event_bus != null and _event_bus.has_method("unsubscribe"):
 		_event_bus.unsubscribe(OSEventBus.AGENT_RESPONSE_RECEIVED, self, "_on_agent_event")
@@ -152,6 +300,7 @@ func app_unmounted() -> void:
 		_event_bus.unsubscribe(OSEventBus.AGENT_OPERATION_COMPLETED, self, "_on_agent_event")
 		_event_bus.unsubscribe(OSEventBus.AGENT_OPERATION_FAILED, self, "_on_agent_event")
 	_event_bus = null
+	_detach_streaming_events()
 	super.app_unmounted()
 
 func _on_agent_event(event_name: StringName, payload: Dictionary) -> void:
@@ -159,39 +308,45 @@ func _on_agent_event(event_name: StringName, payload: Dictionary) -> void:
 		return
 	match event_name:
 		OSEventBus.AGENT_RESPONSE_RECEIVED:
-			if not state.get_bool("is_sending", false):
+			if not state.get_bool("is_sending", false) and not state.get_bool("is_streaming", false):
 				return
 			var assistant_text: String = _clean_user_facing_text(str(payload.get("assistant_text", "")).strip_edges())
 			var response_text: String = assistant_text if assistant_text != "" else "(no output)"
 			state.set_many({
 				"is_sending": false,
+				"is_streaming": false,
+				"streaming_text": "",
+				"streaming_status": "",
 				"can_send": state.get_string("draft", "").strip_edges() != "",
 				"has_messages": true,
 				"has_gateway_message": true,
 				"last_gateway_message": response_text,
 				"has_action_status": true,
 				"action_status": "Hermes reported a result",
-				"action_status_detail": _compact_status_detail(response_text),
-				"gateway": _gateway_status_state()
+				"action_status_detail": _compact_status_detail(response_text)
 			})
+			_set_gateway_state(_gateway_status_state())
 		OSEventBus.AGENT_ERROR:
-			if not state.get_bool("is_sending", false):
+			if not state.get_bool("is_sending", false) and not state.get_bool("is_streaming", false):
 				return
 			var error_text: String = _clean_user_facing_text(str(payload.get("message", "Hermes Gateway error")))
 			state.set_many({
 				"is_sending": false,
+				"is_streaming": false,
+				"streaming_text": "",
+				"streaming_status": "",
 				"can_send": state.get_string("draft", "").strip_edges() != "",
 				"has_messages": true,
 				"has_gateway_message": true,
 				"last_gateway_message": error_text,
 				"has_action_status": true,
 				"action_status": "Hermes_OS action blocked",
-				"action_status_detail": error_text,
-				"gateway": {"label": "Gateway: Offline", "variant": "danger"}
+				"action_status_detail": error_text
 			})
+			_set_gateway_state({"label": "Gateway: Offline", "variant": "danger"})
 		OSEventBus.AGENT_STATUS_CHANGED:
-			if not state.get_bool("is_sending", false):
-				state.set("gateway", _gateway_status_state())
+			if not state.get_bool("is_sending", false) and not state.get_bool("is_streaming", false):
+				_set_gateway_state(_gateway_status_state())
 		OSEventBus.AGENT_OPERATION_REQUESTED:
 			state.set_many({
 				"has_action_status": true,
@@ -210,6 +365,71 @@ func _on_agent_event(event_name: StringName, payload: Dictionary) -> void:
 				"action_status": "Blocked: " + _payload_operation(payload),
 				"action_status_detail": _format_operation_detail(payload, true)
 			})
+
+func _on_stream_delta(payload: Dictionary) -> void:
+	if state == null:
+		return
+	var partial: String = str(payload.get("assistant_text_partial", ""))
+	if partial == "":
+		return
+	var accumulated: String = state.get_string("streaming_text", "") + partial
+	state.set_many({
+		"is_streaming": true,
+		"is_sending": true,
+		"streaming_text": accumulated,
+		"streaming_status": "Hermes is responding…",
+		"has_messages": true,
+		"has_gateway_message": true,
+		"last_gateway_message": accumulated,
+		"has_action_status": true,
+		"action_status": "Hermes is responding…",
+		"action_status_detail": "Receiving live response chunks from Hermes Gateway."
+	})
+	_set_gateway_state({"label": "Gateway: Streaming", "variant": "warning"})
+
+func _on_stream_completed(payload: Dictionary) -> void:
+	if state == null:
+		return
+	var assistant_text: String = _clean_user_facing_text(str(payload.get("assistant_text", "")).strip_edges())
+	if assistant_text == "":
+		assistant_text = state.get_string("streaming_text", "").strip_edges()
+	if assistant_text == "":
+		assistant_text = "(no output)"
+	state.set_many({
+		"is_streaming": false,
+		"is_sending": false,
+		"streaming_text": "",
+		"streaming_status": "",
+		"can_send": state.get_string("draft", "").strip_edges() != "",
+		"has_messages": true,
+		"has_gateway_message": true,
+		"last_gateway_message": assistant_text,
+		"has_action_status": true,
+		"action_status": "Hermes reported a result",
+		"action_status_detail": _compact_status_detail(assistant_text)
+	})
+	_set_gateway_state(_gateway_status_state())
+
+func _on_stream_error(payload: Dictionary) -> void:
+	if state == null:
+		return
+	var error_text: String = _clean_user_facing_text(str(payload.get("message", payload.get("error", "Hermes Gateway stream error"))))
+	if error_text == "":
+		error_text = "Hermes Gateway stream error"
+	state.set_many({
+		"is_streaming": false,
+		"is_sending": false,
+		"streaming_text": "",
+		"streaming_status": "",
+		"can_send": state.get_string("draft", "").strip_edges() != "",
+		"has_messages": true,
+		"has_gateway_message": true,
+		"last_gateway_message": error_text,
+		"has_action_status": true,
+		"action_status": "Hermes_OS action blocked",
+		"action_status_detail": error_text
+	})
+	_set_gateway_state({"label": "Gateway: Offline", "variant": "danger"})
 
 func ask_what_can_see(event = null) -> void:
 	last_event = event
@@ -242,7 +462,7 @@ func example_scroll_down(event = null) -> void:
 func _send_example(prompt: String) -> void:
 	if state == null:
 		return
-	if state.get_bool("is_sending", false):
+	if state.get_bool("is_sending", false) or state.get_bool("is_streaming", false):
 		state.set_many({
 			"has_action_status": true,
 			"action_status": "Hermes_OS action already running",
@@ -374,10 +594,70 @@ func _gateway_status_state() -> Dictionary:
 		return {"label": "Gateway: Online", "variant": "success"}
 	return {"label": "Gateway: Offline", "variant": "danger"}
 
+func _set_gateway_state(value: Dictionary) -> void:
+	if state == null:
+		return
+	var next: Dictionary = value.duplicate(true)
+	state.set("gateway", next)
+	state.set("gateway_display_label", str(next.get("label", "Gateway: Offline")))
+	var gateway_status: Dictionary = _agent_gateway_status()
+	var model: String = str(gateway_status.get("model", state.get_string("current_model", "hermesos"))).strip_edges()
+	if model == "":
+		model = "hermesos"
+	state.set("current_model", model)
+	state.set("model_label", "Model: " + model)
+	if ui != null:
+		ui.set_value("model-selector", model)
+
+func _configure_model_selector() -> void:
+	if state == null or ui == null:
+		return
+	var control: Control = ui.by_id("model-selector")
+	if not (control is OptionButton):
+		return
+	var dropdown := control as OptionButton
+	dropdown.clear()
+	var options = state.get_value("model_options", [])
+	if not (options is Array):
+		options = []
+	for option in options:
+		var model_id: String = str(option).strip_edges()
+		if model_id == "":
+			continue
+		dropdown.add_item(model_id)
+		var idx: int = dropdown.item_count - 1
+		dropdown.set_item_metadata(idx, model_id)
+	ui.set_value("model-selector", state.get_string("current_model", "hermesos"))
+
+func _event_model_id(event) -> String:
+	if event == null:
+		return ""
+	if event is Dictionary:
+		for key in ["value", "model", "model_id", "id"]:
+			if (event as Dictionary).has(key):
+				return str((event as Dictionary).get(key, "")).strip_edges()
+	if event is HermesEvent:
+		return str((event as HermesEvent).value).strip_edges()
+	return str(event).strip_edges()
+
+func _model_switch_error_text(result: Dictionary) -> String:
+	var error_value = result.get("error", "Model switch failed")
+	if error_value is Dictionary:
+		return str((error_value as Dictionary).get("message", "Model switch failed")).strip_edges()
+	return str(error_value).strip_edges()
+
+func _resolve_agent_service():
+	if os != null:
+		if os.context is Dictionary:
+			var context_service = os.context.get("agent_service", null)
+			if context_service != null:
+				return context_service
+		if os.has_method("hermes_agent_service"):
+			return os.call("hermes_agent_service")
+	return null
+
 func _agent_gateway_status() -> Dictionary:
-	var agent_service = null
-	if os != null and os.context is Dictionary:
-		agent_service = os.context.get("agent_service", null)
+	var agent_service = _resolve_agent_service()
 	if agent_service != null and agent_service.has_method("get_status"):
 		var value = agent_service.call("get_status")
 		if value is Dictionary:

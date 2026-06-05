@@ -6,7 +6,11 @@
           <Title id="chat-title">Hermes Chat</Title>
           <Text id="chat-subtitle">Gateway-native assistant for HermesOS.</Text>
         </Column>
-        <Text id="gateway-status" class="gateway-status" label="Gateway status">{gateway.label}</Text>
+        <Text id="gateway-status" class="gateway-status" label="Gateway status">{gateway_display_label}</Text>
+        <Column id="model-switcher" class="model-switcher" label="Gateway model selector">
+          <Text id="model-status" class="model-status" label="Current model">{model_label}</Text>
+          <Dropdown id="model-selector" class="model-selector" label="Gateway model" model="current_model" items="{model_options}" disabled="{is_switching_model}" on:change="set_model" />
+        </Column>
       </AppHeader>
 
       <AppBody id="chat-body" class="chat-body" label="Chat content body">
@@ -40,6 +44,7 @@
             <Column id="latest-gateway-message" class="message-card gateway-message" label="Latest Gateway message" hidden="{!has_gateway_message}">
               <Text id="latest-gateway-label">Gateway</Text>
               <Text id="latest-gateway-text">{last_gateway_message}</Text>
+              <Text id="streaming-cursor" class="streaming-cursor" hidden="{!is_streaming}">▌</Text>
             </Column>
           </Column>
         </ScrollView>

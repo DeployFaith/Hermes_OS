@@ -6,6 +6,9 @@ const AgentContextBuilder = preload("res://scripts/os/agent/agent_context_builde
 const AgentOperationRouter = preload("res://scripts/os/agent/agent_operation_router.gd")
 const HermesGatewayClient = preload("res://scripts/os/agent/hermes_gateway_client.gd")
 
+signal stream_delta_received(payload: Dictionary)
+signal stream_completed(payload: Dictionary)
+
 var _shell: Node
 var _event_bus: OSEventBus
 var _notification_center: RefCounted
@@ -22,6 +25,7 @@ var _last_message: String = ""
 var _last_response: Dictionary = {}
 var _last_error: Dictionary = {}
 var _last_context: Dictionary = {}
+var _streaming_mode: bool = false
 
 func os_agent_init(context: Dictionary) -> void:
 	_shell = context.get("shell", null) as Node
@@ -56,6 +60,8 @@ func os_agent_init(context: Dictionary) -> void:
 	_gateway_client.response_received.connect(_on_gateway_response_received)
 	_gateway_client.error_received.connect(_on_gateway_error_received)
 	_gateway_client.status_changed.connect(_on_gateway_status_changed)
+	_gateway_client.stream_delta_received.connect(_on_gateway_stream_delta)
+	_gateway_client.stream_completed.connect(_on_gateway_stream_completed)
 	_initialized = true
 	_emit_status_changed()
 
@@ -64,6 +70,7 @@ func get_status() -> Dictionary:
 	return {
 		"initialized": _initialized,
 		"busy": _busy or bool(gateway_state.get("busy", false)),
+		"streaming_mode": _streaming_mode,
 		"connected": bool(gateway_state.get("configured", false)),
 		"gateway": gateway_state.duplicate(true),
 		"bridge": _bridge_state().duplicate(true),
@@ -73,6 +80,11 @@ func get_status() -> Dictionary:
 		"last_context": _last_context.duplicate(true),
 		"operation_router_initialized": _operation_router != null and _operation_router.is_initialized()
 	}
+
+func set_gateway_model(model_id: String) -> Dictionary:
+	if _gateway_client == null:
+		return {"ok": false, "error": "Gateway client unavailable"}
+	return _gateway_client.set_model(model_id)
 
 func get_context(options: Dictionary = {}) -> Dictionary:
 	if _context_builder == null:
@@ -108,6 +120,9 @@ func describe_operation(operation: String) -> Dictionary:
 func send_user_message(message: String, options: Dictionary = {}) -> Dictionary:
 	return _send_message(message, options)
 
+func send_user_message_stream(message: String, options: Dictionary = {}) -> Dictionary:
+	return _send_message_stream(message, options)
+
 func send_terminal_message(message: String, terminal_context: Dictionary = {}) -> Dictionary:
 	var options: Dictionary = terminal_context.duplicate(true)
 	options["source"] = str(options.get("source", "terminal"))
@@ -117,6 +132,7 @@ func notify_response(payload: Dictionary) -> void:
 	_last_response = payload.duplicate(true)
 	_last_error.clear()
 	_busy = false
+	_streaming_mode = false
 	_emit_service_event(OSEventBus.AGENT_RESPONSE_RECEIVED, payload)
 	_emit_status_changed()
 
@@ -124,6 +140,7 @@ func notify_error(message: String, details: Dictionary = {}) -> void:
 	_last_error = details.duplicate(true)
 	_last_error["message"] = message
 	_busy = false
+	_streaming_mode = false
 	_emit_service_event(OSEventBus.AGENT_ERROR, _last_error)
 	_emit_status_changed()
 
@@ -162,6 +179,46 @@ func _send_message(message: String, options: Dictionary) -> Dictionary:
 	_last_response = {"queued": true, "terminal_result": str(response.get("terminal_result", "Sent to Hermes Gateway")), "gateway": _gateway_client.get_status()}
 	_emit_status_changed()
 	return {"ok": true, "terminal_result": str(response.get("terminal_result", "Sent to Hermes Gateway")), "result": _last_response.duplicate(true), "context": _last_context.duplicate(true)}
+
+func _send_message_stream(message: String, options: Dictionary) -> Dictionary:
+	var prompt: String = message.strip_edges()
+	_last_message = prompt
+	_last_response.clear()
+	_last_error.clear()
+	if prompt == "":
+		notify_error("Usage: hermes <prompt>", {"code": "MISSING_PROMPT"})
+		return {"ok": false, "terminal_result": "Usage: hermes <prompt>", "error": _last_error.duplicate(true)}
+
+	_last_context = _build_terminal_context(prompt, options)
+	_busy = true
+	_streaming_mode = true
+	_emit_status_changed()
+	var terminal_context: Dictionary = _last_context.get("terminal", {}) if _last_context.get("terminal", {}) is Dictionary else {}
+	var payload: Dictionary = {
+		"prompt": prompt,
+		"cwd": str(terminal_context.get("cwd", options.get("cwd", _home_path()))),
+		"user": str(terminal_context.get("user", options.get("user", _current_user()))),
+		"timestamp": int(options.get("timestamp", Time.get_unix_time_from_system())),
+		"source": str(options.get("source", "user")),
+		"context": _last_context.duplicate(true),
+		"stream": true
+	}
+	_emit_service_event(OSEventBus.AGENT_MESSAGE_SENT, payload)
+	if _gateway_client == null:
+		_streaming_mode = false
+		notify_error("Hermes Gateway client is unavailable.", {"code": "GATEWAY_UNAVAILABLE"})
+		return {"ok": false, "terminal_result": "Hermes Gateway client is unavailable.", "error": _last_error.duplicate(true), "context": _last_context.duplicate(true)}
+	var request_options := _last_context.duplicate(true)
+	request_options["terminal"] = terminal_context.duplicate(true)
+	request_options["system"] = _hermes_os_control_system_prompt()
+	var response: Dictionary = _gateway_client.send_message_stream(prompt, request_options)
+	if not bool(response.get("ok", false)):
+		_streaming_mode = false
+		notify_error(str(response.get("terminal_result", "Hermes Gateway stream request failed")), response.get("error", {}) if response.get("error", {}) is Dictionary else {})
+		return {"ok": false, "terminal_result": str(response.get("terminal_result", "Hermes Gateway stream request failed")), "error": _last_error.duplicate(true), "context": _last_context.duplicate(true)}
+	_last_response = {"queued": true, "streaming": true, "terminal_result": str(response.get("terminal_result", "Streaming from Hermes Gateway")), "gateway": _gateway_client.get_status()}
+	_emit_status_changed()
+	return {"ok": true, "terminal_result": str(response.get("terminal_result", "Streaming from Hermes Gateway")), "result": _last_response.duplicate(true), "context": _last_context.duplicate(true)}
 
 func _build_terminal_context(prompt: String, options: Dictionary) -> Dictionary:
 	if _context_builder == null:
@@ -236,10 +293,27 @@ func _on_gateway_response_received(payload: Dictionary) -> void:
 	_emit_service_event(OSEventBus.AGENT_RESPONSE_RECEIVED, payload)
 	_emit_status_changed()
 
+func _on_gateway_stream_delta(text: String) -> void:
+	var payload := {"assistant_text_partial": text, "source": "gateway_stream"}
+	stream_delta_received.emit(payload)
+
+func _on_gateway_stream_completed(full_text: String) -> void:
+	var payload := {
+		"ok": true,
+		"assistant_text": full_text,
+		"source": "gateway_stream",
+		"context": _last_context.duplicate(true),
+		"gateway": _gateway_client.get_status() if _gateway_client != null else {}
+	}
+	_streaming_mode = false
+	notify_response(payload)
+	stream_completed.emit(payload)
+
 func _on_gateway_error_received(message: String, details: Dictionary) -> void:
 	_last_error = details.duplicate(true)
 	_last_error["message"] = message
 	_busy = false
+	_streaming_mode = false
 	var terminal_session_id := ""
 	var last_terminal: Dictionary = _last_context.get("terminal", {}) if _last_context.get("terminal", {}) is Dictionary else {}
 	terminal_session_id = str(last_terminal.get("terminal_session_id", ""))
