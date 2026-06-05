@@ -76,16 +76,14 @@
 }
 
 .settings-field,
-.model-switcher,
-.profile-switcher {
+.model-switcher {
   min-width: 190px;
   gap: var(--space-1);
   align-items: stretch;
 }
 
 .settings-label,
-.model-status,
-.profile-status {
+.model-status {
   color: #b4bfd3;
   font-size: var(--font-sm);
 }
@@ -97,8 +95,13 @@
   padding: 9px 0px;
 }
 
-.model-selector,
-.profile-selector {
+.settings-note {
+  color: #8d99af;
+  font-size: var(--font-sm);
+  min-height: 20px;
+}
+
+.model-selector {
   min-width: 190px;
   min-height: 36px;
   background: #0a0f17;

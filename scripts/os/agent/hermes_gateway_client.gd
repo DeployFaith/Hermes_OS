@@ -12,7 +12,7 @@ const HermesGatewayStreamParser = preload("res://scripts/os/agent/hermes_gateway
 const DEFAULT_HOST := "127.0.0.1"
 const DEFAULT_PORT := 8643
 const DEFAULT_PATH := "/v1/chat/completions"
-const DEFAULT_MODEL := "gpt-5.5"
+const DEFAULT_MODEL := "gpt-5.3-codex-spark"
 const DEFAULT_PROFILE_HINT := "hermesos"
 const DEFAULT_API_KEY := ""
 const DEFAULT_TIMEOUT_SECONDS := 120.0
@@ -102,16 +102,6 @@ func set_model(model_id: String) -> Dictionary:
 	_emit_status_changed()
 	return {"ok": true, "model": _model}
 
-func set_profile(profile_hint: String) -> Dictionary:
-	if _busy:
-		return {"ok": false, "error": "Cannot change profile while request is in progress"}
-	var clean := profile_hint.strip_edges()
-	if clean == "":
-		return {"ok": false, "error": "Profile cannot be empty"}
-	_profile_hint = clean
-	_emit_status_changed()
-	return {"ok": true, "profile_hint": _profile_hint}
-
 func send_message(prompt: String, options: Dictionary = {}) -> Dictionary:
 	var clean_prompt := prompt.strip_edges()
 	if clean_prompt == "":
@@ -137,7 +127,6 @@ func send_message(prompt: String, options: Dictionary = {}) -> Dictionary:
 	if system_text != "":
 		messages.append({"role": "system", "content": system_text})
 	messages.append({"role": "user", "content": clean_prompt})
-	print("HermesGatewayClient: send_message request model=", _model, " profile_hint=", _profile_hint)
 	var body := JSON.stringify({
 		"model": _model,
 		"profile_hint": _profile_hint,
@@ -185,7 +174,6 @@ func send_message_stream(prompt: String, options: Dictionary = {}) -> Dictionary
 		_busy = false
 		return _fail("STREAM_CONNECT_FAILED", "Could not connect to Hermes Gateway streaming endpoint", {"godot_error": err})
 	_ensure_stream_poll_timer()
-	print("HermesGatewayClient: stream poll timer starting model=", _model, " profile_hint=", _profile_hint)
 	_stream_poll_timer.start()
 	_emit_status_changed()
 	return {"ok": true, "terminal_result": "Streaming from Hermes Gateway: " + clean_prompt, "endpoint": _endpoint_url()}
@@ -294,7 +282,6 @@ func _start_stream_request() -> void:
 	if system_text != "":
 		messages.append({"role": "system", "content": system_text})
 	messages.append({"role": "user", "content": _pending_prompt})
-	print("HermesGatewayClient: _start_stream_request model=", _model, " profile_hint=", _profile_hint)
 	var body := JSON.stringify({
 		"model": _model,
 		"profile_hint": _profile_hint,
