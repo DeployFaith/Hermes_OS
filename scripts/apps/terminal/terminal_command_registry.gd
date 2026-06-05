@@ -33,3 +33,18 @@ func get_help_text() -> String:
 		for entry in entries_value:
 			lines.append(str(entry))
 	return "\n".join(lines)
+
+func get_command_names() -> Array[String]:
+	var names: Array[String] = []
+	for module in _modules:
+		if not module.has_method("command_names"):
+			continue
+		var value: Variant = module.call("command_names")
+		if not (value is Array):
+			continue
+		for item in value:
+			var name := str(item)
+			if name != "" and not names.has(name):
+				names.append(name)
+	names.sort()
+	return names

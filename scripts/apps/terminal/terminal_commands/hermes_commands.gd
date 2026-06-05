@@ -6,6 +6,9 @@ const COMMANDS: Array[String] = ["hermes"]
 func has_command(command: String) -> bool:
 	return COMMANDS.has(command)
 
+func command_names() -> Array[String]:
+	return COMMANDS.duplicate()
+
 func help_entries() -> Array[String]:
 	return ["hermes <prompt>"]
 

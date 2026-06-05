@@ -81,6 +81,14 @@ func focus_terminal_input() -> void:
 	if _surface != null and _surface.has_method("focus_input"):
 		_surface.call("focus_input")
 
+func focus_terminal_input_after_submit() -> void:
+	if _surface == null:
+		return
+	if _surface.has_method("focus_input_after_submit"):
+		_surface.call("focus_input_after_submit")
+	elif _surface.has_method("focus_input"):
+		_surface.call("focus_input")
+
 func export_terminal_state() -> Dictionary:
 	if _backend != null:
 		_state_data = _backend.export_state()
@@ -148,6 +156,33 @@ func history_previous(_event = null) -> void:
 func history_next(_event = null) -> void:
 	_on_history_next_requested()
 
+func complete_input(_event = null) -> void:
+	_on_completion_requested()
+
+func accept_suggestion(_event = null) -> void:
+	var value := ""
+	if _event is Dictionary:
+		value = str((_event as Dictionary).get("value", ""))
+	_on_suggestion_accepted(value)
+
+func line_clear_before(_event = null) -> void:
+	if _surface != null and _surface.has_method("clear_before_caret"):
+		_surface.call("clear_before_caret")
+	_on_line_clear_before_requested()
+
+func line_clear_after(_event = null) -> void:
+	if _surface != null and _surface.has_method("clear_after_caret"):
+		_surface.call("clear_after_caret")
+	_on_line_clear_after_requested()
+
+func delete_word_backward(_event = null) -> void:
+	if _surface != null and _surface.has_method("delete_word_backward"):
+		_surface.call("delete_word_backward")
+	_on_delete_word_backward_requested()
+
+func ctrl_d(_event = null) -> void:
+	_on_ctrl_d_requested()
+
 func _setup_surface() -> void:
 	if ui == null:
 		return
@@ -184,6 +219,30 @@ func _setup_surface() -> void:
 		var copy_cb := Callable(self, "_on_copy_requested")
 		if not _surface.is_connected("copy_requested", copy_cb):
 			_surface.connect("copy_requested", copy_cb)
+	if _surface.has_signal("completion_requested"):
+		var completion_cb := Callable(self, "_on_completion_requested")
+		if not _surface.is_connected("completion_requested", completion_cb):
+			_surface.connect("completion_requested", completion_cb)
+	if _surface.has_signal("suggestion_accepted"):
+		var suggestion_cb := Callable(self, "_on_suggestion_accepted")
+		if not _surface.is_connected("suggestion_accepted", suggestion_cb):
+			_surface.connect("suggestion_accepted", suggestion_cb)
+	if _surface.has_signal("line_clear_before_requested"):
+		var lcb_cb := Callable(self, "_on_line_clear_before_requested")
+		if not _surface.is_connected("line_clear_before_requested", lcb_cb):
+			_surface.connect("line_clear_before_requested", lcb_cb)
+	if _surface.has_signal("line_clear_after_requested"):
+		var lca_cb := Callable(self, "_on_line_clear_after_requested")
+		if not _surface.is_connected("line_clear_after_requested", lca_cb):
+			_surface.connect("line_clear_after_requested", lca_cb)
+	if _surface.has_signal("delete_word_backward_requested"):
+		var dwb_cb := Callable(self, "_on_delete_word_backward_requested")
+		if not _surface.is_connected("delete_word_backward_requested", dwb_cb):
+			_surface.connect("delete_word_backward_requested", dwb_cb)
+	if _surface.has_signal("ctrl_d_requested"):
+		var cd_cb := Callable(self, "_on_ctrl_d_requested")
+		if not _surface.is_connected("ctrl_d_requested", cd_cb):
+			_surface.connect("ctrl_d_requested", cd_cb)
 	if _surface.has_method("get_output"):
 		var output_value: Variant = _surface.call("get_output")
 		if output_value is TextEdit:
@@ -207,20 +266,31 @@ func _on_command_submitted(command: String) -> void:
 		if state != null:
 			state.set("draft", "")
 			state.set("status", "")
+		_sync_terminal_surface_props()
+		_sync_terminal_app()
+		focus_terminal_input_after_submit()
 		return
 	_buffer.append_prompt_command(_backend.get_prompt(), command)
 	var result: Dictionary = _backend.run_command(command)
+	if bool(result.get("close_terminal", false)):
+		_buffer.append_lines(result.get("stdout_lines", []) if result.get("stdout_lines", []) is Array else [], "stdout")
+		_state_data = _backend.export_state()
+		_sync_terminal_app()
+		_request_terminal_close()
+		return
 	if bool(result.get("clear_screen", false)):
 		_buffer.clear()
 	else:
 		var stdout_lines: Array = result.get("stdout_lines", []) if result.get("stdout_lines", []) is Array else []
 		var stderr_lines: Array = result.get("stderr_lines", []) if result.get("stderr_lines", []) is Array else []
-		_buffer.append_lines(stdout_lines)
-		_buffer.append_lines(stderr_lines)
+		_buffer.append_lines(stdout_lines, "stdout")
+		_buffer.append_lines(stderr_lines, "stderr")
 	_state_data = _backend.export_state()
 	_history_cursor = -1
 	if _surface != null and _surface.has_method("clear_input"):
 		_surface.call("clear_input")
+	if _surface != null and _surface.has_method("set_completion_hint"):
+		_surface.call("set_completion_hint", "")
 	if state != null:
 		state.set_many({
 			"draft": "",
@@ -230,6 +300,7 @@ func _on_command_submitted(command: String) -> void:
 	_update_prompt()
 	_render()
 	_sync_terminal_app()
+	focus_terminal_input_after_submit()
 
 func _on_history_previous_requested() -> void:
 	if _backend == null:
@@ -274,6 +345,76 @@ func _on_history_next_requested() -> void:
 		state.set("draft", history[_history_cursor])
 	_sync_terminal_app()
 
+func _on_completion_requested(input_text: String = "", caret_column: int = -1) -> void:
+	if _backend == null or _surface == null:
+		return
+	var current := input_text
+	if current == "" and _surface.has_method("get_input_text"):
+		current = str(_surface.call("get_input_text"))
+	var result: Dictionary = _backend.complete_input(current, caret_column)
+	var replacement := str(result.get("replacement", current))
+	if bool(result.get("ok", false)):
+		if _surface.has_method("apply_completion_result"):
+			_surface.call("apply_completion_result", result)
+		elif _surface.has_method("set_input_text"):
+			_surface.call("set_input_text", replacement)
+	else:
+		var accepted := false
+		if _surface.has_method("has_active_suggestion") and bool(_surface.call("has_active_suggestion")) and _surface.has_method("accept_active_suggestion"):
+			accepted = bool(_surface.call("accept_active_suggestion"))
+		if accepted and _surface.has_method("get_input_text"):
+			replacement = str(_surface.call("get_input_text"))
+		elif _surface.has_method("apply_completion_result"):
+			_surface.call("apply_completion_result", result)
+	if state != null:
+		state.set("draft", replacement)
+		state.set("status", str(result.get("hint", "")))
+	_sync_terminal_app()
+
+func _on_suggestion_accepted(input_text: String) -> void:
+	if state != null:
+		state.set("draft", input_text)
+		state.set("status", "")
+	_sync_terminal_surface_props()
+	_sync_terminal_app()
+
+func _on_line_clear_before_requested() -> void:
+	# Ctrl-U handled directly by TerminalView; sync state after.
+	if _surface != null and _surface.has_method("get_input_text") and state != null:
+		state.set("draft", str(_surface.call("get_input_text")))
+	_sync_terminal_app()
+
+func _on_line_clear_after_requested() -> void:
+	# Ctrl-K handled directly by TerminalView; sync state after.
+	if _surface != null and _surface.has_method("get_input_text") and state != null:
+		state.set("draft", str(_surface.call("get_input_text")))
+	_sync_terminal_app()
+
+func _on_delete_word_backward_requested() -> void:
+	# Ctrl-W handled directly by TerminalView; sync state after.
+	if _surface != null and _surface.has_method("get_input_text") and state != null:
+		state.set("draft", str(_surface.call("get_input_text")))
+	_sync_terminal_app()
+
+func _on_ctrl_d_requested() -> void:
+	if _surface == null or _backend == null:
+		return
+	var current: String = str(_surface.call("get_input_text")) if _surface.has_method("get_input_text") else ""
+	if current.strip_edges() == "":
+		if _buffer != null:
+			_buffer.append_line("logout")
+			_buffer.append_line("Use the window close button to exit the terminal session.")
+		if state != null:
+			state.set("status", "Use the window close button to exit the terminal session.")
+		_render()
+		_sync_terminal_app()
+		return
+	# Non-empty: delete character after caret, then sync.
+	# TerminalView handles the actual edit; we just sync state.
+	if _surface.has_method("get_input_text") and state != null:
+		state.set("draft", str(_surface.call("get_input_text")))
+	_sync_terminal_app()
+
 func _on_interrupt_requested() -> void:
 	if _buffer == null or _backend == null:
 		return
@@ -288,6 +429,7 @@ func _on_interrupt_requested() -> void:
 	_render()
 	_update_prompt()
 	_sync_terminal_app()
+	focus_terminal_input()
 
 func _on_clear_requested() -> void:
 	if _buffer == null:
@@ -300,6 +442,7 @@ func _on_clear_requested() -> void:
 	_render()
 	_update_prompt()
 	_sync_terminal_app()
+	focus_terminal_input()
 
 func _on_paste_requested() -> void:
 	var pasted: String = DisplayServer.clipboard_get()
@@ -315,18 +458,33 @@ func _on_paste_requested() -> void:
 func _on_copy_requested() -> void:
 	if _output == null:
 		return
-	var selected: String = _output.get_selected_text()
+	var selected := ""
+	if _surface != null and _surface.has_method("get_selected_output_text"):
+		selected = str(_surface.call("get_selected_output_text"))
+	elif _output != null:
+		selected = _output.get_selected_text()
 	if selected != "":
 		DisplayServer.clipboard_set(selected)
 
 func _on_input_text_changed(value: String) -> void:
+	var suggestion: Dictionary = {}
+	if _backend != null:
+		suggestion = _backend.suggest_input(value, value.length())
+	if _surface != null and _surface.has_method("apply_suggestion_result"):
+		_surface.call("apply_suggestion_result", suggestion)
+	elif _surface != null and _surface.has_method("set_completion_hint"):
+		_surface.call("set_completion_hint", "")
 	if state != null:
 		state.set("draft", value)
+		state.set("status", str(suggestion.get("hint", "")) if bool(suggestion.get("ok", false)) else "")
 	_sync_terminal_surface_props()
 
 func _render() -> void:
-	if _surface != null and _surface.has_method("render_text") and _buffer != null:
-		_surface.call("render_text", _buffer.get_text())
+	if _surface != null and _buffer != null:
+		if _surface.has_method("render_terminal_buffer"):
+			_surface.call("render_terminal_buffer", _buffer)
+		elif _surface.has_method("render_text"):
+			_surface.call("render_text", _buffer.get_text())
 	if state != null and _buffer != null:
 		state.set("transcript", _buffer.get_text())
 		state.set("transcript_preview", _transcript_preview(_buffer.get_lines()))
@@ -343,21 +501,58 @@ func _update_prompt() -> void:
 func _sync_terminal_surface_props() -> void:
 	if ui == null or state == null:
 		return
-	ui.set_prop("terminal-surface", "prompt", state.get_string("prompt", ""))
-	ui.set_prop("terminal-surface", "input", state.get_string("draft", ""))
-	ui.set_prop("terminal-surface", "transcript", state.get_string("transcript_preview", ""))
-	ui.set_prop("terminal-surface", "session-id", _session_id)
-	ui.set_prop("terminal-surface", "value", {
-		"prompt": state.get_string("prompt", ""),
-		"input": state.get_string("draft", ""),
+	var prompt_value: String = state.get_string("prompt", "")
+	var draft_value: String = state.get_string("draft", "")
+	var transcript_value: String = state.get_string("transcript_preview", "")
+	_set_terminal_surface_prop("prompt", prompt_value)
+	# The TerminalSurface owns the live LineEdit. During command submission the
+	# input is cleared directly on the surface before state/HML props are synced.
+	# Re-applying the same `input` prop through the HermesUI binding bridge can
+	# run another property/style pass on the focused custom control after the
+	# LineEdit submitted its text. Keep the semantic prop current, but skip the
+	# bridge apply when the visible LineEdit already has the requested value.
+	if _surface != null and _surface.has_method("get_input_text") and str(_surface.call("get_input_text")) == draft_value:
+		_set_terminal_surface_prop_metadata("input", draft_value)
+	else:
+		_set_terminal_surface_prop("input", draft_value)
+	_set_terminal_surface_prop("transcript", transcript_value)
+	_set_terminal_surface_prop("session-id", _session_id)
+	_set_terminal_surface_prop("value", {
+		"prompt": prompt_value,
+		"input": draft_value,
 		"session_id": _session_id,
-		"transcript": state.get_string("transcript_preview", "")
+		"transcript": transcript_value
 	})
+
+func _set_terminal_surface_prop(prop_name: String, value) -> void:
+	if ui == null:
+		return
+	var element = _terminal_surface_element()
+	if element != null and element.props.has(prop_name) and element.props[prop_name] == value:
+		return
+	ui.set_prop("terminal-surface", prop_name, value)
+
+func _set_terminal_surface_prop_metadata(prop_name: String, value) -> void:
+	var element = _terminal_surface_element()
+	if element == null:
+		_set_terminal_surface_prop(prop_name, value)
+		return
+	element.props[prop_name] = value
+
+func _terminal_surface_element():
+	if app != null and app.has_method("find_element_by_id"):
+		return app.find_element_by_id("terminal-surface")
+	return null
 
 func _sync_terminal_app() -> void:
 	if _terminal_app == null or not _terminal_app.has_method("_sync_terminal_runtime"):
 		return
 	_terminal_app.call("_sync_terminal_runtime", _surface, _buffer, _backend, _output, _input, _history_cursor, export_terminal_state())
+
+func _request_terminal_close() -> void:
+	if _terminal_app == null or not _terminal_app.has_method("request_terminal_close"):
+		return
+	_terminal_app.call_deferred("request_terminal_close")
 
 func _transcript_preview(lines: Array[String]) -> String:
 	if lines.is_empty():

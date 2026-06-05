@@ -88,6 +88,66 @@ func make_result(stdout_lines: Array = [], stderr_lines: Array = [], exit_code: 
 func get_help_text() -> String:
 	return _registry.get_help_text() if _registry != null else ""
 
+func get_command_names() -> Array[String]:
+	return _registry.get_command_names() if _registry != null and _registry.has_method("get_command_names") else []
+
+func complete_input(input: String, caret_column: int = -1) -> Dictionary:
+	var context := _completion_context(input, caret_column)
+	var token := str(context.get("token", ""))
+	var command_name := str(context.get("command", ""))
+	var mode := str(context.get("mode", "command"))
+	var candidates: Array[String] = []
+	var suffix := ""
+	if mode == "command":
+		candidates = _matching_command_candidates(token)
+		suffix = " "
+	elif command_name == "open" and int(context.get("argument_index", 0)) <= 1:
+		candidates = _merge_unique(_matching_path_candidates(token), _matching_app_candidates(token))
+	else:
+		candidates = _matching_path_candidates(token)
+	return _make_completion_result(
+		input,
+		str(context.get("before", "")),
+		str(context.get("after", "")),
+		str(context.get("prefix_before_token", "")),
+		token,
+		mode,
+		candidates,
+		suffix
+	)
+
+func suggest_input(input: String, caret_column: int = -1) -> Dictionary:
+	var caret := caret_column
+	if caret < 0 or caret > input.length():
+		caret = input.length()
+	if caret != input.length():
+		return _make_suggestion_result(input, "", "")
+	var clean := input.strip_edges()
+	if clean == "":
+		return _make_suggestion_result(input, "", "")
+	for index in range(_history.size() - 1, -1, -1):
+		var item := _history[index]
+		if item != clean and item.begins_with(clean):
+			return _make_suggestion_result(input, item, "history")
+	var context := _completion_context(input, caret)
+	var token := str(context.get("token", ""))
+	var command_name := str(context.get("command", ""))
+	var mode := str(context.get("mode", "command"))
+	var candidates: Array[String] = []
+	var suffix := ""
+	if mode == "command":
+		candidates = _matching_command_candidates(token)
+		suffix = " "
+	elif command_name == "open" and int(context.get("argument_index", 0)) <= 1:
+		candidates = _merge_unique(_matching_path_candidates(token), _matching_app_candidates(token))
+	else:
+		candidates = _matching_path_candidates(token)
+	for candidate in candidates:
+		var suggestion := str(context.get("prefix_before_token", "")) + candidate + suffix + str(context.get("after", ""))
+		if suggestion != input and suggestion.begins_with(input):
+			return _make_suggestion_result(input, suggestion, mode)
+	return _make_suggestion_result(input, "", "")
+
 func export_state() -> Dictionary:
 	_state["cwd"] = get_cwd()
 	_state["history"] = _history.duplicate()
@@ -105,7 +165,14 @@ func get_session_id() -> String:
 
 func get_prompt() -> String:
 	var symbol := "#" if current_user() == "root" else "$"
-	return current_user() + ":" + get_cwd() + symbol
+	var cwd := get_cwd()
+	var home := home_path()
+	var display_cwd := cwd
+	if cwd == home:
+		display_cwd = "~"
+	elif cwd.begins_with(home + "/"):
+		display_cwd = "~" + cwd.substr(home.length())
+	return current_user() + "@os:" + display_cwd + symbol
 
 func get_cwd() -> String:
 	return str(_state.get("cwd", home_path()))
@@ -180,6 +247,25 @@ func delete_path(path: String) -> Dictionary:
 	_emit_file_event("file.deleted", {"path": path})
 	return {"ok": true, "path": path, "deleted": true}
 
+func copy_path(source: String, destination: String) -> Dictionary:
+	if _fs == null or not _fs.has_method("copy_path"):
+		return {"ok": false, "error": "Filesystem unavailable"}
+	var message := str(_fs.call("copy_path", source, destination))
+	if message != "":
+		return {"ok": false, "error": message}
+	_emit_file_event("file.created", {"path": destination, "type": "file"})
+	return {"ok": true, "source": source, "destination": destination}
+
+func move_path(source: String, destination: String) -> Dictionary:
+	if _fs == null or not _fs.has_method("move_path"):
+		return {"ok": false, "error": "Filesystem unavailable"}
+	var message := str(_fs.call("move_path", source, destination))
+	if message != "":
+		return {"ok": false, "error": message}
+	_emit_file_event("file.deleted", {"path": source})
+	_emit_file_event("file.created", {"path": destination, "type": "file"})
+	return {"ok": true, "source": source, "destination": destination}
+
 func open_target(target: String) -> Dictionary:
 	var resolved := resolve_path(target)
 	if is_file(resolved):
@@ -219,6 +305,158 @@ func _add_history(command_line: String) -> void:
 func _emit_file_event(event_name: String, payload: Dictionary) -> void:
 	if _shell != null and _shell.has_method("_emit_hermes_event"):
 		_shell.call("_emit_hermes_event", event_name, payload)
+
+func _completion_context(input: String, caret_column: int = -1) -> Dictionary:
+	var caret := caret_column
+	if caret < 0 or caret > input.length():
+		caret = input.length()
+	var before := input.substr(0, caret)
+	var after := input.substr(caret)
+	var token_start := _current_token_start(before)
+	var token := before.substr(token_start)
+	var prefix_before_token := before.substr(0, token_start)
+	var command_name := _first_token(before).to_lower()
+	return {
+		"caret": caret,
+		"before": before,
+		"after": after,
+		"token_start": token_start,
+		"token": token,
+		"prefix_before_token": prefix_before_token,
+		"command": command_name,
+		"argument_index": _argument_index(before),
+		"mode": "command" if prefix_before_token.strip_edges() == "" else "path"
+	}
+
+func _current_token_start(text: String) -> int:
+	var index := text.length() - 1
+	while index >= 0:
+		var ch := text[index]
+		if ch == " " or ch == "	":
+			return index + 1
+		index -= 1
+	return 0
+
+func _first_token(text: String) -> String:
+	var trimmed := text.strip_edges()
+	if trimmed == "":
+		return ""
+	var pieces := trimmed.split(" ", false)
+	return str(pieces[0]) if not pieces.is_empty() else ""
+
+func _argument_index(text: String) -> int:
+	var trimmed := text.strip_edges()
+	if trimmed == "":
+		return 0
+	return trimmed.split(" ", false).size() - 1
+
+func _matching_command_candidates(prefix: String) -> Array[String]:
+	var result: Array[String] = []
+	for name in get_command_names():
+		if prefix == "" or name.begins_with(prefix.to_lower()):
+			result.append(name)
+	return result
+
+func _matching_app_candidates(prefix: String) -> Array[String]:
+	var result: Array[String] = []
+	for app_id in _app_ids():
+		if prefix == "" or app_id.begins_with(prefix):
+			result.append(app_id)
+	return result
+
+func _matching_path_candidates(token: String) -> Array[String]:
+	var split := _split_path_token(token)
+	var base_token := str(split.get("base", ""))
+	var name_prefix := str(split.get("prefix", ""))
+	var display_base := str(split.get("display_base", ""))
+	var dir_path := get_cwd() if base_token == "." or base_token == "" else resolve_path(base_token)
+	if not is_dir(dir_path) or not can_list_dir(dir_path):
+		return []
+	var entries := list_dir(dir_path)
+	var result: Array[String] = []
+	for value in entries:
+		if not (value is Dictionary):
+			continue
+		var entry: Dictionary = value
+		var name := str(entry.get("name", ""))
+		if name == "" or not name.begins_with(name_prefix):
+			continue
+		var suffix := "/" if str(entry.get("type", "")) == "dir" else ""
+		result.append(display_base + name + suffix)
+	result.sort()
+	return result
+
+func _split_path_token(token: String) -> Dictionary:
+	var slash_index := token.rfind("/")
+	if slash_index < 0:
+		return {"base": ".", "display_base": "", "prefix": token}
+	var display_base := token.substr(0, slash_index + 1)
+	var prefix := token.substr(slash_index + 1)
+	var base := display_base
+	if base == "":
+		base = "."
+	return {"base": base, "display_base": display_base, "prefix": prefix}
+
+func _app_ids() -> Array[String]:
+	var ids: Array[String] = []
+	if _shell != null:
+		var registry_value: Variant = _shell.get("_app_registry")
+		if registry_value is Object and (registry_value as Object).has_method("get_app_order"):
+			var order_value: Variant = (registry_value as Object).call("get_app_order")
+			if order_value is Array:
+				for item in order_value:
+					var id := str(item)
+					if id != "" and not ids.has(id):
+						ids.append(id)
+		var apps_value: Variant = _shell.get("_apps")
+		if apps_value is Dictionary:
+			for key in (apps_value as Dictionary).keys():
+				var id := str(key)
+				if id != "" and not ids.has(id):
+					ids.append(id)
+	ids.sort()
+	return ids
+
+func _merge_unique(first: Array[String], second: Array[String]) -> Array[String]:
+	var result: Array[String] = []
+	for value in first:
+		if not result.has(value):
+			result.append(value)
+	for value in second:
+		if not result.has(value):
+			result.append(value)
+	result.sort()
+	return result
+
+func _make_completion_result(input: String, before: String, after: String, prefix_before_token: String, token: String, mode: String, candidates: Array[String], suffix: String = "") -> Dictionary:
+	var replacement := input
+	var hint := ""
+	if candidates.size() == 1:
+		replacement = prefix_before_token + candidates[0] + suffix + after
+		hint = "completed " + candidates[0]
+	elif candidates.size() > 1:
+		hint = "%d matches: %s" % [candidates.size(), "  ".join(candidates)]
+	return {
+		"ok": candidates.size() > 0,
+		"input": input,
+		"before": before,
+		"after": after,
+		"token": token,
+		"replacement": replacement,
+		"candidates": candidates,
+		"hint": hint,
+		"mode": mode
+	}
+
+func _make_suggestion_result(input: String, suggestion: String, source: String) -> Dictionary:
+	var ok := suggestion != "" and suggestion != input
+	return {
+		"ok": ok,
+		"input": input,
+		"suggestion": suggestion if ok else "",
+		"hint": ("suggestion: " + suggestion + "    Tab/Right to accept") if ok else "",
+		"source": source if ok else ""
+	}
 
 func _tokenize(command_line: String) -> Dictionary:
 	var tokens: Array[String] = []

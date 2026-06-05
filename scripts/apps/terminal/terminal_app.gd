@@ -42,6 +42,8 @@ func os_app_init(context: Dictionary) -> void:
 	_register_terminal_session()
 
 func os_app_focus() -> void:
+	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		return
 	var controller = _controller()
 	if controller != null and controller.has_method("focus_terminal_input"):
 		controller.call("focus_terminal_input")
@@ -84,6 +86,17 @@ func append_external_output(text: String, source: String = "Hermes") -> void:
 
 func get_terminal_session_id() -> String:
 	return _session_id
+
+func request_terminal_close() -> void:
+	var node: Node = self
+	while node != null:
+		if node is OSWindow:
+			var window := node as OSWindow
+			window.close_requested.emit(window)
+			return
+		node = node.get_parent()
+	if _shell != null and _shell.has_method("close_app"):
+		_shell.call("close_app", "console")
 
 func _exit_tree() -> void:
 	_unregister_terminal_session()
