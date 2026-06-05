@@ -3,13 +3,9 @@
     <Row id="taskbar-root" class="shell-taskbar-root" label="Taskbar dock">
       <Button id="taskbar-start" class="shell-taskbar-icon-button" label="Start" variant="ghost" on:click="toggle_launcher">Start</Button>
       <Text id="taskbar-divider" class="shell-taskbar-divider">|</Text>
-      <ScrollView id="taskbar-windows-scroll" class="shell-taskbar-windows-scroll" label="Open windows scroll">
-        <List id="taskbar-windows" class="shell-taskbar-windows" label="Open windows">
-          <ListItem id="taskbar-window-{task.id}" class="shell-taskbar-window-item" label="{task.title}" value="{task.id}" selected="{task.active}" for="task in tasks" key="{task.id}" on:select="activate_task">{task.label}</ListItem>
-        </List>
-      </ScrollView>
-      <Button id="taskbar-notifications" class="shell-taskbar-icon-button" label="Notification history" variant="ghost" on:click="toggle_notifications">Notifications</Button>
-      <Button id="taskbar-user" class="shell-taskbar-icon-button" label="Account Center" variant="ghost" on:click="open_account_center">Account</Button>
+      <Row id="taskbar-windows" class="shell-taskbar-windows" label="Open windows">
+        <Button id="taskbar-window-{task.id}" class="shell-taskbar-window-item" label="{task.title}" value="{task.id}" selected="{task.active}" for="task in tasks" key="{task.id}" on:select="activate_task">{task.label}</Button>
+      </Row>
     </Row>
   </Window>
 </App>

@@ -6,16 +6,40 @@ extends RefCounted
 # HermesUI components, and app surfaces. Keep these values quiet and legible: use
 # layer contrast, spacing, and elevation before adding outlines/glow.
 
-# ── Surface Colors ──
-static var BG := Color("0b0d12")
-static var BG_ELEVATED := Color("11141b")
-static var PANEL := Color("171a22")
-static var SURFACE := Color("1f2430")
-static var SURFACE_HOVER := Color("272d3a")
-static var SURFACE_ACTIVE := Color("303747")
-static var WINDOW := BG_ELEVATED
-static var INPUT_BG := Color("0f131a")
-static var OVERLAY := Color("05070b")
+# ── Surface Colors (stronger semantic luminance steps for tonal hierarchy: desktop darkest, then shell surfaces, window titlebar/chrome, app main body, subpanels/cards, interactive rows/controls) ──
+static var BG := Color("0a0c11")
+static var BG_ELEVATED := Color("0f1219")
+static var PANEL := Color("15191f")
+static var SURFACE := Color("1c212a")
+static var SURFACE_HOVER := Color("22283a")
+static var SURFACE_ACTIVE := Color("282e40")
+static var WINDOW := Color("1f2430")
+static var INPUT_BG := Color("0d1017")
+static var OVERLAY := Color("04060a")
+
+# Semantic surface levels (shell surface, window body surface, subpanel surface, elevated card/row surface, accent-selected surface)
+static var SHELL_SURFACE := Color("12151c")
+static var APP_BODY_SURFACE := Color("1f2430")
+static var SUBPANEL_SURFACE := Color("252b38")
+static var ELEVATED_CARD := Color("2a2f3d")
+static var ACCENT_SELECTED_SURFACE := Color("303747")
+
+# ── Desktop Depth (layered gradient + noise + vignette for modern dark desktop) ──
+static var DESKTOP_GRADIENT_TOP := Color("0F1116")
+static var DESKTOP_GRADIENT_BOTTOM := Color("161A22")
+static var DESKTOP_NOISE_OPACITY := 0.025
+static var DESKTOP_VIGNETTE_OPACITY := 0.18
+static var DESKTOP_MICRO_PATTERN_OPACITY := 0.015
+static var DESKTOP_ELEVATION := 0
+
+# ── Brighter Wallpaper Presets (+45-60% luminance, tasteful modern, soft color variation + subtle light blooms/gradients, some carry accent influence; desktop feels like real Linux PC) ──
+static var WALLPAPER_BRIGHT_PRESETS: Array[Color] = _to_color_array([
+	Color("4a5f7b"),  # brighter blue-gray
+	Color("5e6f8a"),  # soft teal-gray
+	Color("6a7f9b"),  # muted slate
+	Color("4b6a72"),  # accent-tinted green-gray
+	Color("5a6a7a")   # warm neutral
+])
 
 # ── Border / Focus Colors ──
 static var BORDER_SOFT := Color("252b38")
@@ -47,6 +71,36 @@ static var WHITE := Color.WHITE
 # ── Opacity Helpers ──
 static func alpha(color: Color, a: float) -> Color:
 	return Color(color.r, color.g, color.b, a)
+
+static func accent_hover_color(accent: Color) -> Color:
+	return Color(
+		minf(accent.r + 0.14, 1.0),
+		minf(accent.g + 0.14, 1.0),
+		minf(accent.b + 0.14, 1.0),
+		1.0
+	)
+
+static func accent_pressed_color(accent: Color) -> Color:
+	return Color(
+		maxf(accent.r - 0.14, 0.0),
+		maxf(accent.g - 0.14, 0.0),
+		maxf(accent.b - 0.14, 0.0),
+		1.0
+	)
+
+static func set_accent(accent: Color) -> Color:
+	ACCENT = Color(accent.r, accent.g, accent.b, 1.0)
+	ACCENT_HOVER = accent_hover_color(ACCENT)
+	ACCENT_PRESSED = accent_pressed_color(ACCENT)
+	return ACCENT
+
+# Narrow typed conversion helper at preset boundary (WALLPAPER_BRIGHT_PRESETS)
+static func _to_color_array(values: Array) -> Array[Color]:
+	var output: Array[Color] = []
+	for value in values:
+		if value is Color:
+			output.append(value)
+	return output
 
 # ── Spacing ──
 static var SPACE := {

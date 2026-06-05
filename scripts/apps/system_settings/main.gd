@@ -70,6 +70,7 @@ func highlight_preset_changed(event) -> void:
 			var color: Color = preset.get("color", _desktop_highlight_color())
 			var current: Color = _desktop_highlight_color()
 			_set_desktop_highlight_color(Color(color.r, color.g, color.b, current.a))
+			_update_system_accent(color)
 			_set_desktop_context_status("Desktop highlight color updated")
 			_refresh_appearance_state()
 			_refresh_system_info()
@@ -98,6 +99,7 @@ func reset_icon_layout(_event = null) -> void:
 
 func reset_highlight(_event = null) -> void:
 	_set_desktop_highlight_color(Color(0.34, 0.45, 0.62, 0.32))
+	_update_system_accent(Color(0.435, 0.659, 0.969))
 	_set_desktop_context_status("Desktop highlight color reset")
 	_set_status("Desktop highlight color reset", false)
 	_refresh_appearance_state()
@@ -476,6 +478,10 @@ func _cycle_wallpaper() -> void:
 func _set_desktop_highlight_color(color: Color) -> void:
 	if _shell != null and _shell.has_method("_set_desktop_highlight_color"):
 		_shell.call("_set_desktop_highlight_color", color)
+
+func _update_system_accent(color: Color) -> void:
+	if _shell != null and _shell.has_method("_update_system_accent"):
+		_shell.call("_update_system_accent", color, true)
 
 func _refresh_desktop_icons() -> void:
 	if _shell != null and _shell.has_method("_refresh_desktop_icons"):

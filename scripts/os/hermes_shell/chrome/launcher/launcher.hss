@@ -1,5 +1,11 @@
 .shell-launcher-window {
   padding: 0;
+  background: var(--surface-0);
+  border-width: 0;
+  border-radius: var(--radius-lg);
+}
+
+Column, Row, ScrollView, List {
   background: transparent;
   border-width: 0;
 }
@@ -7,14 +13,14 @@
 .shell-launcher-root {
   flex: 1;
   gap: 10px;
-  padding: 12px;
+  padding: 16px;
   background: transparent;
   border-width: 0;
 }
 
 .shell-launcher-header {
   gap: 2px;
-  padding: 2px;
+  padding: var(--space-2);
   background: transparent;
   border-width: 0;
 }
@@ -32,7 +38,7 @@
   border-color: var(--border-strong);
   border-width: 1px;
   border-radius: var(--radius-md);
-  padding: var(--space-2);
+  padding: var(--space-3);
 }
 
 .shell-launcher-search:focus {
@@ -46,6 +52,7 @@
   align-items: stretch;
   background: transparent;
   border-width: 0;
+  padding: 12px;
 }
 
 .shell-launcher-categories-column {
@@ -56,13 +63,14 @@
   border-width: 1px;
   border-radius: var(--radius-lg);
   padding: var(--space-2);
+  margin: 4px;
 }
 
 .shell-launcher-categories-scroll {
   flex: 1;
   background: transparent;
   border-width: 0;
-  padding: 0;
+  padding: var(--space-3);
 }
 
 .shell-launcher-categories {
@@ -70,7 +78,7 @@
   gap: 5px;
   background: transparent;
   border-width: 0;
-  padding: 0;
+  padding: var(--space-2);
 }
 
 .shell-launcher-category {
@@ -84,16 +92,18 @@
 }
 
 .shell-launcher-category:hover {
-  background: var(--surface-2);
+  background: var(--accent);
   color: var(--text);
-  border-color: var(--border-muted);
+  border-color: var(--accent);
 }
 
-.shell-launcher-category:selected {
-  background: rgba(127, 176, 255, 0.18);
+.shell-launcher-category:pressed {
+  background: var(--accent);
   color: var(--text);
-  border-color: rgba(127, 176, 255, 0.55);
+  border-color: var(--accent);
 }
+
+
 
 .shell-launcher-apps-column {
   flex: 1;
@@ -113,7 +123,9 @@
   border-color: var(--border-muted);
   border-width: 1px;
   border-radius: var(--radius-lg);
-  padding: var(--space-2);
+  padding: var(--space-3);
+  padding-bottom: calc(var(--space-3) + 10px);
+  margin: 4px;
 }
 
 .shell-launcher-apps {
@@ -121,29 +133,33 @@
   gap: 6px;
   background: transparent;
   border-width: 0;
-  padding: 0;
+  padding: var(--space-2);
+  padding-bottom: calc(var(--space-2) + 12px);
 }
 
 .shell-launcher-app {
   min-height: 48px;
-  background: var(--surface-1);
+  background: transparent;
   color: var(--text);
-  border-color: var(--border-muted);
+  border-color: transparent;
   border-width: 1px;
   border-radius: var(--radius-md);
   padding: 8px;
 }
 
 .shell-launcher-app:hover {
-  background: var(--surface-2);
-  border-color: var(--border-strong);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text);
 }
 
-.shell-launcher-app:selected {
-  background: rgba(127, 176, 255, 0.20);
+.shell-launcher-app:pressed {
+  background: var(--accent);
+  border-color: var(--accent);
   color: var(--text);
-  border-color: rgba(127, 176, 255, 0.65);
 }
+
+
 
 .shell-launcher-empty {
   color: var(--text-muted);
@@ -154,6 +170,7 @@
   gap: 6px;
   background: transparent;
   border-width: 0;
+  padding: var(--space-2);
 }
 
 .shell-launcher-footer Button {

@@ -60,7 +60,7 @@
                   <Select id="SystemSettingsThemeMode" label="Theme mode" value="{theme_mode}" options="dark:Dark|light:Light" on:change="theme_mode_changed" />
                 </SettingsRow>
                 <SettingsRow id="SystemSettingsHighlightPresetRow" label="Highlight">
-                  <Select id="SystemSettingsHighlightPreset" label="Highlight preset" value="{highlight_preset}" options="Ocean blue:Ocean blue|Mint green:Mint green|Amber:Amber|Rose:Rose" on:change="highlight_preset_changed" />
+                  <Select id="SystemSettingsHighlightPreset" label="Highlight preset" value="{highlight_preset}" options="Accent:Accent|Mint green:Mint green|Amber:Amber|Rose:Rose" on:change="highlight_preset_changed" />
                 </SettingsRow>
                 <SettingsRow id="SystemSettingsHighlightOpacityRow" label="Opacity">
                   <Slider id="SystemSettingsHighlightOpacity" label="Highlight opacity" min="0.14" max="0.7" step="0.01" value="{highlight_alpha}" on:change="highlight_alpha_changed" />

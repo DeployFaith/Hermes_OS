@@ -1037,6 +1037,20 @@ func _cmd_os_scroll(params: Dictionary) -> void:
 		return
 	var direction: String = str(params.get("direction", "down")).to_lower().strip_edges()
 	var amount: int = clampi(int(params.get("amount", 1)), 1, 12)
+	var focused_window: Node = target.get("window", null) as Node
+	if focused_window != null and str(focused_window.get("app_id")) != "browser" and str(params.get("target_ref", "")).strip_edges() == "":
+		var browser_window := _find_interactive_browser_window(shell)
+		if browser_window != null:
+			focused_window = browser_window
+			if shell != null and shell.has_method("_focus_window"):
+				shell.call("_focus_window", focused_window)
+	if focused_window != null and str(focused_window.get("app_id")) == "browser":
+		var browser_result := _forward_browser_test_input(focused_window, "scroll", {"direction": direction, "amount": amount, "target": str(params.get("target", ""))})
+		if bool(browser_result.get("success", false)):
+			_send_response(_os_input_success("os_scroll", {"direction": direction, "amount": amount, "window_id": _window_id_for_shell(shell, focused_window), "browser": browser_result}))
+		else:
+			_send_response(_os_input_error("os_scroll", str(browser_result.get("code", "BROWSER_INPUT_FAILED")), str(browser_result.get("error", "browser input failed")), {"direction": direction, "amount": amount, "window_id": _window_id_for_shell(shell, focused_window), "browser": browser_result}))
+		return
 	var button_index: int = MOUSE_BUTTON_WHEEL_DOWN
 	match direction:
 		"up":
@@ -1060,7 +1074,6 @@ func _cmd_os_scroll(params: Dictionary) -> void:
 		release_event.button_index = button_index as MouseButton
 		release_event.pressed = false
 		Input.parse_input_event(release_event)
-	var focused_window: Node = target.get("window", null) as Node
 	_send_response(_os_input_success("os_scroll", {"direction": direction, "amount": amount, "window_id": _window_id_for_shell(shell, focused_window)}))
 
 
@@ -1685,6 +1698,11 @@ func _forward_browser_test_input(window: Node, action: String, args: Dictionary)
 		"click":
 			if app_root.has_method("agent_browser_test_click"):
 				var result: Variant = app_root.call("agent_browser_test_click", args)
+				if result is Dictionary:
+					return (result as Dictionary).duplicate(true)
+		"scroll":
+			if app_root.has_method("agent_browser_test_scroll"):
+				var result: Variant = app_root.call("agent_browser_test_scroll", args)
 				if result is Dictionary:
 					return (result as Dictionary).duplicate(true)
 	return {

@@ -154,6 +154,7 @@ func _send_message(message: String, options: Dictionary) -> Dictionary:
 		return {"ok": false, "terminal_result": "Hermes Gateway client is unavailable.", "error": _last_error.duplicate(true), "context": _last_context.duplicate(true)}
 	var request_options := _last_context.duplicate(true)
 	request_options["terminal"] = terminal_context.duplicate(true)
+	request_options["system"] = _hermes_os_control_system_prompt()
 	var response: Dictionary = _gateway_client.send_message(prompt, request_options)
 	if not bool(response.get("ok", false)):
 		notify_error(str(response.get("terminal_result", "Hermes Gateway request failed")), response.get("error", {}) if response.get("error", {}) is Dictionary else {})
@@ -166,6 +167,19 @@ func _build_terminal_context(prompt: String, options: Dictionary) -> Dictionary:
 	if _context_builder == null:
 		return {}
 	return _context_builder.build_terminal_context(prompt, options)
+
+func _hermes_os_control_system_prompt() -> String:
+	return "You are Hermes inside Hermes_OS. Treat ordinary user requests about apps, windows, browser pages, files, typing, clicking, scrolling, and navigation as Hermes_OS control intents. Use Hermes_OS MCP tools instead of explaining limitations when a Hermes_OS tool can act. Observe first when current state matters. Execute with Hermes_OS tools when intent is clear. Verify the result when practical. Summarize in human-readable language. Preserve exact blocker codes/messages when blocked. Do not dump raw JSON/tool output unless debug is explicitly requested. Stay inside Hermes_OS boundaries only.\n" + \
+		"Compact Computer Use intent guide:\n" + \
+		"- what can you see? -> observe + UI tree/browser/window state summary\n" + \
+		"- open browser -> hermes_os_open_app app_id=browser\n" + \
+		"- go to home.hermes -> browser navigate\n" + \
+		"- click first link -> browser list links, then activate first safe link\n" + \
+		"- type X -> check focused editable/input-capable surface, then type_text or browser test type route\n" + \
+		"- scroll down -> scroll focused surface\n" + \
+		"- what apps are open? -> observe/list apps/windows\n" + \
+		"- focus browser -> focus window/app\n" + \
+		"For visible OS control, use existing Hermes_OS MCP tools only: observe, UI tree, open/focus apps/windows, navigate Browser to bundled WorldWeb pages, click supported refs/links, type plain text into supported focused surfaces, press bounded keys, scroll, and list apps/files/windows. Never claim host OS, Docker, SSH, credential, payment, production, real-account, or destructive host/filesystem control. If blocked, name the exact Hermes_OS tool, gate, operation, error code, or runtime issue. Keep replies concise: attempted action, result, visible state, exact blocker if any."
 
 func _bridge_state() -> Dictionary:
 	if _shell != null and _shell.has_method("_kernel_bridge_state"):

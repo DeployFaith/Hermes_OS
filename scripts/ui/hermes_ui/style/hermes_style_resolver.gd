@@ -17,6 +17,30 @@ const INHERITED_PROPERTIES: Array[String] = [
 var _box_factory := HermesStyleBoxFactory.new()
 var _inline_parser := HermesStyleParser.new()
 
+const LAYOUT_TAGS := {
+	"App": true,
+	"AppShell": true,
+	"AppBody": true,
+	"Column": true,
+	"Row": true,
+	"Grid": true,
+	"FlowRow": true,
+	"SettingsPage": true,
+	"SettingsRow": true,
+	"List": true
+}
+
+const SURFACE_TAGS := {
+	"Window": true,
+	"Panel": true,
+	"Card": true,
+	"SettingsSection": true,
+	"FileList": true,
+	"TerminalSurface": true,
+	"BrowserSurface": true,
+	"Sidebar": true
+}
+
 func apply_tree(root_element, stylesheets: Array) -> void:
 	var variables: Dictionary = _collect_variables(stylesheets)
 	_apply_recursive(root_element, stylesheets, variables, null)
@@ -373,8 +397,50 @@ func _apply_to_control(element) -> void:
 	_apply_opacity(control, computed)
 	_apply_gap(control, computed)
 	_apply_layout_configuration(control, computed)
+	_apply_contract_defaults(element, control, computed)
 	_apply_visual_style(control, computed)
 	_apply_text_style(control, computed)
+	_apply_surface_containment(element, control, computed)
+
+func _apply_contract_defaults(element, control: Control, computed) -> void:
+	if element == null or control == null:
+		return
+	var tag: String = str(element.tag)
+	if LAYOUT_TAGS.has(tag):
+		if control is PanelContainer:
+			(control as PanelContainer).add_theme_stylebox_override("panel", _transparent_box())
+	if tag == "ScrollView":
+		if control is PanelContainer:
+			(control as PanelContainer).add_theme_stylebox_override("panel", _transparent_box())
+		if control.has_method("get_scroll_container"):
+			var scroll: Variant = control.call("get_scroll_container")
+			if scroll is ScrollContainer:
+				(scroll as ScrollContainer).add_theme_stylebox_override("panel", _transparent_box())
+
+func _apply_surface_containment(element, control: Control, computed) -> void:
+	if element == null or control == null:
+		return
+	var tag: String = str(element.tag)
+	if not SURFACE_TAGS.has(tag):
+		return
+	var radius: int = int(round(computed.get_number("border-radius", 0.0)))
+	if radius <= 0:
+		return
+	if control is Container:
+		(control as Container).clip_contents = true
+
+func _transparent_box() -> StyleBoxFlat:
+	var box := StyleBoxFlat.new()
+	box.bg_color = Color(0, 0, 0, 0)
+	box.border_width_left = 0
+	box.border_width_right = 0
+	box.border_width_top = 0
+	box.border_width_bottom = 0
+	box.content_margin_left = 0
+	box.content_margin_right = 0
+	box.content_margin_top = 0
+	box.content_margin_bottom = 0
+	return box
 
 func _apply_size_properties(control: Control, computed) -> void:
 	var width: int = int(round(computed.get_number("width", -1.0)))

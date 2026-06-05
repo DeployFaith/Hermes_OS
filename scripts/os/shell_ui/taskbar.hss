@@ -16,6 +16,36 @@
 .shell-taskbar-icon-button {
   width: 40px;
   height: 40px;
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+  border-width: 0;
+  border-radius: 10px;
+  shadow: none;
+}
+
+.shell-taskbar-icon-button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: transparent;
+  border-width: 0;
+  border-radius: 10px;
+}
+
+.shell-taskbar-icon-button:pressed {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: transparent;
+  border-width: 0;
+  border-radius: 10px;
+}
+
+.shell-taskbar-icon-button:focus,
+.shell-taskbar-icon-button:selected,
+.shell-taskbar-icon-button:active {
+  background: transparent;
+  border-color: transparent;
+  border-width: 0;
+  border-radius: 10px;
+  shadow: none;
 }
 
 .shell-taskbar-divider {
@@ -24,25 +54,21 @@
 }
 
 .shell-taskbar-windows {
-  flex: 1;
+  flex: 0 0 auto;
   min-height: 40px;
   max-height: 40px;
-  gap: 8px;
+  gap: 6px;
   background: transparent;
   border-width: 0;
   flex-direction: row;
-}
-
-.shell-taskbar-windows-scroll {
-  flex: 1;
-  min-height: 40px;
-  max-height: 40px;
-  background: transparent;
-  border-width: 0;
+  overflow: visible;
   padding: 0;
 }
 
 .shell-taskbar-window-item {
-  width: 42px;
+  width: 40px;
   height: 40px;
+  padding: 0;
+  min-width: 40px;
+  max-width: 40px;
 }

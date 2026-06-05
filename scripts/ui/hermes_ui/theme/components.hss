@@ -65,11 +65,20 @@ Row {
 }
 
 ScrollView {
-  background: var(--surface-1);
-  border-color: var(--border-muted);
-  border-width: 1px;
-  border-radius: var(--radius-lg);
-  padding: var(--space-3);
+  background: transparent;
+  border-color: transparent;
+  border-width: 0px;
+  border-radius: 0px;
+  padding: 0px;
+}
+
+List {
+  background: transparent;
+  border-color: transparent;
+  border-width: 0px;
+  border-radius: 0px;
+  padding: 0px;
+  gap: var(--space-1);
 }
 
 Grid {
@@ -170,9 +179,30 @@ Button[variant="primary"] {
   border-color: var(--accent);
 }
 
-Button[variant="primary"]:hover {
-  background: var(--accent-hover);
+Button:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(var(--accent), 0.3);
+}
+
+Button[variant="primary"]:focus {
   border-color: var(--accent-hover);
+}
+
+ListItem {
+  background: transparent;
+  border-color: transparent;
+  border-width: 0px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+}
+
+ListItem:hover {
+  background: var(--surface-3);
+}
+
+ListItem:selected {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: transparent;
 }
 
 TextInput {
@@ -232,10 +262,10 @@ FileList {
 }
 
 FileRow {
-  background: var(--surface-2);
+  background: transparent;
   color: var(--text);
-  border-color: var(--border-muted);
-  border-width: 1px;
+  border-color: transparent;
+  border-width: 0px;
   border-radius: var(--radius-sm);
   padding: var(--space-2);
   min-height: 32px;
@@ -246,8 +276,8 @@ FileRow:hover {
 }
 
 FileRow:selected {
-  background: rgba(133, 180, 255, 0.20);
-  border-color: rgba(133, 180, 255, 0.55);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: transparent;
 }
 
 PathBreadcrumb {

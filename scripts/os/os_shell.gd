@@ -52,6 +52,7 @@ var _next_app_instance_id: int = 1
 var _open_windows: Dictionary = {}
 var _task_buttons: Dictionary = {}
 var _active_window: OSWindow
+var _shell_overlay_content_occluded: bool = false
 var _window_cascade: int = 0
 var _event_bus: OSEventBus
 var _notification_center: NotificationCenter
@@ -82,16 +83,20 @@ var _desktop_dragging_icon: Button
 var _desktop_drag_icon_offset: Vector2 = Vector2.ZERO
 var _desktop_drag_icon_moved: bool = false
 var _desktop_highlight_color: Color = Tokens.alpha(Tokens.ACCENT, 0.25)
+var _user_accent_color: Color = Tokens.ACCENT
 var _window_layer: Control
 var _taskbar_windows: Control
 var _top_panel: Panel
 var _dock_panel: Panel
 var _start_button: Button
 var _status_icons_row: HBoxContainer
+var _status_button_defaults: Dictionary = {}
 var _status_popover: Panel
 var _status_popover_title: Label
 var _status_popover_body: Label
+var _status_popover_action: Button
 var _status_popover_anchor: Control
+var _status_popover_action_key: String = ""
 var _session_menu_anchor: Control
 var _launcher: Panel
 var _launcher_frame: VBoxContainer
@@ -128,19 +133,14 @@ var _notification_button: Button
 var _notification_layer: Control
 var _notification_history_panel: Panel
 var _notification_list: VBoxContainer
+var _notification_mute_button: Button
 var _notifications: Array[Dictionary] = []
 var _notification_sequence: int = 0
 var _session_active: bool = false
 var _theme_mode: String = "dark"
 var _wallpaper_index: int = 0
 var _wallpaper_colors: Array[Color] = []
-var _dark_wallpaper_colors: Array[Color] = [
-	Color("1a1f2b"),
-	Color("1e2432"),
-	Color("22283a"),
-	Color("1b2422"),
-	Color("2a2320")
-]
+var _dark_wallpaper_colors: Array[Color] = Tokens.WALLPAPER_BRIGHT_PRESETS
 var _light_wallpaper_colors: Array[Color] = [
 	Color("e7edf7"),
 	Color("f1ede4"),
@@ -201,6 +201,8 @@ const LAUNCHER_MIN_WIDTH := 340.0
 const LAUNCHER_MAX_WIDTH := 520.0
 const LAUNCHER_MIN_HEIGHT := 280.0
 const LAUNCHER_MARGIN := 8.0
+const START_BUTTON_TOOLTIP := "Start"
+const NOTIFICATIONS_BUTTON_TOOLTIP := "Notification history"
 const START_MENU_ICON_SIZE := 22
 const DESKTOP_ICON_SIZE := Vector2(118, 86)
 const DESKTOP_ICON_GAP := Vector2(14, 10)
@@ -260,6 +262,7 @@ func _ready() -> void:
 	_register_apps()
 	_setup_action_registry()
 	_build_ui()
+	_sync_shell_visibility()
 	_setup_window_manager()
 	_setup_hermes_agent_service()
 	_setup_state_save_timer()
@@ -565,6 +568,7 @@ func launch_app(app_id: String) -> OSWindow:
 			existing.visible = true
 			_focus_window(existing)
 			_update_task_button(app_id, true)
+			_sync_shell_overlay_content_layers(true)
 			return existing
 
 	var app_instance := _create_app_instance(app_id, {})
@@ -604,6 +608,7 @@ func launch_app(app_id: String) -> OSWindow:
 		window.set_meta("app_instance_id", app_instance.instance_id)
 	_create_task_button(app_id)
 	_focus_window(window)
+	_sync_shell_overlay_content_layers(true)
 	_update_taskbar_indicators()
 	_emit_hermes_event("app.opened", {"app_id": app_id})
 	return window
@@ -774,14 +779,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_hide_alt_tab(false)
 			get_viewport().set_input_as_handled()
 			return
-		_hide_desktop_context_menu()
-		_hide_launcher()
-		if _session_menu:
-			_session_menu.visible = false
-		if _status_popover:
-			_status_popover.visible = false
-		if _notification_history_panel:
-			_notification_history_panel.visible = false
+		_close_shell_overlays()
 		get_viewport().set_input_as_handled()
 	elif key_event.keycode == KEY_META or (key_event.ctrl_pressed and key_event.keycode == KEY_SPACE):
 		_toggle_launcher()
@@ -829,6 +827,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _is_point_inside_control_global(_launcher, pointer):
 		return
 	_hide_launcher()
+	_apply_dock_tooltip_policy()
+	_apply_top_panel_tooltip_policy()
 
 func _is_point_inside_control_global(control: Control, point: Vector2) -> bool:
 	if control == null or not is_instance_valid(control) or not control.visible:
@@ -850,7 +850,6 @@ func _is_text_editing_control(control: Control) -> bool:
 
 func export_state() -> Dictionary:
 	return {
-		"filesystem": _fs.export_state(),
 		"notifications": _notification_center.export_state() if _notification_center != null else _notifications.duplicate(true),
 		"session": {
 			"active": _session_active,
@@ -858,16 +857,15 @@ func export_state() -> Dictionary:
 			"wallpaper_index": _wallpaper_index,
 			"desktop_icon_positions": _desktop_icon_positions.duplicate(true),
 			"desktop_highlight_color": [_desktop_highlight_color.r, _desktop_highlight_color.g, _desktop_highlight_color.b, _desktop_highlight_color.a],
+			"accent_color": [_user_accent_color.r, _user_accent_color.g, _user_accent_color.b],
 			"files_shortcuts": _files_shortcuts.duplicate(true)
 		}
 	}
 
 func import_state(state: Dictionary) -> String:
-	if not state.has("filesystem") or not (state["filesystem"] is Dictionary):
-		return "Invalid HermesOS state: missing filesystem"
-	var message := _fs.import_state(state["filesystem"])
-	if message != "":
-		return message
+	# Account/filesystem state is canonical in OSFileSystem.SAVE_PATH (user://hermes_os_files.json).
+	# Older shell state files may contain a stale "filesystem" snapshot; never import it here,
+	# because doing so overwrites the live account store during startup and can resurrect @user.
 	var notification_state: Variant = state.get("notifications", [])
 	_notifications.clear()
 	_notification_sequence = 0
@@ -889,6 +887,7 @@ func import_state(state: Dictionary) -> String:
 	_session_active = bool(session.get("active", _session_active))
 	_desktop_icon_positions = session.get("desktop_icon_positions", {}).duplicate(true) if session.get("desktop_icon_positions", {}) is Dictionary else {}
 	_set_desktop_highlight_color(_color_from_variant(session.get("desktop_highlight_color", []), _desktop_highlight_color))
+	_update_system_accent(_color_from_variant(session.get("accent_color", []), Tokens.ACCENT), false)
 	_files_shortcuts = _files_sanitize_shortcuts(session.get("files_shortcuts", []), _fs.home_path())
 	_close_all_windows()
 	_hide_desktop_context_menu()
@@ -922,6 +921,7 @@ func reset_state() -> void:
 	_desktop_icon_positions.clear()
 	_files_shortcuts.clear()
 	_set_desktop_highlight_color(Tokens.alpha(Tokens.ACCENT, 0.25))
+	_update_system_accent(Color("6fa8f7"), false)
 	_session_active = false
 	_close_all_windows()
 	_hide_desktop_context_menu()
@@ -990,6 +990,8 @@ func _apply_theme_mode(mode: String, refresh_ui: bool = true) -> void:
 		Tokens.TEXT_DISABLED = Color("5f687d")
 	if _icon_atlas != null:
 		_icon_atlas.set_icon_color(Tokens.TEXT)
+	# Re-apply user accent (preserves across theme toggle).
+	_update_system_accent(_user_accent_color, false)
 	if refresh_ui:
 		_apply_wallpaper()
 		_refresh_shell_icons()
@@ -1001,18 +1003,18 @@ func _refresh_shell_icons() -> void:
 	_ensure_icon_atlas()
 	if _start_button:
 		_start_button.icon = _icon_atlas.get_icon("start", 22)
-	if _notification_button:
-		_notification_button.icon = _icon_atlas.get_icon("notification", 22)
-	if _user_button:
-		_user_button.icon = _icon_atlas.get_icon("user", 22)
+	# Refresh start button accent tint when tokens change (theme/accent update).
+	var taskbar_controller = _shell_fragment_controller("taskbar")
+	if taskbar_controller != null and taskbar_controller.has_method("refresh_start_button_accent"):
+		taskbar_controller.call("refresh_start_button_accent")
 	if _status_icons_row:
-		var status_keys: Array[String] = ["wifi", "volume", "bluetooth", "battery", "power"]
+		var status_keys: Array[String] = ["wifi", "volume", "bluetooth", "battery", "power", "notification", "user"]
 		var index: int = 0
 		for child in _status_icons_row.get_children():
 			var button: Button = child as Button
 			if button != null and index < status_keys.size():
 				button.icon = _icon_atlas.get_icon(status_keys[index], 18)
-			index += 1
+				index += 1
 	if _launcher_category_list:
 		var categories: Array[String] = ["all", "Favorites", "Internet", "Office", "Programming", "System", "Administration"]
 		var category_index: int = 0
@@ -1026,7 +1028,7 @@ func _apply_wallpaper() -> void:
 	if not _desktop_bg:
 		return
 	if _wallpaper_colors.is_empty():
-		_desktop_bg.color = Color("0d0f14")
+		_desktop_bg.color = Tokens.DESKTOP_GRADIENT_TOP
 		return
 	_wallpaper_index = clampi(_wallpaper_index, 0, _wallpaper_colors.size() - 1)
 	_desktop_bg.color = _wallpaper_colors[_wallpaper_index]
@@ -1065,6 +1067,13 @@ func _build_ui() -> void:
 	_build_alt_tab_overlay()
 	_layout()
 
+	# z-order fixes per suggested layering (back to front): desktop wallpaper, icons, windows, dock/top bar shell, start menu overlays, tooltips, modals (front)
+	# Start Menu above desktop/dock as intentional overlay. Dock not competing with Start Menu.
+	_window_layer.z_index = 0
+	_top_panel.z_index = 5
+	_dock_panel.z_index = 5
+	_launcher.z_index = 10
+
 func _build_taskbar() -> void:
 	_top_panel = Panel.new()
 	_top_panel.name = "TopPanel"
@@ -1078,11 +1087,11 @@ func _build_taskbar() -> void:
 
 	var top_row := HBoxContainer.new()
 	top_row.set_anchors_preset(Control.PRESET_FULL_RECT)
-	top_row.offset_left = 10
-	top_row.offset_right = -10
-	top_row.offset_top = 3
-	top_row.offset_bottom = -3
-	top_row.add_theme_constant_override("separation", 8)
+	top_row.offset_left = 12
+	top_row.offset_right = -12
+	top_row.offset_top = 4
+	top_row.offset_bottom = -4
+	top_row.add_theme_constant_override("separation", 10)
 	_top_panel.add_child(top_row)
 
 	var left_row := HBoxContainer.new()
@@ -1115,22 +1124,34 @@ func _build_taskbar() -> void:
 	top_row.add_child(_status_icons_row)
 
 	var tray_items: Array[Dictionary] = [
-		{"label": "Network", "icon": "wifi", "status": "Network controls pending", "detail": "This button opens a status note until network settings are wired."},
-		{"label": "Audio", "icon": "volume", "status": "Audio controls pending", "detail": "This button opens a status note until volume routing is wired."},
-		{"label": "Bluetooth", "icon": "bluetooth", "status": "Bluetooth controls pending", "detail": "This button opens a status note until device pairing is wired."},
-		{"label": "Battery", "icon": "battery", "status": "Battery telemetry pending", "detail": "This button opens a status note until power telemetry is wired."},
-		{"label": "Power", "icon": "power", "status": "", "detail": ""}
+		{"key": "network", "label": "Network", "icon": "wifi", "status": "Connected", "detail": "Wi-Fi connection is active."},
+		{"key": "audio", "label": "Audio", "icon": "volume", "status": "Output ready", "detail": "System sound output is available."},
+		{"key": "bluetooth", "label": "Bluetooth", "icon": "bluetooth", "status": "Unavailable", "detail": "No paired devices connected."},
+		{"key": "battery", "label": "Battery", "icon": "battery", "status": "No battery detected", "detail": "This device is running on AC power."},
+		{"key": "power", "label": "Power", "icon": "power", "status": "", "detail": ""},
+		{"key": "notification", "label": "Notifications", "icon": "notification", "status": "", "detail": ""},
+		{"key": "account", "label": "Account", "icon": "user", "status": "", "detail": ""}
 	]
+	_status_button_defaults.clear()
 	for item in tray_items:
 		var icon_button := _icon_button(str(item.get("icon", "placeholder")), Vector2(28, 24))
+		var item_key := str(item.get("key", "status"))
 		var label_text := str(item.get("label", "Status"))
-		icon_button.tooltip_text = label_text if label_text == "Power" else label_text + ": " + str(item.get("status", "Status available"))
+		var default_tooltip := label_text if label_text in ["Power", "Notifications", "Account"] else label_text + ": " + str(item.get("status", "Status available"))
+		icon_button.tooltip_text = default_tooltip
+		_status_button_defaults[item_key] = default_tooltip
 		if label_text == "Power":
 			icon_button.name = "PowerMenuButton"
 			icon_button.pressed.connect(_toggle_session_menu_from_button.bind(icon_button))
+		elif label_text == "Notifications":
+			icon_button.name = "NotificationStatusButton"
+			icon_button.pressed.connect(_toggle_notification_history)
+		elif label_text == "Account":
+			icon_button.name = "AccountStatusButton"
+			icon_button.pressed.connect(_open_account_settings)
 		else:
 			icon_button.name = label_text + "StatusButton"
-			icon_button.pressed.connect(_toggle_status_popover.bind(label_text, str(item.get("status", "")), str(item.get("detail", "")), icon_button))
+			icon_button.pressed.connect(_toggle_status_popover.bind(item_key, label_text, str(item.get("status", "")), str(item.get("detail", "")), icon_button))
 		_status_icons_row.add_child(icon_button)
 
 	_dock_panel = Panel.new()
@@ -1143,7 +1164,8 @@ func _build_taskbar() -> void:
 	_dock_panel.offset_right = 320
 	_dock_panel.offset_top = -DOCK_HEIGHT - DOCK_BOTTOM_MARGIN
 	_dock_panel.offset_bottom = -DOCK_BOTTOM_MARGIN
-	_dock_panel.add_theme_stylebox_override("panel", StyleFactory.dock_pill(24))
+	# Dock: glass_surface_outer pill (remove rectangular backplate/shadow layer)
+	_dock_panel.add_theme_stylebox_override("panel", StyleFactory.glass_surface_outer(24))
 	add_child(_dock_panel)
 	_mount_taskbar_fragment()
 
@@ -1153,8 +1175,15 @@ func _build_launcher() -> void:
 	_launcher.visible = false
 	_launcher.clip_contents = true
 	_launcher.size = _compute_launcher_size(get_viewport_rect().size)
-	# Launcher: elevated panel with visible border and strong shadow
-	_launcher.add_theme_stylebox_override("panel", StyleFactory.elevated_panel(2, 0.94, 16))
+	# Launcher host is layout-only; visible surface is owned by launcher-window in launcher.hss.
+	var launcher_host_box := StyleBoxFlat.new()
+	launcher_host_box.bg_color = Color(0, 0, 0, 0)
+	launcher_host_box.border_width_left = 0
+	launcher_host_box.border_width_top = 0
+	launcher_host_box.border_width_right = 0
+	launcher_host_box.border_width_bottom = 0
+	launcher_host_box.shadow_size = 0
+	_launcher.add_theme_stylebox_override("panel", launcher_host_box)
 	add_child(_launcher)
 	_mount_launcher_fragment()
 	_rebuild_launcher_list()
@@ -1250,8 +1279,7 @@ func _sync_shell_taskbar_controls() -> void:
 		return
 	_start_button = _find_hermes_control(_dock_panel, "taskbar-start") as Button
 	_taskbar_windows = _find_hermes_control(_dock_panel, "taskbar-windows")
-	_notification_button = _find_hermes_control(_dock_panel, "taskbar-notifications") as Button
-	_user_button = _find_hermes_control(_dock_panel, "taskbar-user") as Button
+	_apply_dock_tooltip_policy()
 	_sync_task_buttons_from_fragment()
 
 func _sync_task_buttons_from_fragment() -> void:
@@ -1268,6 +1296,7 @@ func _refresh_taskbar_fragment() -> void:
 	if controller != null and controller.has_method("refresh_taskbar"):
 		controller.call("refresh_taskbar")
 	_sync_shell_taskbar_controls()
+	_apply_dock_tooltip_policy()
 
 func _find_hermes_control(node: Node, hermes_id: String) -> Control:
 	if node == null:
@@ -1285,8 +1314,9 @@ func _build_session_menu() -> void:
 	_session_menu.name = "SessionMenu"
 	_session_menu.visible = false
 	_session_menu.size = Vector2(304, 324)
-	_session_menu.clip_contents = true
+	_session_menu.clip_contents = false
 	_session_menu.mouse_filter = Control.MOUSE_FILTER_STOP
+	_session_menu.z_index = 12
 	_session_menu.add_theme_stylebox_override("panel", StyleFactory.context_menu(14))
 	add_child(_session_menu)
 
@@ -1320,6 +1350,7 @@ func _build_session_menu() -> void:
 	account_button.tooltip_text = "Open Account Center"
 	account_button.pressed.connect(func() -> void:
 		_session_menu.visible = false
+		_sync_shell_overlay_content_layers()
 		_open_account_settings()
 	)
 	column.add_child(account_button)
@@ -1333,6 +1364,7 @@ func _build_session_menu() -> void:
 		var action_key := str(item[1])
 		option.pressed.connect(func() -> void:
 			_session_menu.visible = false
+			_sync_shell_overlay_content_layers()
 			if action_key == "switch":
 				switch_user_session()
 			else:
@@ -1345,8 +1377,9 @@ func _build_status_popover() -> void:
 	_status_popover.name = "TopPanelStatusPopover"
 	_status_popover.visible = false
 	_status_popover.size = Vector2(280, 132)
-	_status_popover.clip_contents = true
+	_status_popover.clip_contents = false
 	_status_popover.mouse_filter = Control.MOUSE_FILTER_STOP
+	_status_popover.z_index = 12
 	_status_popover.add_theme_stylebox_override("panel", StyleFactory.context_menu(14))
 	add_child(_status_popover)
 
@@ -1368,8 +1401,15 @@ func _build_status_popover() -> void:
 	_status_popover_body.name = "TopPanelStatusBody"
 	_status_popover_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status_popover_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_status_popover_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_status_popover_body.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	column.add_child(_status_popover_body)
+
+	_status_popover_action = _button("", Vector2(0, 34))
+	_status_popover_action.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_status_popover_action.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_status_popover_action.visible = false
+	_status_popover_action.pressed.connect(_on_status_popover_action_pressed)
+	column.add_child(_status_popover_action)
 
 func _build_desktop_context_menu() -> void:
 	_desktop_context_menu = Panel.new()
@@ -1504,6 +1544,36 @@ func clear_notifications() -> void:
 		if notification_id != "":
 			notification_dismissed.emit(notification_id)
 
+# Mute/unmute control and state update for notification center UI (per notification-behavior-repair-001)
+func _toggle_notification_mute() -> void:
+	if _notification_center == null:
+		return
+	if _notification_center.muted:
+		_notification_center.unmute()
+	else:
+		_notification_center.mute()
+	_update_mute_button_state()
+	# Update topbar notification button tooltip/icon state
+	_update_notification_button_mute_state()
+	_refresh_notifications()
+
+func _update_mute_button_state() -> void:
+	if _notification_mute_button == null or _notification_center == null:
+		return
+	if _notification_center.muted:
+		_notification_mute_button.text = "Unmute notifications"
+	else:
+		_notification_mute_button.text = "Mute notifications"
+
+func _update_notification_button_mute_state() -> void:
+	if _notification_button == null:
+		return
+	if _notification_center != null and _notification_center.muted:
+		_notification_button.tooltip_text = "Notifications (muted - critical only)"
+		# Icon state: could change icon but keep simple, use existing icon with note
+	else:
+		_notification_button.tooltip_text = "Notifications"
+
 func _build_notification_layer() -> void:
 	_notification_layer = Control.new()
 	_notification_layer.name = "NotificationLayer"
@@ -1580,6 +1650,12 @@ func _build_notification_history_panel() -> void:
 	clear_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	clear_button.pressed.connect(clear_notifications)
 	header.add_child(clear_button)
+	# Visible mute/unmute control added per notification-behavior-repair-001
+	_notification_mute_button = _button("Mute notifications", Vector2(140, 30))
+	_notification_mute_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_notification_mute_button.pressed.connect(_toggle_notification_mute)
+	header.add_child(_notification_mute_button)
+	_update_mute_button_state()
 
 	var divider := HSeparator.new()
 	column.add_child(divider)
@@ -1597,20 +1673,17 @@ func _build_notification_history_panel() -> void:
 func _toggle_notification_history() -> void:
 	if not _session_active:
 		return
-	_hide_desktop_context_menu()
-	_hide_launcher()
-	if _session_menu:
-		_session_menu.visible = false
-	if _status_popover:
-		_status_popover.visible = false
+	_close_shell_overlays("notification_history")
 	_notification_history_panel.visible = not _notification_history_panel.visible
+	_sync_shell_overlay_content_layers()
+	_apply_dock_tooltip_policy()
+	_apply_top_panel_tooltip_policy()
 	if _notification_history_panel.visible:
 		_notification_history_panel.move_to_front()
+		_update_mute_button_state()
+		_update_notification_button_mute_state()
 
 func _refresh_notifications() -> void:
-	if _notification_button:
-		_notification_button.text = ""
-		_notification_button.tooltip_text = "Notifications" if _notifications.is_empty() else "Notifications (" + str(_notifications.size()) + ")"
 	if not _notification_list:
 		return
 	for child in _notification_list.get_children():
@@ -1703,6 +1776,7 @@ func _handle_notification_clicked(notification: Dictionary) -> void:
 			launch_app(app_id)
 	if _notification_history_panel:
 		_notification_history_panel.visible = false
+	_sync_shell_overlay_content_layers()
 
 func _notification_level_color(level: String) -> Color:
 	match level:
@@ -2103,6 +2177,12 @@ func _set_desktop_highlight_color(color: Color) -> void:
 	_update_desktop_icon_selection()
 	_queue_state_save()
 
+func _update_system_accent(accent: Color, save: bool = true) -> void:
+	_user_accent_color = Tokens.set_accent(accent)
+	_refresh_shell_icons()
+	if save:
+		_queue_state_save()
+
 func _desktop_icon_texture(_is_folder: bool) -> Texture2D:
 	# DEPRECATED: use IconAtlas instead
 	return ImageTexture.create_from_image(Image.create(1, 1, false, Image.FORMAT_RGBA8))
@@ -2149,12 +2229,7 @@ func _on_desktop_gui_input(event: InputEvent) -> void:
 			return
 		if mouse_event.button_index == MOUSE_BUTTON_LEFT:
 			if mouse_event.pressed:
-				_hide_desktop_context_menu()
-				_hide_launcher()
-				if _session_menu:
-					_session_menu.visible = false
-				if _notification_history_panel:
-					_notification_history_panel.visible = false
+				_close_shell_overlays()
 				_clear_desktop_icon_selection()
 				_desktop_drag_selecting = true
 				_desktop_drag_start = mouse_event.position
@@ -2198,11 +2273,7 @@ func _select_icons_in_drag_rect() -> void:
 func _show_desktop_context_menu(global_pos: Vector2) -> void:
 	if not _session_active or _auth_overlay != null:
 		return
-	_hide_launcher()
-	if _session_menu:
-		_session_menu.visible = false
-	if _notification_history_panel:
-		_notification_history_panel.visible = false
+	_close_shell_overlays("desktop_context")
 	_desktop_context_menu.position = Vector2(
 		clampf(global_pos.x, 8.0, maxf(size.x - _desktop_context_menu.size.x - 8.0, 8.0)),
 		clampf(global_pos.y, WINDOW_TOP_MARGIN, maxf(size.y - WINDOW_BOTTOM_MARGIN - _desktop_context_menu.size.y - 8.0, WINDOW_TOP_MARGIN))
@@ -2363,12 +2434,7 @@ func _user_avatar_icon(username: String) -> Texture2D:
 func _open_account_settings() -> void:
 	_hide_launcher()
 	launch_app("accounts")
-	notify({
-		"title": "Account Center",
-		"body": "Manage accounts, passwords, and profile pictures.",
-		"level": "info",
-		"app_id": "accounts"
-	})
+	# Notification on open removed to stop noisy Account Center notification (per notification-behavior-repair-001)
 
 func _power_action(action: String) -> void:
 	match action:
@@ -2407,6 +2473,7 @@ func _refresh_launcher_header() -> void:
 func _hide_launcher_fast() -> void:
 	if _launcher:
 		_launcher.visible = false
+	_sync_shell_overlay_content_layers()
 
 func _hide_launcher() -> void:
 	if _launcher:
@@ -2417,6 +2484,7 @@ func _hide_launcher() -> void:
 	_launcher_category_filter = "all"
 	_launcher_selected_app_id = ""
 	_sync_shell_launcher_controls()
+	_sync_shell_overlay_content_layers()
 
 func _launcher_matches_filter(app_id: String) -> bool:
 	if not _apps.has(app_id):
@@ -2511,14 +2579,24 @@ func _launcher_activate_selected() -> void:
 
 func _layout() -> void:
 	if _dock_panel:
-		var dock_width := clampf(size.x * 0.48, 540.0, 980.0)
+		var estimated := 0
+		if has_meta("taskbar_estimated_width"):
+			estimated = int(get_meta("taskbar_estimated_width"))
+		else:
+			estimated = 48 + 3 * 46  # default Start + 3 tasks + gaps
+		var dock_width := clampf(float(estimated), 380.0, clampf(size.x * 0.65, 520.0, 1100.0))
 		_dock_panel.offset_left = -dock_width * 0.5
 		_dock_panel.offset_right = dock_width * 0.5
 		_dock_panel.offset_top = -DOCK_HEIGHT - DOCK_BOTTOM_MARGIN
 		_dock_panel.offset_bottom = -DOCK_BOTTOM_MARGIN
+		# Ensure pill-shaped, Start left inset, no artifacts, horizontal overflow, active indicator aligned
+		_dock_panel.add_theme_stylebox_override("panel", StyleFactory.glass_surface_outer(24))
 	if _launcher:
 		_launcher.size = _compute_launcher_size(size)
-		var launcher_pos := Vector2(maxf((size.x - _launcher.size.x) * 0.5, LAUNCHER_MARGIN), size.y - WINDOW_BOTTOM_MARGIN - _launcher.size.y - 8.0)
+		var start_center_x := size.x * 0.5
+		if _start_button != null and is_instance_valid(_start_button):
+			start_center_x = _start_button.get_global_rect().get_center().x
+		var launcher_pos := Vector2(start_center_x - (_launcher.size.x * 0.24), size.y - WINDOW_BOTTOM_MARGIN - _launcher.size.y - 8.0)
 		var max_x := maxf(size.x - _launcher.size.x - LAUNCHER_MARGIN, LAUNCHER_MARGIN)
 		var max_y := maxf(size.y - WINDOW_BOTTOM_MARGIN - _launcher.size.y - LAUNCHER_MARGIN, LAUNCHER_MARGIN)
 		_launcher.position = Vector2(clampf(launcher_pos.x, LAUNCHER_MARGIN, max_x), clampf(launcher_pos.y, WINDOW_TOP_MARGIN, max_y))
@@ -2836,14 +2914,31 @@ func _update_taskbar_indicators() -> void:
 			indicator.color = Color.TRANSPARENT
 
 func _on_task_button_pressed(app_id: String) -> void:
-	if not _open_windows.has(app_id):
+	var window := _current_window_for_app(app_id)
+	if window == null:
 		launch_app(app_id)
 		return
-	var window := _open_windows[app_id] as OSWindow
-	if window.visible:
+	if not window.visible:
+		_restore_window(window)
+		return
+	if _active_window == window:
 		_on_window_minimize_requested(window)
-	else:
-		_focus_window(window)
+		return
+	_focus_window(window)
+
+func _restore_window(window: OSWindow) -> void:
+	if window == null or not is_instance_valid(window):
+		return
+	if _window_manager != null:
+		var managed_id := _window_manager.get_window_id(window)
+		if managed_id > 0 and _window_manager.get_window(managed_id) != null:
+			_window_manager.restore_window(managed_id)
+			return
+	window.visible = true
+	_focus_window(window)
+	_update_task_button(window.app_id, true)
+	_update_taskbar_indicators()
+	_emit_hermes_event("window.restored", {"window_id": _window_id(window), "app_id": window.app_id})
 
 func _close_active_window() -> void:
 	if _active_window and is_instance_valid(_active_window):
@@ -2866,23 +2961,20 @@ func _focus_next_window() -> void:
 func _toggle_launcher() -> void:
 	if not _session_active:
 		return
-	_hide_desktop_context_menu()
-	if _session_menu:
-		_session_menu.visible = false
-	if _status_popover:
-		_status_popover.visible = false
-	if _notification_history_panel:
-		_notification_history_panel.visible = false
+	_close_shell_overlays("launcher")
 	if _launcher == null:
 		return
 	_launcher.visible = not _launcher.visible
+	_sync_shell_overlay_content_layers()
+	_apply_dock_tooltip_policy()
+	_apply_top_panel_tooltip_policy()
 	if _launcher.visible:
 		_refresh_launcher_header()
 		_rebuild_launcher_list()
 		_layout()
 		_launcher.move_to_front()
 		var animator := UIAnimator.new()
-		animator.scale_in(_launcher, Tokens.TIME["normal"])
+		animator.menu_pop(_launcher, Tokens.TIME["normal"])
 		if _launcher_search:
 			_launcher_search.grab_focus()
 	else:
@@ -2894,28 +2986,22 @@ func _toggle_session_menu_from_button(anchor: Control) -> void:
 func _toggle_session_menu(anchor: Control = null) -> void:
 	if not _session_active:
 		return
-	_hide_desktop_context_menu()
-	_hide_launcher()
-	if _status_popover:
-		_status_popover.visible = false
-	if _notification_history_panel:
-		_notification_history_panel.visible = false
+	_close_shell_overlays("session_menu")
 	_session_menu_anchor = anchor
 	_session_menu.visible = not _session_menu.visible
+	_sync_shell_overlay_content_layers()
 	if _session_menu.visible:
 		_position_session_menu(anchor)
 		_session_menu.move_to_front()
+	_apply_dock_tooltip_policy()
+	_apply_top_panel_tooltip_policy()
 
-func _toggle_status_popover(title: String, status: String, detail: String, anchor: Control) -> void:
+func _toggle_status_popover(status_key: String, title: String, status: String, detail: String, anchor: Control) -> void:
 	if not _session_active or _status_popover == null:
 		return
-	_hide_desktop_context_menu()
-	_hide_launcher()
-	if _session_menu:
-		_session_menu.visible = false
-	if _notification_history_panel:
-		_notification_history_panel.visible = false
+	_close_shell_overlays("status_popover")
 	_status_popover_anchor = anchor
+	_status_popover_action_key = status_key
 	if _status_popover_title:
 		_status_popover_title.text = title
 	if _status_popover_body:
@@ -2923,10 +3009,14 @@ func _toggle_status_popover(title: String, status: String, detail: String, ancho
 		if detail.strip_edges() != "":
 			body_text += "\n" + detail.strip_edges()
 		_status_popover_body.text = body_text
+	_configure_status_popover_action(status_key)
 	_status_popover.visible = not _status_popover.visible
+	_sync_shell_overlay_content_layers()
 	if _status_popover.visible:
 		_position_status_popover(anchor)
 		_status_popover.move_to_front()
+	_apply_dock_tooltip_policy()
+	_apply_top_panel_tooltip_policy()
 
 func _position_session_menu(anchor: Control = null) -> void:
 	_position_anchored_panel(_session_menu, anchor, Vector2(size.x - _session_menu.size.x - 12.0, TOP_PANEL_HEIGHT + 8.0))
@@ -2964,6 +3054,7 @@ func _show_alt_tab() -> void:
 	_rebuild_alt_tab_content()
 	_alt_tab_overlay.visible = true
 	_alt_tab_overlay.move_to_front()
+	_sync_shell_overlay_content_layers()
 
 func _alt_tab_advance() -> void:
 	if _alt_tab_window_order.is_empty():
@@ -2975,6 +3066,7 @@ func _hide_alt_tab(activate := true) -> void:
 	if not _alt_tab_overlay or not _alt_tab_overlay.visible:
 		return
 	_alt_tab_overlay.visible = false
+	_sync_shell_overlay_content_layers()
 	if activate and _alt_tab_selected_index >= 0 and _alt_tab_selected_index < _alt_tab_window_order.size():
 		var window := _alt_tab_window_order[_alt_tab_selected_index] as OSWindow
 		if is_instance_valid(window):
@@ -3028,16 +3120,10 @@ func _alt_tab_item(window: OSWindow, selected: bool) -> Control:
 	return container
 
 func _update_clock() -> void:
-	if _user_button:
-		_user_button.text = ""
-		_user_button.tooltip_text = "Open Account Center for " + _fs.current_user()
-		_user_button.expand_icon = true
-		_ensure_icon_atlas()
-		_user_button.icon = _icon_atlas.get_icon("user", 22)
 	if not _clock_label:
 		return
 	var now := Time.get_datetime_dict_from_system()
-	_clock_label.text = "%s %d, %02d:%02d" % [_month_name(int(now.month)), int(now.day), int(now.hour), int(now.minute)]
+	_clock_label.text = "%s %d, %s" % [_month_name(int(now.month)), int(now.day), _topbar_time_text(now)]
 
 func login_session(username: String, password := "") -> String:
 	var clean := _fs.clean_username(username)
@@ -3053,6 +3139,7 @@ func login_session(username: String, password := "") -> String:
 		_close_all_windows()
 	_session_active = true
 	_hide_auth_screen()
+	_sync_shell_visibility()
 	_refresh_desktop_icons()
 	_update_clock()
 	_queue_state_save()
@@ -3081,16 +3168,162 @@ func _route_after_boot() -> void:
 	if _boot_next_action == "show_desktop" and _session_active:
 		_hide_auth_screen()
 		_hide_desktop_context_menu()
-		if _launcher:
-			_launcher.visible = false
-		if _session_menu:
-			_session_menu.visible = false
-		if _status_popover:
-			_status_popover.visible = false
-		if _notification_history_panel:
-			_notification_history_panel.visible = false
+		_sync_shell_visibility()
 		return
 	_show_auth_screen(_boot_target_auth_mode, _boot_target_auth_message)
+
+func _apply_dock_tooltip_policy() -> void:
+	var suppress := _shell_tooltips_suppressed()
+	if _start_button != null and is_instance_valid(_start_button):
+		_start_button.tooltip_text = "" if suppress else START_BUTTON_TOOLTIP
+	for app_id in _task_buttons.keys():
+		var button := _task_buttons[app_id] as Button
+		if button == null or not is_instance_valid(button):
+			continue
+		if suppress:
+			button.tooltip_text = ""
+			continue
+		var app: Dictionary = _apps.get(app_id, {}) as Dictionary
+		button.tooltip_text = str(app.get("title", app_id))
+
+func _apply_top_panel_tooltip_policy() -> void:
+	if _status_icons_row == null:
+		return
+	var suppress := _shell_tooltips_suppressed()
+	for child in _status_icons_row.get_children():
+		var button := child as Button
+		if button == null:
+			continue
+		if suppress:
+			button.tooltip_text = ""
+			continue
+		var status_key := _status_key_for_button(button)
+		button.tooltip_text = str(_status_button_defaults.get(status_key, button.name))
+
+func _status_key_for_button(button: Button) -> String:
+	if button == null:
+		return ""
+	if button.name == "NetworkStatusButton":
+		return "network"
+	if button.name == "AudioStatusButton":
+		return "audio"
+	if button.name == "BluetoothStatusButton":
+		return "bluetooth"
+	if button.name == "BatteryStatusButton":
+		return "battery"
+	if button.name == "PowerMenuButton":
+		return "power"
+	if button.name == "NotificationStatusButton":
+		return "notification"
+	if button.name == "AccountStatusButton":
+		return "account"
+	return ""
+
+func _configure_status_popover_action(status_key: String) -> void:
+	if _status_popover_action == null:
+		return
+	_status_popover_action.visible = true
+	_status_popover_action.disabled = false
+	_status_popover_action.tooltip_text = ""
+	match status_key:
+		"network", "audio", "bluetooth", "battery":
+			_status_popover_action.text = "Open System Settings"
+		"":
+			_status_popover_action.visible = false
+		_:
+			_status_popover_action.visible = false
+
+func _on_status_popover_action_pressed() -> void:
+	if _status_popover:
+		_status_popover.visible = false
+	_sync_shell_overlay_content_layers()
+	match _status_popover_action_key:
+		"network", "audio", "bluetooth", "battery":
+			launch_app("system")
+		_:
+			pass
+	_apply_dock_tooltip_policy()
+	_apply_top_panel_tooltip_policy()
+
+func _close_shell_overlays(except: String = "") -> void:
+	var keep := except.strip_edges().to_lower()
+	if keep != "desktop_context":
+		_hide_desktop_context_menu()
+	if keep != "launcher":
+		_hide_launcher()
+	if keep != "session_menu" and _session_menu:
+		_session_menu.visible = false
+	if keep != "status_popover" and _status_popover:
+		_status_popover.visible = false
+	if keep != "notification_history" and _notification_history_panel:
+		_notification_history_panel.visible = false
+	_apply_dock_tooltip_policy()
+	_apply_top_panel_tooltip_policy()
+	_sync_shell_overlay_content_layers()
+
+func _sync_shell_overlay_content_layers(force := false) -> void:
+	var active := _shell_content_overlay_active()
+	if not force and _shell_overlay_content_occluded == active:
+		return
+	_shell_overlay_content_occluded = active
+	for window in _all_open_windows_in_app_order():
+		if is_instance_valid(window):
+			_set_app_content_occluded_by_shell_overlay(window, active)
+
+func _shell_content_overlay_active() -> bool:
+	return _shell_tooltips_suppressed() \
+		or (_alt_tab_overlay != null and _alt_tab_overlay.visible)
+
+func _set_app_content_occluded_by_shell_overlay(root: Node, active: bool) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	if root.has_method("set_shell_overlay_occluded"):
+		root.call("set_shell_overlay_occluded", active)
+	for child in root.get_children():
+		_set_app_content_occluded_by_shell_overlay(child, active)
+
+func _shell_tooltips_suppressed() -> bool:
+	return (_launcher != null and _launcher.visible) \
+		or (_session_menu != null and _session_menu.visible) \
+		or (_status_popover != null and _status_popover.visible) \
+		or (_notification_history_panel != null and _notification_history_panel.visible)
+
+func _topbar_time_text(now: Dictionary) -> String:
+	var hour_24 := int(now.get("hour", 0))
+	var minute := int(now.get("minute", 0))
+	var meridiem := "AM" if hour_24 < 12 else "PM"
+	var hour_12 := hour_24 % 12
+	if hour_12 == 0:
+		hour_12 = 12
+	return "%d:%02d %s" % [hour_12, minute, meridiem]
+
+func _sync_shell_visibility() -> void:
+	# Central gating for shell chrome visibility based on session/auth/boot state.
+	# Prevents taskbar/dock/topbar/launcher leakage on boot splash or login.
+	# Called on state transitions and after shell construction.
+	var desktop_ready := _session_active and not _boot_sequence_active and not (_auth_overlay and is_instance_valid(_auth_overlay) and _auth_overlay.visible) and not (_boot_overlay and is_instance_valid(_boot_overlay) and _boot_overlay.visible)
+	if _top_panel:
+		_top_panel.visible = desktop_ready
+		_top_panel.mouse_filter = Control.MOUSE_FILTER_STOP if desktop_ready else Control.MOUSE_FILTER_IGNORE
+	if _dock_panel:
+		_dock_panel.visible = desktop_ready
+		_dock_panel.mouse_filter = Control.MOUSE_FILTER_STOP if desktop_ready else Control.MOUSE_FILTER_IGNORE
+	if _launcher:
+		if not desktop_ready:
+			_launcher.visible = false
+	_apply_dock_tooltip_policy()
+	_apply_top_panel_tooltip_policy()
+	if _session_menu:
+		if not desktop_ready:
+			_session_menu.visible = false
+	if _status_popover:
+		if not desktop_ready:
+			_status_popover.visible = false
+	if _notification_history_panel:
+		if not desktop_ready:
+			_notification_history_panel.visible = false
+	_sync_shell_overlay_content_layers(true)
+	# Tooltips/popups and alt_tab follow similar gating when needed.
 
 func _begin_boot_sequence(next_action: String = "show_auth", auth_mode: String = "login", auth_message := "") -> void:
 	_boot_next_action = next_action
@@ -3103,12 +3336,7 @@ func _begin_boot_sequence(next_action: String = "show_auth", auth_mode: String =
 		return
 	_boot_sequence_active = true
 	_hide_desktop_context_menu()
-	if _launcher:
-		_launcher.visible = false
-	if _session_menu:
-		_session_menu.visible = false
-	if _notification_history_panel:
-		_notification_history_panel.visible = false
+	_sync_shell_visibility()
 
 	_boot_overlay = Control.new()
 	_boot_overlay.name = "BootOverlay"
@@ -3217,12 +3445,7 @@ func _show_auth_screen(mode: String, message := "") -> void:
 	_hide_boot_sequence()
 	_hide_auth_screen()
 	_hide_desktop_context_menu()
-	if _launcher:
-		_launcher.visible = false
-	if _session_menu:
-		_session_menu.visible = false
-	if _notification_history_panel:
-		_notification_history_panel.visible = false
+	_sync_shell_visibility()
 
 	_auth_overlay = Control.new()
 	_auth_overlay.name = "AuthOverlay"
@@ -4521,15 +4744,15 @@ func _style_line_edit(input: LineEdit) -> void:
 	input.add_theme_color_override("font_color", Tokens.TEXT)
 	input.add_theme_color_override("caret_color", Tokens.TEXT)
 	input.add_theme_color_override("font_placeholder_color", Tokens.MUTED)
-	input.add_theme_stylebox_override("normal", StyleFactory.input_normal(8))
-	input.add_theme_stylebox_override("focus", StyleFactory.input_focus(8))
+	input.add_theme_stylebox_override("normal", StyleFactory.input_field(8))
+	input.add_theme_stylebox_override("focus", StyleFactory.input_field_focus(8))
 
 func _style_text_edit(input: TextEdit) -> void:
 	input.add_theme_color_override("font_color", Tokens.TEXT)
 	input.add_theme_color_override("font_readonly_color", Tokens.MUTED)
 	input.add_theme_color_override("caret_color", Tokens.TEXT)
-	input.add_theme_stylebox_override("normal", StyleFactory.input_normal(8))
-	input.add_theme_stylebox_override("focus", StyleFactory.input_focus(8))
+	input.add_theme_stylebox_override("normal", StyleFactory.input_field(8))
+	input.add_theme_stylebox_override("focus", StyleFactory.input_field_focus(8))
 	input.add_theme_stylebox_override("read_only", StyleFactory.build(Tokens.alpha(Tokens.PANEL, 0.5), Tokens.BORDER, 1, 8))
 
 func _style_item_list(list: ItemList) -> void:

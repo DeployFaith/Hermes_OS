@@ -6,9 +6,16 @@ const MAX_RECENT := 50
 var _event_bus: OSEventBus
 var _notifications: Array[Dictionary] = []
 var _sequence: int = 0
+var muted: bool = false
 
 func setup(event_bus: OSEventBus) -> void:
 	_event_bus = event_bus
+
+func mute() -> void:
+	muted = true
+
+func unmute() -> void:
+	muted = false
 
 func _set_notification_sequence(sequence: int) -> void:
 	_sequence = maxi(_sequence, sequence)
@@ -20,6 +27,13 @@ func notify(title: String, body: String = "", options: Dictionary = {}) -> Dicti
 	return notify_from_dict(data)
 
 func notify_from_dict(data: Dictionary) -> Dictionary:
+	var app_id := str(data.get("app_id", "")).strip_edges().to_lower()
+	if app_id in ["account_center", "accounts", "system_settings"]:
+		return {}
+	if muted:
+		var level := str(data.get("level", "info")).strip_edges().to_lower()
+		if level != "critical":
+			return {}
 	_sequence += 1
 	var notification_id := "n_" + str(_sequence)
 	var action_variant: Variant = data.get("action", {})

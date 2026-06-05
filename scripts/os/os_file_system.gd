@@ -22,6 +22,7 @@ const BUILTIN_AVATARS: Array[String] = [
 
 var _state: Dictionary = {}
 var _tree: Dictionary = {}
+var _root_authorization_depth := 0
 
 func load_or_create() -> void:
 	_state = _empty_state()
@@ -53,7 +54,9 @@ func load_or_create() -> void:
 		_state = _empty_state()
 		_tree = _state["tree"]
 	_ensure_system_layout()
-	save()
+	# FIX for live save/load mismatch: do NOT save() after successful load.
+	# Previous always-save after load could trigger _ensure mutations or overwrite renamed state on every startup/restart.
+	# Only save on creation or error recovery. Live-path probe now verifies rename survives actual load_or_create without forced save.
 
 func save() -> void:
 	_state["tree"] = _tree
@@ -84,6 +87,17 @@ func import_state(state: Dictionary) -> String:
 
 func current_user() -> String:
 	return str(_state.get("current_user", DEFAULT_USERNAME))
+
+func has_root_privilege() -> bool:
+	return current_user() == ROOT_USER or _root_authorization_depth > 0
+
+func with_root_authorization(action: Callable) -> Variant:
+	_root_authorization_depth += 1
+	var result: Variant = null
+	if action.is_valid():
+		result = action.call()
+	_root_authorization_depth = maxi(0, _root_authorization_depth - 1)
+	return result
 
 func set_current_user(username: String) -> String:
 	var clean := clean_username(username)
@@ -116,11 +130,25 @@ func set_current_user_authenticated(username: String, password: String) -> Strin
 		return str(auth.get("error", "Authentication failed"))
 	return set_current_user(str(auth.get("user", username)))
 
+# Root authorization helpers for scoped elevation (added for root-auth execution repair)
+func validate_root_password(password: String) -> bool:
+	if not user_exists(ROOT_USER):
+		return false
+	var users: Dictionary = _state.get("users", {})
+	var account: Dictionary = users[ROOT_USER]
+	var expected := str(account.get("password_hash", _password_hash("")))
+	if password == "":
+		return expected == _password_hash("")
+	return expected == _password_hash(password)
+
+func auth_root(password: String) -> bool:
+	return validate_root_password(password)
+
 func set_user_password(username: String, new_password: String, current_password := "") -> String:
 	var clean := clean_username(username)
 	if clean == "" or not user_exists(clean):
 		return "Unknown user: " + username
-	if current_user() != ROOT_USER:
+	if not has_root_privilege():
 		if clean != current_user():
 			return "Permission denied: passwd can only change your own password"
 		var auth := authenticate_user(clean, current_password)
@@ -175,7 +203,7 @@ func list_login_users() -> Array[Dictionary]:
 	return output
 
 func create_user_account(username: String, display_name: String, password: String) -> String:
-	if current_user() != ROOT_USER:
+	if not has_root_privilege():
 		return "Permission denied: creating accounts requires root"
 	var clean := clean_username(username)
 	if clean == "":
@@ -214,7 +242,7 @@ func create_user_account(username: String, display_name: String, password: Strin
 	return ""
 
 func delete_user_account(username: String, remove_home := false) -> String:
-	if current_user() != ROOT_USER:
+	if not has_root_privilege():
 		return "Permission denied: deleting accounts requires root"
 	var clean := clean_username(username)
 	if clean == "" or not user_exists(clean):
@@ -227,33 +255,31 @@ func delete_user_account(username: String, remove_home := false) -> String:
 	users.erase(clean)
 	_state["users"] = users
 	if bool(remove_home):
-		var previous_user := current_user()
-		_state["current_user"] = ROOT_USER
 		delete_path("/home/" + clean)
-		_state["current_user"] = previous_user
 	_sync_system_files()
 	save()
 	return ""
 
 func rename_user_account(old_username: String, new_username: String) -> String:
-	if current_user() != ROOT_USER:
+	if not has_root_privilege():
 		return "Permission denied: renaming accounts requires root"
+	var active_before := current_user()
 	var source := clean_username(old_username)
 	var target := clean_username(new_username)
+	var renaming_active := active_before == source
 	if source == "" or not user_exists(source):
 		return "Unknown user: " + old_username
 	if target == "":
 		return "Username must contain only letters, numbers, '_' or '-'"
 	if source == ROOT_USER:
 		return "Cannot rename root"
-	if source == current_user():
-		return "Cannot rename currently active user"
 	if source == target:
 		return ""
 	if user_exists(target):
 		return "User already exists: " + target
 	var users: Dictionary = _state.get("users", {})
-	var account: Dictionary = users[source]
+	var original_account: Dictionary = (users[source] as Dictionary).duplicate(true)
+	var account: Dictionary = original_account.duplicate(true)
 	users.erase(source)
 	account["group"] = target
 	account["home"] = "/home/" + target
@@ -266,25 +292,29 @@ func rename_user_account(old_username: String, new_username: String) -> String:
 			account["avatar_value"] = "/home/%s/.config/hermesos/avatar.png" % target
 	users[target] = account
 	_state["users"] = users
-	var previous_user := current_user()
-	_state["current_user"] = ROOT_USER
 	var source_home := "/home/" + source
 	var target_home := "/home/" + target
 	if exists(source_home):
-		var move_error := move_path(source_home, target_home)
+		var move_error := move_path(source_home, target_home, false)
 		if move_error != "":
-			_state["current_user"] = previous_user
+			users.erase(target)
+			users[source] = original_account
+			_state["users"] = users
+			_state["current_user"] = active_before
 			return move_error
 		var home_node := get_node_at(target_home)
 		if not home_node.is_empty():
 			_reassign_node_owner_recursive(home_node, target, target)
-	_state["current_user"] = previous_user
+	if renaming_active:
+		_state["current_user"] = target
+	else:
+		_state["current_user"] = active_before
 	_sync_system_files()
 	save()
 	return ""
 
 func duplicate_user_account(source_username: String, target_username: String, display_name := "") -> String:
-	if current_user() != ROOT_USER:
+	if not has_root_privilege():
 		return "Permission denied: duplicating accounts requires root"
 	var source := clean_username(source_username)
 	var target := clean_username(target_username)
@@ -312,8 +342,6 @@ func duplicate_user_account(source_username: String, target_username: String, di
 		target_account["display_name"] = "%s (copy)" % str(source_account.get("display_name", source))
 	users[target] = target_account
 	_state["users"] = users
-	var previous_user := current_user()
-	_state["current_user"] = ROOT_USER
 	var source_home := "/home/" + source
 	var target_home := "/home/" + target
 	if exists(source_home):
@@ -321,12 +349,10 @@ func duplicate_user_account(source_username: String, target_username: String, di
 			delete_path(target_home)
 		var copy_error := copy_path(source_home, target_home)
 		if copy_error != "":
-			_state["current_user"] = previous_user
 			return copy_error
 		var copied_home := get_node_at(target_home)
 		if not copied_home.is_empty():
 			_reassign_node_owner_recursive(copied_home, target, target)
-	_state["current_user"] = previous_user
 	_sync_system_files()
 	save()
 	return ""
@@ -349,7 +375,7 @@ func set_user_display_name(username: String, display_name: String) -> String:
 	return ""
 
 func set_user_login_visible(username: String, visible: bool) -> String:
-	if current_user() != ROOT_USER:
+	if not has_root_privilege():
 		return "Permission denied: changing login visibility requires root"
 	var clean := clean_username(username)
 	if clean == "" or not user_exists(clean):
@@ -365,7 +391,7 @@ func set_user_login_visible(username: String, visible: bool) -> String:
 	return ""
 
 func set_user_locked(username: String, locked: bool) -> String:
-	if current_user() != ROOT_USER:
+	if not has_root_privilege():
 		return "Permission denied: locking accounts requires root"
 	var clean := clean_username(username)
 	if clean == "" or not user_exists(clean):
@@ -596,7 +622,7 @@ func delete_path(path: String) -> String:
 	if not children.has(name):
 		return "Path not found: " + normalized
 	var target: Dictionary = children[name]
-	if _has_sticky_bit(parent) and current_user() != ROOT_USER and current_user() != str(target.get("owner", "")) and current_user() != str(parent.get("owner", "")):
+	if _has_sticky_bit(parent) and not has_root_privilege() and current_user() != str(target.get("owner", "")) and current_user() != str(parent.get("owner", "")):
 		return "Permission denied: " + normalized
 	children.erase(name)
 	parent["children"] = children
@@ -663,7 +689,7 @@ func copy_path(source_path: String, destination_path: String) -> String:
 	save()
 	return ""
 
-func move_path(source_path: String, destination_path: String) -> String:
+func move_path(source_path: String, destination_path: String, save_after := true) -> String:
 	var source := normalize_path(source_path)
 	var destination := normalize_path(destination_path)
 	if source == "/":
@@ -685,7 +711,7 @@ func move_path(source_path: String, destination_path: String) -> String:
 	if not source_children.has(source_name):
 		return "Path not found: " + source
 	var source_node: Dictionary = source_children[source_name]
-	if _has_sticky_bit(source_parent) and current_user() != ROOT_USER and current_user() != str(source_node.get("owner", "")) and current_user() != str(source_parent.get("owner", "")):
+	if _has_sticky_bit(source_parent) and not has_root_privilege() and current_user() != str(source_node.get("owner", "")) and current_user() != str(source_parent.get("owner", "")):
 		return "Permission denied: " + source
 
 	var destination_info := _parent_info(destination)
@@ -709,7 +735,8 @@ func move_path(source_path: String, destination_path: String) -> String:
 		destination_parent["children"] = destination_children
 		source_children.erase(source_name)
 		source_parent["children"] = source_children
-	save()
+	if save_after:
+		save()
 	return ""
 
 func set_mode(path: String, mode: String) -> String:
@@ -720,14 +747,14 @@ func set_mode(path: String, mode: String) -> String:
 	var node := get_node_at(normalized)
 	if node.is_empty():
 		return "Path not found: " + normalized
-	if current_user() != ROOT_USER and current_user() != str(node.get("owner", "")):
+	if not has_root_privilege() and current_user() != str(node.get("owner", "")):
 		return "Permission denied: chmod requires owner or root"
 	node["mode"] = clean_mode
 	save()
 	return ""
 
 func set_owner(path: String, username: String) -> String:
-	if current_user() != ROOT_USER:
+	if not has_root_privilege():
 		return "Permission denied: chown requires root"
 	var normalized := normalize_path(path)
 	var clean := clean_username(username)
@@ -944,7 +971,7 @@ func _ensure_system_layout() -> void:
 	var users: Dictionary = _state["users"]
 	if not users.has(ROOT_USER):
 		users[ROOT_USER] = _default_account_record(ROOT_USER, 0, false)
-	if not users.has(DEFAULT_USERNAME):
+	if not _has_usable_non_root_user(users) and not users.has(DEFAULT_USERNAME):
 		users[DEFAULT_USERNAME] = _default_account_record(DEFAULT_USERNAME, DEFAULT_UID, true)
 	for key in users.keys():
 		var account: Dictionary = users[key]
@@ -964,8 +991,40 @@ func _ensure_system_layout() -> void:
 			continue
 		_force_dir(home_path(username), username, _primary_group(username), "0755")
 	if not user_exists(current_user()):
-		_state["current_user"] = DEFAULT_USERNAME
+		var fallback_user := _fallback_current_user(users)
+		if fallback_user == "":
+			users[DEFAULT_USERNAME] = _default_account_record(DEFAULT_USERNAME, DEFAULT_UID, true)
+			_state["users"] = users
+			fallback_user = DEFAULT_USERNAME
+		_state["current_user"] = fallback_user
 	_sync_system_files()
+
+func _has_usable_non_root_user(users: Dictionary) -> bool:
+	for key in users.keys():
+		var username := str(key)
+		if username == ROOT_USER:
+			continue
+		var account: Dictionary = users[key]
+		if bool(account.get("login_visible", true)) and not bool(account.get("locked", false)):
+			return true
+	return false
+
+func _fallback_current_user(users: Dictionary) -> String:
+	var names: Array[String] = []
+	for key in users.keys():
+		names.append(str(key))
+	names.sort()
+	for username in names:
+		if username == ROOT_USER:
+			continue
+		var account: Dictionary = users[username]
+		if bool(account.get("login_visible", true)) and not bool(account.get("locked", false)):
+			return username
+	if users.has(ROOT_USER):
+		return ROOT_USER
+	if names.size() > 0:
+		return names[0]
+	return ""
 
 func _force_dir(path: String, owner: String, group: String, mode: String) -> void:
 	var normalized := normalize_path(path)
@@ -1124,7 +1183,7 @@ func _can_execute(node: Dictionary, username: String) -> bool:
 	return _has_permission(node, username, 1)
 
 func _has_permission(node: Dictionary, username: String, bit: int) -> bool:
-	if username == ROOT_USER:
+	if username == ROOT_USER or _root_authorization_depth > 0:
 		return true
 	var mode := str(node.get("mode", "0644"))
 	var perms := mode.substr(maxi(mode.length() - 3, 0), 3)
@@ -1173,3 +1232,89 @@ func _groups_text(account: Dictionary) -> String:
 
 func _is_protected_system_path(path: String) -> bool:
 	return path == "/home" or path == "/etc" or path == "/bin" or path == "/usr" or path == "/var" or path == "/tmp" or path == "/root"
+
+# Persistence probe/smoke for username rename (added for account-center-username-rename-persistence-001)
+# LIVE-PATH VERSION: prints globalized user:// path, performs rename via live fs path (Account Center adjacent), reads on-disk save file, reloads using EXACT load_or_create path (the actual startup/restart path), asserts dadmin persists, user not resurrected, current_user survives. This exercises the real save/load mismatch path.
+func persistence_probe_rename() -> String:
+	print("Live OS user data dir: ", OS.get_user_data_dir())
+	print("Globalized SAVE_PATH (user://hermes_os_files.json): ", ProjectSettings.globalize_path(SAVE_PATH))
+	var original := export_state().duplicate(true)
+	reset()
+	var prev_user := current_user()
+	# Root auth for rename
+	set_current_user(ROOT_USER)
+	# Create test user to rename (isolated, via live fs path)
+	var create_err := create_user_account("testuser", "Test Display", "testpass123")
+	if create_err != "":
+		import_state(original)
+		set_current_user(prev_user)
+		return "create_err: " + create_err
+	# Perform rename (root authorized, via live fs path equivalent to Account Center/root-auth)
+	# Updated for real live-path active rename test: set current to testuser before rename to exercise the exact reported mismatch path (active user rename under root auth elevation)
+	var set_active_err := set_current_user("testuser")
+	if set_active_err != "":
+		import_state(original)
+		set_current_user(prev_user)
+		return "set_active_err: " + set_active_err
+	var rename_err := rename_user_account("testuser", "dadmin")
+	if rename_err != "":
+		import_state(original)
+		set_current_user(prev_user)
+		return "rename_err: " + rename_err
+	save()
+	# Read actual on-disk save file at globalized user:// path (post-rename, before any mutation)
+	var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	if file == null:
+		import_state(original)
+		set_current_user(prev_user)
+		return "no_save_file"
+	var text := file.get_as_text()
+	var parsed: Variant = JSON.parse_string(text)
+	if not (parsed is Dictionary):
+		import_state(original)
+		set_current_user(prev_user)
+		return "parse_fail"
+	var loaded: Dictionary = parsed
+	var loaded_users: Dictionary = loaded.get("users", {})
+	var loaded_current := str(loaded.get("current_user", ""))
+	# Assert on-disk after rename (pre-restart)
+	if not loaded_users.has("dadmin"):
+		import_state(original)
+		set_current_user(prev_user)
+		return "assert_fail: dadmin missing in on-disk"
+	if loaded_users.has("testuser") or loaded_users.has(DEFAULT_USERNAME):
+		import_state(original)
+		set_current_user(prev_user)
+		return "assert_fail: old user still in on-disk"
+	if loaded_current != "dadmin":
+		import_state(original)
+		set_current_user(prev_user)
+		return "assert_fail: current_user not dadmin in on-disk"
+	# NOW reload using the EXACT live load_or_create path (simulates actual reboot/restart/load)
+	load_or_create()
+	# Assert on in-memory state after live load_or_create (verifies rename survives actual restart/load path)
+	var curr := current_user()
+	var users_arr := get_users()
+	if not user_exists("dadmin") or curr != "dadmin":
+		import_state(original)
+		set_current_user(prev_user)
+		return "assert_fail: dadmin not persisted after load_or_create"
+	if users_arr.has("testuser") or users_arr.has(DEFAULT_USERNAME):
+		import_state(original)
+		set_current_user(prev_user)
+		return "assert_fail: old user resurrected after load_or_create"
+	# Test rejects (still work)
+	var bad1 := rename_user_account("dadmin", "")
+	if bad1 == "":
+		import_state(original)
+		set_current_user(prev_user)
+		return "reject_blank_fail"
+	var bad2 := rename_user_account("dadmin", "dadmin")
+	if bad2 == "":
+		import_state(original)
+		set_current_user(prev_user)
+		return "reject_duplicate_fail"
+	# Cleanup only isolated test state
+	import_state(original)
+	set_current_user(prev_user)
+	return ""  # PASS (live-path verified)

@@ -29,6 +29,8 @@ func mount_fragment(fragment_id: String, manifest_path: String, host: Control, c
 	_roots[fragment_id] = root
 	if root != null:
 		root.set_meta("hermes_shell_fragment", fragment_id)
+		if fragment_id == "launcher":
+			root.clip_contents = true
 	if instance.controller != null and instance.controller.has_method("configure_shell_context"):
 		var merged_context: Dictionary = _context.to_dictionary()
 		for key in controller_context.keys():

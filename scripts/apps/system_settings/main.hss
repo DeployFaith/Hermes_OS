@@ -85,9 +85,9 @@
 
 #system-settings-nav-system:selected,
 #system-settings-nav-appearance:selected {
-  background: rgba(133, 180, 255, 0.20);
-  color: #dbe7ff;
-  border-color: rgba(133, 180, 255, 0.55);
+  background: var(--accent-selected-surface);
+  color: var(--text);
+  border-color: var(--accent);
 }
 
 .system-settings-content-scroll {

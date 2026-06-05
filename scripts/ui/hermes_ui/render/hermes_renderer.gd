@@ -218,7 +218,7 @@ func _render_toggle(element, render_context, _renderer) -> Control:
 
 func _render_list(element, render_context, _renderer) -> Control:
 	element.merge_semantic_metadata({"role": "list"})
-	return render_context.ui.panel([], 0, "base", {"name": "HermesRenderList", "expand_h": true, "expand_v": true, "gap": render_context.theme.spacing("space_1")})
+	return render_context.ui.vbox([], render_context.theme.spacing("space_1"), {"name": "HermesRenderList", "expand_h": true, "expand_v": true})
 
 func _render_list_item(element, render_context, _renderer) -> Control:
 	var selected: bool = _prop_bool(element, "selected")

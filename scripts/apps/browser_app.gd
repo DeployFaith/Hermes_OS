@@ -37,6 +37,21 @@ func is_native_teardown_complete() -> bool:
 		return bool(surface.call("is_native_teardown_complete"))
 	return true
 
+func set_shell_overlay_occluded(active: bool) -> void:
+	var surface = get_browser_surface()
+	if surface != null and surface.has_method("set_shell_overlay_occluded"):
+		surface.call("set_shell_overlay_occluded", active)
+
+func set_browser_content_occluded(active: bool) -> void:
+	set_browser_chrome_popup_occluded(active)
+
+func set_browser_chrome_popup_occluded(active: bool) -> void:
+	var surface = get_browser_surface()
+	if surface != null and surface.has_method("set_browser_chrome_popup_occluded"):
+		surface.call("set_browser_chrome_popup_occluded", active)
+	elif surface != null and surface.has_method("set_browser_content_occluded"):
+		surface.call("set_browser_content_occluded", active)
+
 func open_url(input_url: String) -> void:
 	var surface = get_browser_surface()
 	if surface != null and surface.has_method("open_url"):
@@ -102,6 +117,9 @@ func agent_browser_test_type_text(args: Dictionary = {}) -> Dictionary:
 
 func agent_browser_test_click(args: Dictionary = {}) -> Dictionary:
 	return _call_surface_agent_method("agent_browser_test_click", args, "browser.test_click")
+
+func agent_browser_test_scroll(args: Dictionary = {}) -> Dictionary:
+	return _call_surface_agent_method("agent_browser_test_scroll", args, "browser.test_scroll")
 
 func _call_surface_agent_method(method_name: String, args: Dictionary, operation: String) -> Dictionary:
 	var surface = get_browser_surface()

@@ -67,32 +67,43 @@ static func elevated_panel(elevation: int, bg_alpha: float, radius: int) -> Styl
 	return style
 
 static func window_active(radius: int) -> StyleBoxFlat:
-	var style := build(Tokens.WINDOW, Tokens.BORDER_ACTIVE, 1, radius)
+	# Focused/inactive via subtle shadow/titlebar opacity. No multiple nested full-rect borders.
+	var style := build(Tokens.alpha(Tokens.WINDOW, 0.98), Color.TRANSPARENT, 0, radius)
 	_apply_shadow(style, Tokens.shadow_large())
 	return style
 
 static func window_inactive(radius: int) -> StyleBoxFlat:
-	var style := build(Tokens.WINDOW, Tokens.BORDER, 1, radius)
-	_apply_shadow(style, Tokens.shadow_medium(), 0.70)
+	# Inactive: muted, softer shadow
+	var style := build(Tokens.alpha(Tokens.WINDOW, 0.92), Color.TRANSPARENT, 0, radius)
+	_apply_shadow(style, Tokens.shadow_medium(), 0.65)
 	return style
 
 static func title_bar(active: bool, radius: int) -> StyleBoxFlat:
-	var bg := Tokens.PANEL if active else Tokens.alpha(Tokens.PANEL, 0.88)
+	# Titlebar integrated (border=0). Focused/inactive via subtle shadow/titlebar opacity.
+	# Bottom radius 0 to blend with body, one primary outer background.
+	var bg := Tokens.alpha(Tokens.PANEL, 0.92 if active else 0.78)
 	var style := build(bg, Color.TRANSPARENT, 0, radius)
-	style.border_width_bottom = 1
-	style.border_color = Tokens.alpha(Tokens.BORDER, 0.72 if active else 0.48)
-	style.content_margin_bottom = 1
+	style.border_width_bottom = 0
+	style.content_margin_bottom = 2
+	style.corner_radius_bottom_left = 0
+	style.corner_radius_bottom_right = 0
+	# Softer shadow hint for titlebar elevation
+	if active:
+		_apply_shadow(style, Tokens.shadow_small(), 0.6)
 	return style
 
 static func body_panel(active: bool, radius: int) -> StyleBoxFlat:
-	# App bodies should not look like nested framed debug panels; rely on layer
-	# contrast plus the outer window border.
-	var bg := Tokens.SURFACE if active else Tokens.alpha(Tokens.SURFACE, 0.86)
+	# Content no square backplates around rounded corners. Use spacing/fill contrast.
+	# Transparent nested, margins for rounded corner backing safety.
+	# Top radius 0 to integrate with titlebar, one primary outer background.
+	var bg := Color.TRANSPARENT
 	var style := build(bg, Color.TRANSPARENT, 0, radius)
-	style.content_margin_left = 16
-	style.content_margin_right = 16
-	style.content_margin_top = 16
-	style.content_margin_bottom = 16
+	style.content_margin_left = 12
+	style.content_margin_right = 12
+	style.content_margin_top = 12
+	style.content_margin_bottom = 12
+	style.corner_radius_top_left = 0
+	style.corner_radius_top_right = 0
 	return style
 
 static func button_normal(radius: int) -> StyleBoxFlat:
@@ -116,6 +127,9 @@ static func button_disabled(radius: int) -> StyleBoxFlat:
 	return build(Tokens.alpha(Tokens.PANEL, 0.42), Tokens.alpha(Tokens.BORDER, 0.35), 1, radius)
 
 static func icon_button_normal(radius: int) -> StyleBoxFlat:
+	return build(Color.TRANSPARENT, Color.TRANSPARENT, 0, radius)
+
+static func icon_button_focus_clear(radius: int) -> StyleBoxFlat:
 	return build(Color.TRANSPARENT, Color.TRANSPARENT, 0, radius)
 
 static func icon_button_hover(radius: int) -> StyleBoxFlat:
@@ -156,8 +170,10 @@ static func list_panel(radius: int) -> StyleBoxFlat:
 	return build(Tokens.BG, Tokens.alpha(Tokens.BORDER, 0.54), 1, radius)
 
 static func list_selected() -> StyleBoxFlat:
-	var style := build(Tokens.alpha(Tokens.ACCENT, 0.13), Tokens.alpha(Tokens.ACCENT, 0.32), 1, 6)
-	style.border_width_left = 3
+	# list_row_selected: subtle filled highlight + 1px accent edge left, no inner box
+	var style := build(Tokens.alpha(Tokens.ACCENT, 0.11), Tokens.alpha(Tokens.ACCENT, 0.55), 0, 6)
+	style.border_width_left = 2
+	style.border_color = Tokens.ACCENT
 	return style
 
 static func list_row(state: String = "normal", radius: int = 8) -> StyleBoxFlat:
@@ -203,18 +219,25 @@ static func toast(level: String, radius: int) -> StyleBoxFlat:
 	return style
 
 static func dock_pill(radius: int) -> StyleBoxFlat:
-	var style := build(Tokens.alpha(Tokens.PANEL, 0.94), Tokens.alpha(Tokens.BORDER_ACTIVE, 0.38), 1, radius)
-	_apply_shadow(style, {"size": 16, "color": Color(0, 0, 0, 0.42), "offset": Vector2(0, 6)})
-	style.content_margin_left = 14
-	style.content_margin_right = 14
-	style.content_margin_top = 10
-	style.content_margin_bottom = 10
+	# Refined glassy dock: stronger elevation/shadow, translucent fake glass
+	var style := build(Tokens.alpha(Tokens.PANEL, 0.90), Tokens.alpha(Tokens.BORDER_ACTIVE, 0.42), 1, radius)
+	_apply_shadow(style, Tokens.shadow_large())
+	style.content_margin_left = 16
+	style.content_margin_right = 16
+	style.content_margin_top = 8
+	style.content_margin_bottom = 8
+	# Active indicator (accent dot/underline) and hover to be applied per-icon in dock mounting if safe
 	return style
 
 static func top_panel() -> StyleBoxFlat:
-	var style := build(Tokens.alpha(Tokens.BG_ELEVATED, 0.92), Tokens.alpha(Tokens.BORDER, 0.58), 0, 0)
+	# Thin, subtle bottom divider only. No boxed backgrounds behind labels/icons.
+	var style := build(Color.TRANSPARENT, Color.TRANSPARENT, 0, 0)
 	style.border_width_bottom = 1
-	style.border_color = Tokens.alpha(Tokens.BORDER, 0.62)
+	style.border_color = Tokens.alpha(Tokens.BORDER_ACTIVE, 0.35)
+	style.content_margin_left = 0
+	style.content_margin_right = 0
+	style.content_margin_top = 0
+	style.content_margin_bottom = 0
 	return style
 
 static func desktop_icon_selected(radius: int) -> StyleBoxFlat:
@@ -222,3 +245,107 @@ static func desktop_icon_selected(radius: int) -> StyleBoxFlat:
 
 static func desktop_icon_hover(radius: int) -> StyleBoxFlat:
 	return build(Tokens.alpha(Tokens.SURFACE_HOVER, 0.36), Tokens.alpha(Tokens.BORDER, 0.24), 1, radius)
+
+# ── Designer cleanup target styles: glass_surface_*, list_*, input_field, quiet_button ──
+# Inner styles use border_width=0 or alpha<=0.05. Margins for rounded corner safety.
+# Transparent children, no square backplates over rounded parents. Fake glass only.
+
+static func glass_surface_outer(radius: int = 16) -> StyleBoxFlat:
+	# Outer translucent + highlight + soft shadow. Keep for launcher/dock.
+	# Larger margin for scroll/list padding, child containment inside rounded card.
+	var bg := Tokens.alpha(Tokens.PANEL, 0.90)
+	var border := Tokens.alpha(Tokens.WHITE, 0.07)
+	var style := build(bg, border, 1, radius)
+	_apply_shadow(style, Tokens.shadow_large())
+	style.content_margin_left = 16
+	style.content_margin_right = 16
+	style.content_margin_top = 16
+	style.content_margin_bottom = 16
+	return style
+
+static func glass_surface_inner(radius: int = 10) -> StyleBoxFlat:
+	# border=0, transparent/near for nested. Prevents opaque rectangular children cutting corners.
+	var style := build(Color.TRANSPARENT, Color.TRANSPARENT, 0, radius)
+	style.content_margin_left = 8
+	style.content_margin_right = 8
+	style.content_margin_top = 8
+	style.content_margin_bottom = 8
+	return style
+
+static func list_section(radius: int = 8) -> StyleBoxFlat:
+	# Categories: no border
+	return build(Color.TRANSPARENT, Color.TRANSPARENT, 0, radius)
+
+static func list_row_hover(radius: int = 6) -> StyleBoxFlat:
+	# hover: subtle fill
+	return build(Tokens.alpha(Tokens.SURFACE_HOVER, 0.42), Color.TRANSPARENT, 0, radius)
+
+static func list_row_selected(radius: int = 6) -> StyleBoxFlat:
+	# selected: subtle filled highlight + 1px accent edge left, no inner box
+	var style := build(Tokens.alpha(Tokens.ACCENT, 0.11), Tokens.alpha(Tokens.ACCENT, 0.55), 0, radius)
+	style.border_width_left = 2
+	style.border_color = Tokens.ACCENT
+	return style
+
+static func input_field(radius: int = 8) -> StyleBoxFlat:
+	# Search: subtle border alpha=0.1 idle; focus ring only
+	return build(Tokens.INPUT_BG, Tokens.alpha(Tokens.BORDER, 0.10), 1, radius)
+
+static func input_field_focus(radius: int = 8) -> StyleBoxFlat:
+	return build(Tokens.BG_ELEVATED, Tokens.FOCUS, 2, radius)
+
+static func quiet_button(radius: int = 6) -> StyleBoxFlat:
+	# Footer: border=0
+	return build(Color.TRANSPARENT, Color.TRANSPARENT, 0, radius)
+
+static func quiet_button_hover(radius: int = 6) -> StyleBoxFlat:
+	return build(Tokens.alpha(Tokens.SURFACE_HOVER, 0.30), Color.TRANSPARENT, 0, radius)
+
+static func quiet_button_pressed(radius: int = 6) -> StyleBoxFlat:
+	return build(Tokens.alpha(Tokens.SURFACE_ACTIVE, 0.45), Color.TRANSPARENT, 0, radius)
+
+# ── Semantic surface levels (stronger separation, shell/app tonal distinction, no border soup) ──
+static func shell_surface(radius: int = 0) -> StyleBoxFlat:
+	return build(Tokens.SHELL_SURFACE, Color.TRANSPARENT, 0, radius)
+
+static func app_body_surface(radius: int = 0) -> StyleBoxFlat:
+	return build(Tokens.APP_BODY_SURFACE, Color.TRANSPARENT, 0, radius)
+
+static func subpanel_surface(radius: int = 6) -> StyleBoxFlat:
+	return build(Tokens.SUBPANEL_SURFACE, Tokens.alpha(Tokens.BORDER, 0.25), 0, radius)
+
+static func elevated_card_surface(radius: int = 8) -> StyleBoxFlat:
+	var style := build(Tokens.ELEVATED_CARD, Color.TRANSPARENT, 0, radius)
+	_apply_shadow(style, Tokens.shadow_small(), 0.7)
+	return style
+
+static func accent_selected_surface(radius: int = 6) -> StyleBoxFlat:
+	# matte low-opacity accent fill + subtle edge, guides eye without flooding
+	var style := build(Tokens.alpha(Tokens.ACCENT, 0.12), Tokens.alpha(Tokens.ACCENT, 0.45), 0, radius)
+	style.border_width_left = 2
+	style.border_color = Tokens.ACCENT
+	return style
+
+# ── Improved accent token usage, clearer focus/selected states, primary/secondary distinction ──
+static func primary_button(radius: int = 8) -> StyleBoxFlat:
+	# Primary: matte accent fill, low border opacity
+	return build(Tokens.ACCENT, Tokens.alpha(Tokens.ACCENT, 0.35), 1, radius)
+
+static func secondary_button(radius: int = 8) -> StyleBoxFlat:
+	# Secondary: surface based, distinct from primary
+	return build(Tokens.alpha(Tokens.SURFACE, 0.92), Tokens.alpha(Tokens.BORDER, 0.70), 1, radius)
+
+static func dock_active_item(radius: int = 12) -> StyleBoxFlat:
+	# Accent on active dock item (subtle)
+	return build(Tokens.alpha(Tokens.ACCENT, 0.18), Color.TRANSPARENT, 0, radius)
+
+static func focused_input_ring(radius: int = 8) -> StyleBoxFlat:
+	# Clearer accent ring on focus
+	return build(Tokens.BG_ELEVATED, Tokens.FOCUS, 2, radius)
+
+static func selected_list_row(radius: int = 6) -> StyleBoxFlat:
+	# Clearer selected with accent edge
+	var style := build(Tokens.alpha(Tokens.ACCENT, 0.13), Tokens.alpha(Tokens.ACCENT, 0.5), 0, radius)
+	style.border_width_left = 3
+	style.border_color = Tokens.ACCENT
+	return style

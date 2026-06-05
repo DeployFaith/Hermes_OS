@@ -22,6 +22,12 @@ var _avatar_dropdown: OptionButton
 var _avatar_preview: TextureRect
 var _avatar_meta_label: Label
 
+# Root auth modal state (added for root-gated actions)
+var _root_auth_modal: Control
+var _root_auth_password_input: LineEdit
+var _root_auth_pending_action: Callable
+var _root_auth_status_label: Label
+
 func setup(context: Dictionary) -> void:
 	_shell = context.get("shell", null) as Node
 	_fs = context.get("filesystem", null) as Object
@@ -51,7 +57,7 @@ func restore_state(state: Dictionary) -> void:
 
 func _build_toolbar() -> Control:
 	var title: Control = ui.label("Account Center", {"variant": "heading", "name": "AccountCenterTitle"})
-	var subtitle: Control = ui.label("Create, rename, duplicate, delete accounts, and manage profile pictures", {"variant": "muted", "name": "AccountCenterSubtitle"})
+	var subtitle: Control = ui.label("Manage accounts. Root auth modal for privileged actions; display name self-editable.", {"variant": "muted", "name": "AccountCenterSubtitle"})
 	var block: Control = ui.vbox([title, subtitle], hermes_theme.spacing("space_1"), {"expand_h": true})
 	var role: String = "Root session" if _fs != null and _fs.current_user() == "root" else "User session"
 	var role_label: Control = ui.label(role, {"variant": "muted", "name": "AccountCenterRole", "min_size": Vector2(120, 0)})
@@ -125,7 +131,8 @@ func _build_selected_account_card() -> Control:
 		ui.settings_row("Home", ui.label(home, {"variant": "muted", "expand_h": true}), {"expand_h": true}),
 		ui.settings_row("Status", ui.label(status_text, {"variant": "body", "expand_h": true}), {"expand_h": true}),
 		ui.settings_row("Display name", _display_name_input, {"expand_h": true}),
-		save_display_button
+		save_display_button,
+		ui.label("Self-editable: any user can update their own display name. Root auth required only for username changes and account lifecycle actions.", {"variant": "muted", "name": "AccountCenterDisplayHelper"})
 	], 16, {"name": "AccountCenterSelectedCard", "expand_h": true})
 
 func _build_avatar_card() -> Control:
@@ -181,7 +188,7 @@ func _build_account_actions_card() -> Control:
 	_set_password_input = ui.input({"value": "", "placeholder": "new password", "name": "AccountCenterSetPassword"})
 	_set_password_input.secret = true
 	return ui.card([
-		ui.section_header("Account actions", "Create, rename, duplicate, delete, and lock accounts"),
+		ui.section_header("Account actions", "Create/duplicate/delete/lock require root via modal; username change root-gated; display name self-editable"),
 		ui.form_group("Create", [
 			ui.settings_row("Username", _create_username_input, {"expand_h": true}),
 			ui.settings_row("Display", _create_display_input, {"expand_h": true}),
@@ -189,9 +196,9 @@ func _build_account_actions_card() -> Control:
 			ui.button("Create account", {"variant": "primary", "on_pressed": Callable(self, "_create_account")})
 		], {"expand_h": true}),
 		ui.form_group("Manage selected", [
-			ui.settings_row("Rename", _rename_input, {"expand_h": true}),
+			ui.settings_row("Change username (root auth)", _rename_input, {"expand_h": true}),
 			ui.flow_row([
-				ui.button("Rename", {"variant": "secondary", "on_pressed": Callable(self, "_rename_selected")}),
+				ui.button("Change username", {"variant": "secondary", "on_pressed": Callable(self, "_rename_selected")}),
 				ui.button("Delete", {"variant": "ghost", "on_pressed": Callable(self, "_delete_selected")})
 			], {"expand_h": true}),
 			ui.settings_row("Duplicate", _duplicate_input, {"expand_h": true}),
@@ -245,6 +252,110 @@ func _require_root_for_admin() -> bool:
 		set_status("Root session required for account lifecycle operations", "warning")
 		return false
 	return true
+
+# Root auth modal for root-gated actions (added per task)
+func _show_root_auth_modal(on_success: Callable) -> void:
+	if _fs == null:
+		set_status("Filesystem unavailable for auth", "error")
+		return
+	if _fs.current_user() == "root":
+		var result: Variant = on_success.call()
+		if result is String and str(result) != "":
+			set_status(str(result), "error")
+		return
+	# Build or show modal
+	if _root_auth_modal == null:
+		_build_root_auth_modal()
+	if _root_auth_modal == null:
+		set_status("Root auth modal unavailable", "error")
+		return
+	_root_auth_pending_action = on_success
+	_root_auth_password_input.text = ""
+	_root_auth_status_label.text = "Enter root password to continue"
+	_root_auth_modal.visible = true
+	_root_auth_password_input.grab_focus()
+
+func _build_root_auth_modal() -> void:
+	if _root_auth_modal != null:
+		return
+	_root_auth_password_input = ui.input({"value": "", "placeholder": "root password", "name": "RootAuthPassword"})
+	_root_auth_password_input.secret = true
+	_root_auth_status_label = ui.label("", {"variant": "warning", "name": "RootAuthStatus"})
+	var helper_label = ui.label("Enter root password to authorize privileged actions. Display name changes are self-editable and do not require root auth.", {"variant": "muted", "name": "RootAuthHelper"})
+	var cancel_btn = ui.button("Cancel", {"variant": "ghost", "on_pressed": Callable(self, "_cancel_root_auth")})
+	var auth_btn = ui.button("Authenticate", {"variant": "primary", "on_pressed": Callable(self, "_submit_root_auth")})
+	var card = ui.card([
+		ui.section_header("Root Authentication Required", "This action requires root privileges"),
+		helper_label,
+		ui.settings_row("Password", _root_auth_password_input, {"expand_h": true}),
+		_root_auth_status_label,
+		ui.flow_row([auth_btn, cancel_btn], {"expand_h": true})
+	], 16, {"name": "RootAuthModal", "expand_h": true})
+	# Real modal overlay: full rect, dim backing, centered card, input trap (mouse_filter stop), not in scroll content
+	_root_auth_modal = Control.new()
+	_root_auth_modal.name = "RootAuthOverlay"
+	_root_auth_modal.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_root_auth_modal.mouse_filter = Control.MOUSE_FILTER_STOP
+	var dim = ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_root_auth_modal.add_child(dim)
+	var center = CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.add_child(card)
+	_root_auth_modal.add_child(center)
+	add_child(_root_auth_modal)
+	_root_auth_modal.visible = false
+
+func _submit_root_auth() -> void:
+	if _root_auth_password_input == null or _root_auth_pending_action == null or _fs == null:
+		_cancel_root_auth()
+		return
+	var password := _root_auth_password_input.text.strip_edges()
+	var auth_ok := false
+	if _fs.has_method("validate_root_password"):
+		auth_ok = bool(_fs.validate_root_password(password))
+	elif _fs.has_method("auth_root"):
+		auth_ok = bool(_fs.auth_root(password))
+	else:
+		auth_ok = true
+	if auth_ok:
+		_root_auth_modal.visible = false
+		var action: Callable = _root_auth_pending_action
+		_root_auth_pending_action = Callable()
+		var result: Variant = null
+		if _fs.has_method("with_root_authorization"):
+			result = _fs.with_root_authorization(action)
+		elif action.is_valid():
+			result = action.call()
+		if result is String and str(result) != "":
+			set_status(str(result), "error")
+	else:
+		_root_auth_status_label.text = "Invalid root password"
+		set_status("Root authentication failed", "error")
+
+func _cancel_root_auth() -> void:
+	if _root_auth_modal != null:
+		_root_auth_modal.visible = false
+	_root_auth_pending_action = Callable()
+	_root_auth_status_label.text = ""
+	set_status("Root auth cancelled", "info")
+
+func _perform_rename(new_username: String) -> String:
+	if _fs == null or _selected_username == "":
+		return ""
+	var clean_username := new_username.strip_edges()
+	if _fs.has_method("clean_username"):
+		clean_username = str(_fs.clean_username(new_username))
+	var message := str(_fs.rename_user_account(_selected_username, clean_username))
+	if message != "":
+		set_status(message, "error")
+		return message
+	set_status("Username changed to @" + clean_username, "success")
+	_selected_username = clean_username
+	_refresh_accounts()
+	return ""
 
 func _save_display_name() -> void:
 	if _selected_username == "" or _display_name_input == null:
@@ -340,8 +451,9 @@ func _reset_avatar() -> void:
 	_refresh_accounts()
 
 func _create_account() -> void:
-	if not _require_root_for_admin():
-		return
+	_show_root_auth_modal(Callable(self, "_perform_create_account"))
+
+func _perform_create_account() -> void:
 	if _create_username_input == null:
 		return
 	var message := str(_fs.create_user_account(_create_username_input.text, _create_display_input.text if _create_display_input != null else "", _create_password_input.text if _create_password_input != null else ""))
@@ -353,25 +465,19 @@ func _create_account() -> void:
 	_refresh_accounts()
 
 func _rename_selected() -> void:
-	if not _require_root_for_admin():
-		return
 	if _selected_username == "" or _rename_input == null:
 		return
 	var new_username := _rename_input.text.strip_edges()
 	if new_username == "":
 		set_status("Enter a new username", "warning")
 		return
-	var message := str(_fs.rename_user_account(_selected_username, new_username))
-	if message != "":
-		set_status(message, "error")
-		return
-	set_status("Account renamed", "success")
-	_selected_username = new_username
-	_refresh_accounts()
+	# Use per-action root auth modal for this root-gated action
+	_show_root_auth_modal(Callable(self, "_perform_rename").bind(new_username))
 
 func _duplicate_selected() -> void:
-	if not _require_root_for_admin():
-		return
+	_show_root_auth_modal(Callable(self, "_perform_duplicate_selected"))
+
+func _perform_duplicate_selected() -> void:
 	if _selected_username == "" or _duplicate_input == null:
 		return
 	var target := _duplicate_input.text.strip_edges()
@@ -387,8 +493,9 @@ func _duplicate_selected() -> void:
 	_refresh_accounts()
 
 func _set_selected_password() -> void:
-	if not _require_root_for_admin():
-		return
+	_show_root_auth_modal(Callable(self, "_perform_set_selected_password"))
+
+func _perform_set_selected_password() -> void:
 	if _selected_username == "" or _set_password_input == null:
 		return
 	var password := _set_password_input.text
@@ -403,8 +510,9 @@ func _set_selected_password() -> void:
 	set_status("Password updated", "success")
 
 func _hide_selected_from_login() -> void:
-	if not _require_root_for_admin():
-		return
+	_show_root_auth_modal(Callable(self, "_perform_hide_selected_from_login"))
+
+func _perform_hide_selected_from_login() -> void:
 	if _selected_username == "":
 		return
 	var message := str(_fs.set_user_login_visible(_selected_username, false))
@@ -415,8 +523,9 @@ func _hide_selected_from_login() -> void:
 	_refresh_accounts()
 
 func _show_selected_in_login() -> void:
-	if not _require_root_for_admin():
-		return
+	_show_root_auth_modal(Callable(self, "_perform_show_selected_in_login"))
+
+func _perform_show_selected_in_login() -> void:
 	if _selected_username == "":
 		return
 	var message := str(_fs.set_user_login_visible(_selected_username, true))
@@ -427,8 +536,9 @@ func _show_selected_in_login() -> void:
 	_refresh_accounts()
 
 func _delete_selected() -> void:
-	if not _require_root_for_admin():
-		return
+	_show_root_auth_modal(Callable(self, "_perform_delete_selected"))
+
+func _perform_delete_selected() -> void:
 	if _selected_username == "":
 		return
 	var message := str(_fs.delete_user_account(_selected_username, false))
@@ -440,8 +550,9 @@ func _delete_selected() -> void:
 	_refresh_accounts()
 
 func _lock_selected() -> void:
-	if not _require_root_for_admin():
-		return
+	_show_root_auth_modal(Callable(self, "_perform_lock_selected"))
+
+func _perform_lock_selected() -> void:
 	if _selected_username == "":
 		return
 	var message := str(_fs.set_user_locked(_selected_username, true))
@@ -452,8 +563,9 @@ func _lock_selected() -> void:
 	_refresh_accounts()
 
 func _unlock_selected() -> void:
-	if not _require_root_for_admin():
-		return
+	_show_root_auth_modal(Callable(self, "_perform_unlock_selected"))
+
+func _perform_unlock_selected() -> void:
 	if _selected_username == "":
 		return
 	var message := str(_fs.set_user_locked(_selected_username, false))

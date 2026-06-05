@@ -2,6 +2,7 @@ extends "res://scripts/ui/hermes_ui/runtime/hermes_app_controller.gd"
 
 const HermesShellContext = preload("res://scripts/os/hermes_shell/hermes_shell_context.gd")
 const HermesLauncherViewModel = preload("res://scripts/os/hermes_shell/chrome/launcher/hermes_launcher_view_model.gd")
+const Tokens = preload("res://scripts/os/design_tokens.gd")
 
 const DEBUG_LAUNCHER_TIMING := false
 
@@ -12,6 +13,69 @@ var _filesystem: RefCounted = null
 var _search_filter: String = ""
 var _category_filter: String = "all"
 var _selected_app_id: String = ""
+
+func _launcher_row_style(fill: Color, border: Color, radius: int = 8) -> StyleBoxFlat:
+	var box := StyleBoxFlat.new()
+	box.bg_color = fill
+	box.border_color = border
+	box.border_width_left = 1
+	box.border_width_right = 1
+	box.border_width_top = 1
+	box.border_width_bottom = 1
+	box.corner_radius_top_left = radius
+	box.corner_radius_top_right = radius
+	box.corner_radius_bottom_left = radius
+	box.corner_radius_bottom_right = radius
+	return box
+
+func _style_active_category(button: Button) -> void:
+	if button == null:
+		return
+	var accent: Color = Tokens.ACCENT
+	var accent_hover: Color = Tokens.ACCENT_HOVER
+	var accent_pressed: Color = Tokens.ACCENT_PRESSED
+	# Subtle active category marker: very low-alpha cue + thin left edge (not full-row highlight)
+	# Hover/pressed remain canonical accent-based per requirements; if hovered, full hover treatment.
+	var normal_fill: Color = Tokens.alpha(accent, 0.06)
+	var normal_border: Color = Color(0, 0, 0, 0)
+	var left_border_color: Color = Tokens.alpha(accent, 0.65)
+	var hover_fill: Color = Tokens.alpha(accent, 0.2)
+	var hover_border: Color = Tokens.alpha(accent_hover, 0.7)
+	var pressed_fill: Color = Tokens.alpha(accent_pressed, 0.28)
+	var pressed_border: Color = Tokens.alpha(accent_pressed, 0.8)
+	var normal_box := _launcher_row_style(normal_fill, normal_border)
+	normal_box.border_width_left = 3
+	normal_box.border_width_right = 0
+	normal_box.border_width_top = 0
+	normal_box.border_width_bottom = 0
+	normal_box.border_color = left_border_color
+	button.add_theme_stylebox_override("normal", normal_box)
+	button.add_theme_stylebox_override("hover", _launcher_row_style(hover_fill, hover_border))
+	button.add_theme_stylebox_override("pressed", _launcher_row_style(pressed_fill, pressed_border))
+	button.add_theme_stylebox_override("focus", _launcher_row_style(hover_fill, hover_border))
+	button.add_theme_stylebox_override("disabled", _launcher_row_style(Color(0, 0, 0, 0), Color(0, 0, 0, 0)))
+	# Subtle accent text/icon cue for active category
+	button.add_theme_color_override("font_color", accent)
+	button.add_theme_color_override("font_hover_color", accent)
+	button.add_theme_color_override("font_pressed_color", accent)
+
+func _style_launcher_row(button: Button, selected: bool) -> void:
+	if button == null:
+		return
+	var accent: Color = Tokens.ACCENT
+	var accent_hover: Color = Tokens.ACCENT_HOVER
+	var accent_pressed: Color = Tokens.ACCENT_PRESSED
+	var normal_fill: Color = Tokens.alpha(accent, 0.15) if selected else Color(0, 0, 0, 0)
+	var normal_border: Color = Tokens.alpha(accent, 0.5) if selected else Color(0, 0, 0, 0)
+	var hover_fill: Color = Tokens.alpha(accent, 0.2) if selected else Tokens.alpha(accent, 0.12)
+	var hover_border: Color = Tokens.alpha(accent_hover, 0.7) if selected else Tokens.alpha(accent, 0.45)
+	var pressed_fill: Color = Tokens.alpha(accent_pressed, 0.28)
+	var pressed_border: Color = Tokens.alpha(accent_pressed, 0.8)
+	button.add_theme_stylebox_override("normal", _launcher_row_style(normal_fill, normal_border))
+	button.add_theme_stylebox_override("hover", _launcher_row_style(hover_fill, hover_border))
+	button.add_theme_stylebox_override("pressed", _launcher_row_style(pressed_fill, pressed_border))
+	button.add_theme_stylebox_override("focus", _launcher_row_style(hover_fill, hover_border))
+	button.add_theme_stylebox_override("disabled", _launcher_row_style(Color(0, 0, 0, 0), Color(0, 0, 0, 0)))
 
 func _app_ready() -> void:
 	if state == null:
@@ -50,13 +114,9 @@ func refresh_launcher(restore_search_focus: bool = false) -> void:
 		state.set_many({"categories": [], "apps": [], "empty_visible": true})
 		return
 	var apps: Array[Dictionary] = _view_model.project_apps(_search_filter, _category_filter, _selected_app_id)
-	if _selected_app_id == "" and not apps.is_empty():
-		_selected_app_id = str(apps[0].get("app_id", ""))
-		apps[0]["selected"] = true
-	elif _selected_app_id != "" and not _contains_app(apps, _selected_app_id):
-		_selected_app_id = str(apps[0].get("app_id", "")) if not apps.is_empty() else ""
-		if not apps.is_empty():
-			apps[0]["selected"] = true
+	# NOTE: removed first-app default selection binding to suppress persistent mouse-mode highlight on Files (and any first app row).
+	# Only explicit _selected_app_id (set via keyboard nav or launch) will cause selected=true via view_model.
+	# This distinguishes default mouse mode (no app row highlighted) from keyboard selection.
 	var categories: Array[Dictionary] = _view_model.project_categories(_category_filter)
 	state.set_many({
 		"user_label": _user_label(),
@@ -167,11 +227,13 @@ func _decorate_launcher_controls() -> void:
 		search.set_meta("hermes_text_input", true)
 		search.tooltip_text = "Search installed apps"
 	for app in (_view_model.project_apps("", "all", _selected_app_id) if _view_model != null else []):
+		var app_data: Dictionary = app as Dictionary
 		var app_id: String = str((app as Dictionary).get("app_id", (app as Dictionary).get("id", "")))
 		var button: Button = _find_control_by_id(root_control, "launcher-app-" + app_id) as Button
 		if button == null:
 			continue
-		button.tooltip_text = "Open " + str((app as Dictionary).get("title", app_id))
+		button.tooltip_text = "Open " + str(app_data.get("title", app_id))
+		_style_launcher_row(button, bool(app_data.get("selected", false)))
 		button.clip_text = true
 		button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		if _shell != null and _shell.has_method("_app_icon"):
@@ -182,10 +244,16 @@ func _decorate_launcher_controls() -> void:
 		button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
 		button.add_theme_constant_override("icon_max_width", 22)
 	for category in (_view_model.project_categories(_category_filter) if _view_model != null else []):
+		var category_data: Dictionary = category as Dictionary
 		var category_id: String = str((category as Dictionary).get("id", ""))
 		var category_button: Button = _find_control_by_id(root_control, "launcher-category-" + category_id) as Button
 		if category_button == null:
 			continue
+		var is_active_category: bool = bool(category_data.get("selected", false))
+		if is_active_category:
+			_style_active_category(category_button)
+		else:
+			_style_launcher_row(category_button, false)
 		if _shell != null and _shell.has_method("_category_icon"):
 			var category_icon: Variant = _shell.call("_category_icon", category_id)
 			if category_icon is Texture2D:

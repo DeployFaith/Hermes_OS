@@ -2,9 +2,11 @@ class_name BrowserContentSurface
 extends VBoxContainer
 
 signal navigation_state_changed
+signal browser_overlay_menu_action(menu_id: String, action: String)
 
 const URLResolver = preload("res://scripts/os/url_resolver.gd")
 const HermesInternetDocumentLoader = preload("res://scripts/os/hermes_internet/hermes_internet_document_loader.gd")
+const DesignTokens = preload("res://scripts/os/design_tokens.gd")
 const WRY_EXTENSION_PATH := "res://addons/godot_wry/WRY.gdextension"
 const WRY_LINUX_LIBRARY_PATH := "res://addons/godot_wry/bin/x86_64-unknown-linux-gnu/libgodot_wry.so"
 const WRY_CLASS_CANDIDATES := ["WebView", "GodotWebView", "GDExtensionWebView", "WryWebView"]
@@ -55,6 +57,11 @@ var _tab_context_menu: PopupMenu
 var _settings_menu: PopupMenu
 var _session_save_timer: Timer
 var _content_host: PanelContainer
+var _chrome_occlusion_placeholder: PanelContainer
+var _chrome_occlusion_title: Label
+var _chrome_occlusion_url: Label
+var _chrome_occlusion_status: Label
+var _chrome_occlusion_summary: Label
 var _interactive_fallback_panel: PanelContainer
 var _interactive_fallback_status: Label
 var _interactive_fallback_clicks: Label
@@ -86,6 +93,11 @@ var _native_teardown_started := false
 var _native_teardown_done := false
 var _native_teardown_started_msec := 0
 var _local_document_active := false
+var _shell_overlay_occluded := false
+var _browser_content_occluded := false
+var _browser_overlay_menu_visible := false
+var _last_browser_overlay_menu_spec: Dictionary = {}
+var _last_browser_overlay_menu_action: Dictionary = {}
 var _last_loaded_document: Dictionary = {}
 var _native_webview_window_visible := true
 var _native_webview_last_rect := Rect2()
@@ -101,6 +113,13 @@ var _native_render_debug: Dictionary = {
 	"interactive_ready": false,
 	"test_input_roundtrip": false,
 	"fallback_active": false,
+	"shell_overlay_occluded": false,
+	"browser_content_occluded": false,
+	"chrome_popup_occluded": false,
+	"chrome_occlusion_placeholder_visible": false,
+	"native_content_occluded": false,
+	"browser_overlay_menu_visible": false,
+	"browser_overlay_menu_id": "",
 	"rendering_mode": "unknown",
 	"native_limitation": ""
 }
@@ -166,6 +185,135 @@ func set_chrome_visible(visible: bool) -> void:
 		_toolbar_row.visible = visible
 	if _loading_bar:
 		_loading_bar.visible = visible and bool(_active_tab_data().get("loading", false))
+
+func set_shell_overlay_occluded(active: bool) -> void:
+	var next_active := bool(active)
+	if _shell_overlay_occluded == next_active:
+		return
+	_shell_overlay_occluded = next_active
+	_native_render_debug["shell_overlay_occluded"] = _shell_overlay_occluded
+	_native_render_debug["native_content_occluded"] = _native_content_occluded()
+	_sync_chrome_occlusion_placeholder_visibility()
+	_sync_native_webview_window_state(true)
+
+func set_browser_content_occluded(active: bool) -> void:
+	set_browser_chrome_popup_occluded(active)
+
+func set_browser_chrome_popup_occluded(active: bool) -> void:
+	var next_active := bool(active)
+	if _browser_content_occluded == next_active:
+		return
+	_browser_content_occluded = next_active
+	_native_render_debug["browser_content_occluded"] = _browser_content_occluded
+	_native_render_debug["chrome_popup_occluded"] = _browser_content_occluded
+	_native_render_debug["native_content_occluded"] = _native_content_occluded()
+	_sync_chrome_occlusion_placeholder_visibility()
+	_sync_native_webview_window_state(true)
+
+func _native_content_occluded() -> bool:
+	return _shell_overlay_occluded or _browser_content_occluded
+
+func can_show_browser_overlay_menu() -> bool:
+	return _browser_overlay_portal_available()
+
+func show_browser_overlay_menu(menu_spec: Dictionary) -> bool:
+	if not _browser_overlay_portal_available():
+		return false
+	var safe_spec := _normalize_browser_overlay_menu_spec(menu_spec)
+	if safe_spec.is_empty():
+		return false
+	var message := {
+		"source": "hermes_os",
+		"type": "browser_overlay_menu_show",
+		"menu": safe_spec
+	}
+	_webview.call("post_message", JSON.stringify(message))
+	_browser_overlay_menu_visible = true
+	_last_browser_overlay_menu_spec = safe_spec.duplicate(true)
+	_native_render_debug["browser_overlay_menu_visible"] = true
+	_native_render_debug["browser_overlay_menu_id"] = str(safe_spec.get("menu_id", ""))
+	_record_webview_signal("browser_overlay_menu_show", safe_spec)
+	return true
+
+func hide_browser_overlay_menu(menu_id: String = "") -> void:
+	if _webview != null and is_instance_valid(_webview) and _webview.has_method("post_message"):
+		_webview.call("post_message", JSON.stringify({
+			"source": "hermes_os",
+			"type": "browser_overlay_menu_hide",
+			"menu_id": menu_id
+		}))
+	_browser_overlay_menu_visible = false
+	_native_render_debug["browser_overlay_menu_visible"] = false
+
+func _browser_overlay_portal_available() -> bool:
+	if _webview == null or not is_instance_valid(_webview) or not _webview.has_method("post_message"):
+		return false
+	if _native_content_occluded():
+		return false
+	if _active_tab_is_internal_about_page():
+		return false
+	if _content_host != null and not _content_host.visible:
+		return false
+	if _settings_panel != null and _settings_panel.visible:
+		return false
+	if _diagnostics_panel != null and _diagnostics_panel.visible:
+		return false
+	if _new_tab_page != null and _new_tab_page.visible:
+		return false
+	return true
+
+func _normalize_browser_overlay_menu_spec(spec: Dictionary) -> Dictionary:
+	var menu_id := str(spec.get("menu_id", spec.get("id", ""))).strip_edges()
+	if menu_id == "":
+		return {}
+	var safe := {
+		"menu_id": menu_id,
+		"id": menu_id,
+		"style": str(spec.get("style", "hermes")),
+		"position": _browser_overlay_position_for_spec(spec),
+		"items": []
+	}
+	var raw_items_value: Variant = spec.get("items", [])
+	var raw_items: Array = raw_items_value if raw_items_value is Array else []
+	for raw_item in raw_items:
+		if not (raw_item is Dictionary):
+			continue
+		var item: Dictionary = raw_item
+		if bool(item.get("separator", false)):
+			(safe["items"] as Array).append({"separator": true})
+			continue
+		var action := str(item.get("action", item.get("id", ""))).strip_edges()
+		var label := str(item.get("label", "")).strip_edges()
+		if action == "" or label == "":
+			continue
+		(safe["items"] as Array).append({
+			"id": str(item.get("id", action)),
+			"action": action,
+			"label": label,
+			"enabled": bool(item.get("enabled", true))
+		})
+	return safe if not (safe["items"] as Array).is_empty() else {}
+
+func _browser_overlay_position_for_spec(spec: Dictionary) -> Dictionary:
+	var position_value: Variant = spec.get("position", {})
+	if position_value is Dictionary:
+		var pos: Dictionary = position_value
+		return _clamped_browser_overlay_position(float(pos.get("x", 12.0)), float(pos.get("y", 12.0)))
+	var global_value: Variant = spec.get("global_position", {})
+	if global_value is Dictionary:
+		var global_pos: Dictionary = global_value
+		var rect := get_global_rect()
+		return _clamped_browser_overlay_position(float(global_pos.get("x", 12.0)) - rect.position.x, float(global_pos.get("y", 12.0)) - rect.position.y)
+	return _clamped_browser_overlay_position(12.0, 12.0)
+
+func _clamped_browser_overlay_position(x: float, y: float, menu_size := Vector2(220, 240)) -> Dictionary:
+	var rect := get_global_rect()
+	var width := maxf(rect.size.x, menu_size.x + 24.0)
+	var height := maxf(rect.size.y, menu_size.y + 24.0)
+	return {
+		"x": clampf(x, 8.0, maxf(8.0, width - menu_size.x - 8.0)),
+		"y": clampf(y, 8.0, maxf(8.0, height - menu_size.y - 8.0))
+	}
 
 func prepare_for_close() -> void:
 	if _settings_panel:
@@ -469,12 +617,80 @@ func _build_surface() -> void:
 		_content_host.add_child(_webview)
 		_bind_webview_signals()
 		_set_status_text("ready")
+	_build_chrome_occlusion_placeholder()
 	_build_interactive_fallback_panel()
 	_build_new_tab_page()
 	_build_diagnostics_panel()
 	_build_settings_panel()
 	_update_interactive_fallback_state()
 	_sync_interactive_fallback_visibility()
+	_sync_chrome_occlusion_placeholder_visibility()
+
+func _build_chrome_occlusion_placeholder() -> void:
+	if _content_host == null:
+		return
+	_chrome_occlusion_placeholder = PanelContainer.new()
+	_chrome_occlusion_placeholder.name = "BrowserChromePopupPlaceholder"
+	_chrome_occlusion_placeholder.visible = false
+	_chrome_occlusion_placeholder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_chrome_occlusion_placeholder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_chrome_occlusion_placeholder.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var panel := StyleBoxFlat.new()
+	panel.bg_color = DesignTokens.SURFACE
+	panel.border_color = DesignTokens.BORDER_SOFT
+	panel.border_width_left = 1
+	panel.border_width_top = 1
+	panel.border_width_right = 1
+	panel.border_width_bottom = 1
+	panel.corner_radius_top_left = 10
+	panel.corner_radius_top_right = 10
+	panel.corner_radius_bottom_left = 10
+	panel.corner_radius_bottom_right = 10
+	panel.content_margin_left = 24
+	panel.content_margin_top = 22
+	panel.content_margin_right = 24
+	panel.content_margin_bottom = 22
+	_chrome_occlusion_placeholder.add_theme_stylebox_override("panel", panel)
+	_content_host.add_child(_chrome_occlusion_placeholder)
+
+	var box := VBoxContainer.new()
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_theme_constant_override("separation", 10)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_chrome_occlusion_placeholder.add_child(box)
+
+	_chrome_occlusion_title = Label.new()
+	_chrome_occlusion_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_chrome_occlusion_title.add_theme_color_override("font_color", DesignTokens.TEXT)
+	_chrome_occlusion_title.add_theme_font_size_override("font_size", 24)
+	box.add_child(_chrome_occlusion_title)
+
+	_chrome_occlusion_url = Label.new()
+	_chrome_occlusion_url.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_chrome_occlusion_url.add_theme_color_override("font_color", DesignTokens.TEXT_MUTED)
+	box.add_child(_chrome_occlusion_url)
+
+	_chrome_occlusion_status = Label.new()
+	_chrome_occlusion_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_chrome_occlusion_status.add_theme_color_override("font_color", DesignTokens.TEXT_FAINT)
+	box.add_child(_chrome_occlusion_status)
+
+	var separator := HSeparator.new()
+	separator.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(separator)
+
+	_chrome_occlusion_summary = Label.new()
+	_chrome_occlusion_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_chrome_occlusion_summary.add_theme_color_override("font_color", DesignTokens.TEXT_MUTED)
+	_chrome_occlusion_summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(_chrome_occlusion_summary)
+
+	var hint := Label.new()
+	hint.text = "BrowserView is temporarily suppressed so Browser chrome can stay on top. Page state, URL, and history are preserved."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_color_override("font_color", DesignTokens.TEXT_FAINT)
+	box.add_child(hint)
 
 func _build_interactive_fallback_panel() -> void:
 	_interactive_fallback_panel = PanelContainer.new()
@@ -903,6 +1119,8 @@ func _sync_native_webview_window_state(force := false) -> void:
 func _should_show_native_webview() -> bool:
 	if _webview == null or not is_instance_valid(_webview):
 		return false
+	if _native_content_occluded():
+		return false
 	if not is_visible_in_tree():
 		return false
 	if _content_host != null and not _content_host.is_visible_in_tree():
@@ -1020,6 +1238,7 @@ func _bind_webview_signals() -> void:
 		_webview.connect("ipc_message", func(value) -> void:
 			_record_webview_signal("ipc_message", value)
 			_consume_browser_navigation_message(value)
+			_consume_browser_context_action_message(value)
 			_consume_browser_lifecycle_message(value)
 			_consume_browser_ipc_message(value)
 		)
@@ -1196,6 +1415,7 @@ func _show_new_tab_page() -> void:
 	if favorites_grid is CanvasItem:
 		(favorites_grid as CanvasItem).visible = _show_favorites_on_new_tab
 	_sync_interactive_fallback_visibility()
+	_sync_chrome_occlusion_placeholder_visibility()
 	_sync_native_webview_window_state(true)
 	_set_status_text("new tab")
 
@@ -1212,6 +1432,7 @@ func _show_blank_page() -> void:
 	if _new_tab_page:
 		_new_tab_page.visible = false
 	_sync_interactive_fallback_visibility()
+	_sync_chrome_occlusion_placeholder_visibility()
 	_sync_native_webview_window_state(true)
 	_set_status_text("blank")
 
@@ -1220,9 +1441,10 @@ func _hide_new_tab_page() -> void:
 		return
 	for child in _content_host.get_children():
 		if child is CanvasItem:
-			(child as CanvasItem).visible = child != _new_tab_page
+			(child as CanvasItem).visible = child != _new_tab_page and child != _chrome_occlusion_placeholder and child != _interactive_fallback_panel
 	_new_tab_page.visible = false
 	_sync_interactive_fallback_visibility()
+	_sync_chrome_occlusion_placeholder_visibility()
 
 func search(query: String) -> void:
 	var q := query.strip_edges()
@@ -1287,7 +1509,7 @@ func get_current_title() -> String:
 	return str(tab.get("title", "Browser"))
 
 func open_home() -> void:
-	open_url(INTERNAL_NEW_TAB_URL)
+	open_url(_startup_url_for_mode())
 
 func _startup_url_for_mode() -> String:
 	match _startup_mode:
@@ -1406,7 +1628,7 @@ func _inject_browser_navigation_bridge(html: String) -> String:
 	if html.find("data-hermes-browser-navigation-bridge") >= 0:
 		return html
 
-	const DEFAULT_SELECTION_STYLE := "<style id=\"hermesos-browser-default-selection-style\">::selection{background:rgba(96,165,250,0.85);color:#ffffff}input::selection,textarea::selection{background:rgba(96,165,250,0.95);color:#ffffff}</style>"
+	const DEFAULT_SELECTION_STYLE := "<style id=\"hermesos-browser-default-selection-style\">::selection{background:rgba(96,165,250,0.30);color:#ffffff}input::selection,textarea::selection{background:rgba(96,165,250,0.38);color:#ffffff}</style>"
 
 	var style := DEFAULT_SELECTION_STYLE
 
@@ -1424,11 +1646,87 @@ func _inject_browser_navigation_bridge(html: String) -> String:
 	script += "(function () {\n"
 	script += "  if (window.__hermesBrowserNavigationBridge) return;\n"
 	script += "  window.__hermesBrowserNavigationBridge = true;\n"
+	script += "  var currentMenuId = '';\n"
 	script += "  function post(payload) {\n"
 	script += "    if (window.ipc && typeof window.ipc.postMessage === 'function') {\n"
 	script += "      window.ipc.postMessage(JSON.stringify(payload));\n"
 	script += "    }\n"
 	script += "  }\n"
+	script += "  function coerceMessage(event) {\n"
+	script += "    var raw = event && event.detail !== undefined ? event.detail : event && event.data;\n"
+	script += "    if (!raw) return null;\n"
+	script += "    if (typeof raw === 'string') { try { return JSON.parse(raw); } catch (_err) { return null; } }\n"
+	script += "    return typeof raw === 'object' ? raw : null;\n"
+	script += "  }\n"
+	script += "  function ensureOverlayStyle() {\n"
+	script += "    if (document.getElementById('hermes-browser-overlay-menu-style')) return;\n"
+	script += "    var style = document.createElement('style');\n"
+	script += "    style.id = 'hermes-browser-overlay-menu-style';\n"
+	script += "    style.textContent = '.hermes-browser-overlay-menu{position:fixed;z-index:2147483647;display:none;min-width:190px;max-width:280px;padding:7px;background:#171b24;border:1px solid rgba(148,163,184,.28);border-radius:12px;box-shadow:0 18px 54px rgba(0,0,0,.48);font:13px system-ui,-apple-system,Segoe UI,sans-serif;color:#edf2ff;box-sizing:border-box}.hermes-browser-overlay-menu button{display:block;width:100%;margin:0;padding:8px 10px;border:0;border-radius:8px;background:transparent;color:inherit;text-align:left;font:inherit;line-height:1.25;box-sizing:border-box}.hermes-browser-overlay-menu button:not(:disabled):hover{background:rgba(96,165,250,.20)}.hermes-browser-overlay-menu button:disabled{opacity:.42}.hermes-browser-overlay-separator{height:1px;margin:5px 4px;background:rgba(148,163,184,.22)}';\n"
+	script += "    document.documentElement.appendChild(style);\n"
+	script += "  }\n"
+	script += "  function ensureOverlayMenu() {\n"
+	script += "    ensureOverlayStyle();\n"
+	script += "    var existing = document.getElementById('hermes-browser-overlay-menu');\n"
+	script += "    if (existing) return existing;\n"
+	script += "    var menu = document.createElement('div');\n"
+	script += "    menu.id = 'hermes-browser-overlay-menu';\n"
+	script += "    menu.className = 'hermes-browser-overlay-menu';\n"
+	script += "    document.documentElement.appendChild(menu);\n"
+	script += "    return menu;\n"
+	script += "  }\n"
+	script += "  function hideOverlayMenu() { var menu = document.getElementById('hermes-browser-overlay-menu'); if (menu) menu.style.display = 'none'; currentMenuId = ''; }\n"
+	script += "  function clampMenu(menu, pos) {\n"
+	script += "    var x = Number(pos && pos.x || 12); var y = Number(pos && pos.y || 12);\n"
+	script += "    var w = Math.max(menu.offsetWidth || 210, 210); var h = Math.max(menu.offsetHeight || 190, 120);\n"
+	script += "    menu.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + 'px';\n"
+	script += "    menu.style.top = Math.max(8, Math.min(y, window.innerHeight - h - 8)) + 'px';\n"
+	script += "  }\n"
+	script += "  function addRow(menu, menuId, item) {\n"
+	script += "    if (item && item.separator) { var sep = document.createElement('div'); sep.className = 'hermes-browser-overlay-separator'; menu.appendChild(sep); return; }\n"
+	script += "    var action = String(item && (item.action || item.id) || ''); var label = String(item && item.label || action);\n"
+	script += "    if (!action || !label) return;\n"
+	script += "    var button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.disabled = item && item.enabled === false;\n"
+	script += "    button.addEventListener('click', function () {\n"
+	script += "      if (button.disabled) return;\n"
+	script += "      if (menuId === 'page_context_menu' && action === 'copy') { try { document.execCommand('copy'); } catch (_err) {} }\n"
+	script += "      hideOverlayMenu();\n"
+	script += "      post({source:'hermes_browser', type:'browser_overlay_menu_action', menu_id:menuId, action:action});\n"
+	script += "    });\n"
+	script += "    menu.appendChild(button);\n"
+	script += "  }\n"
+	script += "  function renderOverlayMenu(spec) {\n"
+	script += "    spec = spec || {}; var menuId = String(spec.menu_id || spec.id || ''); var items = Array.isArray(spec.items) ? spec.items : [];\n"
+	script += "    if (!menuId || !items.length) return;\n"
+	script += "    var menu = ensureOverlayMenu(); currentMenuId = menuId; menu.innerHTML = '';\n"
+	script += "    items.forEach(function (item) { addRow(menu, menuId, item || {}); });\n"
+	script += "    menu.style.display = 'block'; clampMenu(menu, spec.position || {x:12,y:12});\n"
+	script += "  }\n"
+	script += "  function pageContextItems(hasSelection) {\n"
+	script += "    var items = [];\n"
+	script += "    if (hasSelection) items.push({id:'copy', action:'copy', label:'Copy', enabled:true});\n"
+	script += "    if (hasSelection) items.push({separator:true});\n"
+	script += "    items.push({id:'back', action:'back', label:'Back', enabled:true});\n"
+	script += "    items.push({id:'forward', action:'forward', label:'Forward', enabled:true});\n"
+	script += "    items.push({id:'reload', action:'reload', label:'Reload', enabled:true});\n"
+	script += "    items.push({id:'stop', action:'stop', label:'Stop', enabled:true});\n"
+	script += "    return items;\n"
+	script += "  }\n"
+	script += "  document.addEventListener('contextmenu', function (event) {\n"
+	script += "    event.preventDefault();\n"
+	script += "    var hasSelection = String(window.getSelection ? window.getSelection() : '').length > 0;\n"
+	script += "    renderOverlayMenu({menu_id:'page_context_menu', position:{x:event.clientX,y:event.clientY}, items:pageContextItems(hasSelection)});\n"
+	script += "  }, true);\n"
+	script += "  function handleOverlayMessage(event) {\n"
+	script += "    var data = coerceMessage(event);\n"
+	script += "    if (!data || data.source !== 'hermes_os') return;\n"
+	script += "    if (data.type === 'browser_overlay_menu_show') renderOverlayMenu(data.menu || data);\n"
+	script += "    if (data.type === 'browser_overlay_menu_hide') hideOverlayMenu();\n"
+	script += "  }\n"
+	script += "  window.addEventListener('message', handleOverlayMessage);\n"
+	script += "  document.addEventListener('message', handleOverlayMessage);\n"
+	script += "  document.addEventListener('click', function (event) { var menu = document.getElementById('hermes-browser-overlay-menu'); if (menu && menu.style.display !== 'none' && !menu.contains(event.target)) hideOverlayMenu(); }, true);\n"
+	script += "  document.addEventListener('keydown', function (event) { if (event.key === 'Escape') hideOverlayMenu(); }, true);\n"
 	script += "  document.addEventListener('click', function (event) {\n"
 	script += "    var node = event.target;\n"
 	script += "    while (node && node !== document && !(node.tagName && node.tagName.toLowerCase() === 'a' && node.getAttribute('href'))) { node = node.parentNode; }\n"
@@ -1446,6 +1744,7 @@ func _inject_browser_navigation_bridge(html: String) -> String:
 	if body_close >= 0:
 		return html.substr(0, body_close) + script + html.substr(body_close)
 	return html + script
+
 func _blank_document() -> Dictionary:
 	return {
 		"ok": true,
@@ -1509,20 +1808,31 @@ func agent_browser_test_type_text(args: Dictionary = {}) -> Dictionary:
 	if not args.has("text"):
 		return _agent_error("browser.test_type_text", "MISSING_TEXT", "browser.test_type_text requires text")
 	var text := str(args.get("text", ""))
-	return _send_browser_test_input("type", {"text": text}, "browser.test_type_text")
+	var payload := {"text": text}
+	if args.has("target"):
+		payload["target"] = str(args.get("target", ""))
+	return _send_browser_test_input("type", payload, "browser.test_type_text")
 
 func agent_browser_test_click(args: Dictionary = {}) -> Dictionary:
 	var target := str(args.get("target", "increment")).strip_edges().to_lower()
 	if target == "":
 		target = "increment"
-	if target != "increment":
-		return _agent_error("browser.test_click", "UNSUPPORTED_TARGET", "browser.test_click supports only target=increment")
+	var page_target := _browser_test_input_target_for_current_page()
+	if page_target != "gauntlet" and target != "increment":
+		return _agent_error("browser.test_click", "UNSUPPORTED_TARGET", "browser.test_click supports only target=increment outside the agent gauntlet")
 	return _send_browser_test_input("click", {"target": target}, "browser.test_click")
+
+func agent_browser_test_scroll(args: Dictionary = {}) -> Dictionary:
+	var direction := str(args.get("direction", "down")).strip_edges().to_lower()
+	if direction == "":
+		direction = "down"
+	var amount := clampi(int(args.get("amount", 1)), 1, 12)
+	return _send_browser_test_input("scroll", {"direction": direction, "amount": amount, "target": str(args.get("target", ""))}, "browser.test_scroll")
 
 func _send_browser_test_input(action: String, payload: Dictionary, operation: String) -> Dictionary:
 	var target := _browser_test_input_target_for_current_page()
 	if target == "":
-		return _agent_error(operation, "PAGE_NOT_READY", "Browser test input requires supported local route", {"url": get_current_url(), "supported_routes": ["http://home.hermes/interactive", "http://home.hermes/games/snake"]})
+		return _agent_error(operation, "PAGE_NOT_READY", "Browser test input requires supported local route", {"url": get_current_url(), "supported_routes": ["http://home.hermes/interactive", "http://home.hermes/games/snake", "http://home.hermes/agent-gauntlet"]})
 	if target == "snake":
 		if action != "key":
 			return _agent_error(operation, "UNSUPPORTED_INPUT", "Snake supports key input only", {"url": get_current_url(), "supported_actions": ["key"]})
@@ -1533,6 +1843,9 @@ func _send_browser_test_input(action: String, payload: Dictionary, operation: St
 			return _agent_error(operation, "UNSUPPORTED_KEY", "Unsupported key for Snake", {"key": raw_key, "allowed_keys": allowed_snake_keys})
 		payload = payload.duplicate(true)
 		payload["key"] = normalized_key
+	elif target == "gauntlet":
+		if not ["click", "type", "key", "scroll"].has(action):
+			return _agent_error(operation, "UNSUPPORTED_INPUT", "Agent gauntlet supports click/type/key/scroll", {"url": get_current_url(), "supported_actions": ["click", "type", "key", "scroll"]})
 	if _webview == null or not is_instance_valid(_webview) or not _webview.has_method("post_message"):
 		return {
 			"success": false,
@@ -1562,6 +1875,8 @@ func _send_browser_test_input(action: String, payload: Dictionary, operation: St
 		_last_browser_input_proof["typed_text"] = str(_last_browser_input_proof.get("typed_text", "")) + str(payload.get("text", ""))
 	elif action == "key":
 		_last_browser_input_proof["last_key"] = str(payload.get("key", ""))
+	elif action == "scroll":
+		_last_browser_input_proof["last_scroll"] = str(payload.get("direction", "down"))
 	_update_interactive_fallback_state()
 	_sync_interactive_fallback_visibility()
 	return {
@@ -1582,6 +1897,8 @@ func _browser_test_input_target_for_current_page() -> String:
 		return "interactive"
 	if _is_snake_game_page_active():
 		return "snake"
+	if _is_agent_gauntlet_page_active():
+		return "gauntlet"
 	return ""
 
 func _is_interactive_test_page_active() -> bool:
@@ -1597,6 +1914,13 @@ func _is_snake_game_page_active() -> bool:
 		return true
 	var backend := _resolver.resolve_to_backend(current)
 	return backend.find("/games/snake") >= 0
+
+func _is_agent_gauntlet_page_active() -> bool:
+	var current := _resolver.normalize_user_url(get_current_url())
+	if current.begins_with("http://home.hermes/agent-gauntlet"):
+		return true
+	var backend := _resolver.resolve_to_backend(current)
+	return backend.find("/agent-gauntlet") >= 0 or backend.find("agent_gauntlet") >= 0
 
 func _normalize_allowed_game_key(key_name: String) -> String:
 	match key_name.to_lower().strip_edges():
@@ -1636,6 +1960,56 @@ func _consume_browser_navigation_message(raw_value: Variant) -> void:
 	_set_status_text("navigating local link")
 	call_deferred("open_url", target)
 
+func _consume_browser_context_action_message(raw_value: Variant) -> void:
+	var payload: Variant = raw_value
+	if raw_value is String:
+		payload = JSON.parse_string(str(raw_value))
+	if not (payload is Dictionary):
+		return
+	var message: Dictionary = payload
+	if str(message.get("source", "")) != "hermes_browser":
+		return
+	var message_type := str(message.get("type", ""))
+	if message_type == "browser_overlay_menu_action":
+		_perform_browser_overlay_menu_action(str(message.get("menu_id", message.get("id", ""))), str(message.get("action", "")))
+		return
+	if message_type == "browser_context_action":
+		# Backward-compatible path for any older injected document bridge.
+		_perform_browser_overlay_menu_action("page_context_menu", str(message.get("action", "")))
+
+func _perform_browser_overlay_menu_action(menu_id: String, action: String) -> void:
+	if menu_id == "" or action == "":
+		return
+	_browser_overlay_menu_visible = false
+	_last_browser_overlay_menu_action = {
+		"menu_id": menu_id,
+		"action": action,
+		"updated_msec": Time.get_ticks_msec()
+	}
+	_native_render_debug["browser_overlay_menu_visible"] = false
+	_native_render_debug["browser_overlay_menu_id"] = menu_id
+	_record_webview_signal("browser_overlay_menu_action", _last_browser_overlay_menu_action)
+	if menu_id == "page_context_menu":
+		_perform_page_context_menu_action(action)
+	else:
+		browser_overlay_menu_action.emit(menu_id, action)
+	_sync_native_webview_window_state(true)
+
+func _perform_page_context_menu_action(action: String) -> void:
+	match action:
+		"back":
+			go_back()
+		"forward":
+			go_forward()
+		"reload":
+			reload()
+		"stop":
+			stop_loading()
+		"copy":
+			_set_status_text("copied selection")
+		_:
+			return
+
 func _consume_browser_ipc_message(raw_value: Variant) -> void:
 	var payload: Variant = raw_value
 	if raw_value is String:
@@ -1645,16 +2019,25 @@ func _consume_browser_ipc_message(raw_value: Variant) -> void:
 	var message: Dictionary = payload
 	if str(message.get("type", "")) != "browser_test_state":
 		return
-	if str(message.get("source", "")) != "hermes_interactive":
+	var source_name := str(message.get("source", ""))
+	if not ["hermes_interactive", "hermes_gauntlet"].has(source_name):
 		return
 	_last_browser_input_proof["connected"] = true
 	_last_browser_input_proof["last_action"] = str(message.get("last_action", _last_browser_input_proof.get("last_action", "")))
 	_last_browser_input_proof["click_count"] = int(message.get("click_count", _last_browser_input_proof.get("click_count", 0)))
 	_last_browser_input_proof["typed_text"] = str(message.get("typed_text", _last_browser_input_proof.get("typed_text", "")))
 	_last_browser_input_proof["last_key"] = str(message.get("last_key", _last_browser_input_proof.get("last_key", "")))
+	if message.has("last_scroll"):
+		_last_browser_input_proof["last_scroll"] = str(message.get("last_scroll", _last_browser_input_proof.get("last_scroll", "")))
+	if message.has("completion_code"):
+		_last_browser_input_proof["completion_code"] = str(message.get("completion_code", ""))
+	if message.has("completed"):
+		_last_browser_input_proof["completed"] = bool(message.get("completed", false))
+	if message.has("stage"):
+		_last_browser_input_proof["stage"] = int(message.get("stage", 0))
 	_last_browser_input_proof["updated_msec"] = Time.get_ticks_msec()
-	_last_browser_input_proof["source"] = "hermes_interactive"
-	if str(_last_browser_input_proof.get("last_action", "")) in ["click", "type", "key"]:
+	_last_browser_input_proof["source"] = source_name
+	if str(_last_browser_input_proof.get("last_action", "")) in ["click", "type", "key", "scroll"]:
 		_native_render_debug["test_input_roundtrip"] = true
 	if message.has("document_loaded"):
 		_native_render_debug["document_loaded"] = bool(message.get("document_loaded", false))
@@ -1674,7 +2057,7 @@ func _consume_browser_lifecycle_message(raw_value: Variant) -> void:
 	var message: Dictionary = payload
 	if str(message.get("type", "")) != "browser_view_lifecycle":
 		return
-	if str(message.get("source", "")) != "hermes_interactive":
+	if not ["hermes_interactive", "hermes_gauntlet"].has(str(message.get("source", ""))):
 		return
 	var event_name := str(message.get("event", ""))
 	if event_name != "":
@@ -1697,6 +2080,51 @@ func _sync_interactive_fallback_visibility() -> void:
 	var show := _is_interactive_test_page_active() and _content_host != null and _content_host.visible and (_new_tab_page == null or not _new_tab_page.visible)
 	_interactive_fallback_panel.visible = show
 	_native_render_debug["fallback_active"] = show
+
+func _sync_chrome_occlusion_placeholder_visibility() -> void:
+	if _chrome_occlusion_placeholder == null:
+		_native_render_debug["chrome_occlusion_placeholder_visible"] = false
+		return
+	var show := _browser_content_occluded and not _shell_overlay_occluded and _content_host != null and _content_host.visible and (_settings_panel == null or not _settings_panel.visible) and (_diagnostics_panel == null or not _diagnostics_panel.visible) and (_new_tab_page == null or not _new_tab_page.visible)
+	if show:
+		_update_chrome_occlusion_placeholder()
+	_chrome_occlusion_placeholder.visible = show
+	_native_render_debug["chrome_occlusion_placeholder_visible"] = show
+
+func _update_chrome_occlusion_placeholder() -> void:
+	var tab := _active_tab_data()
+	var title := str(tab.get("title", get_current_title())).strip_edges()
+	if title == "":
+		title = "Browser page"
+	var url := get_current_url().strip_edges()
+	var load_state := str(tab.get("load_state", LOAD_IDLE))
+	var document_mode := str(_last_loaded_document.get("mode", _native_render_debug.get("rendering_mode", "native")))
+	var summary := _current_document_placeholder_summary()
+	if _chrome_occlusion_title != null:
+		_chrome_occlusion_title.text = title
+	if _chrome_occlusion_url != null:
+		_chrome_occlusion_url.text = url if url != "" else "about:blank"
+	if _chrome_occlusion_status != null:
+		_chrome_occlusion_status.text = "Stable page placeholder — %s / %s" % [load_state, document_mode]
+	if _chrome_occlusion_summary != null:
+		_chrome_occlusion_summary.text = summary
+
+func _current_document_placeholder_summary() -> String:
+	if _last_loaded_document.is_empty():
+		return "The live native BrowserView is hidden only while this Browser chrome menu is open."
+	var description := str(_last_loaded_document.get("description", "")).strip_edges()
+	if description != "":
+		return description
+	var html := str(_last_loaded_document.get("html", ""))
+	var body_text := _strip_html(html).strip_edges()
+	body_text = body_text.replace("\n", " ").replace("	", " ")
+	while body_text.find("  ") >= 0:
+		body_text = body_text.replace("  ", " ")
+	if body_text.length() > 220:
+		body_text = body_text.substr(0, 217) + "..."
+	if body_text != "":
+		return body_text
+	return "The live native BrowserView is hidden only while this Browser chrome menu is open."
 
 func _update_interactive_fallback_state() -> void:
 	if _interactive_fallback_status == null:
@@ -1798,7 +2226,11 @@ func _agent_navigation_target(args: Dictionary) -> String:
 			return "http://home.hermes/games"
 		"snake", "snake game", "the snake game", "open snake", "open snake game":
 			return "http://home.hermes/games/snake"
-		"home", "home page", "home.hermes":
+		"agent-gauntlet", "agent gauntlet", "gauntlet", "control gauntlet", "the gauntlet":
+			return "http://home.hermes/agent-gauntlet"
+		"home.hermes", "home.hermes/", "http://home.hermes", "http://home.hermes/":
+			return "http://home.hermes/"
+		"home", "home page":
 			return DEFAULT_URL
 	if lower.begins_with("/"):
 		return "http://home.hermes%s" % raw
@@ -2056,6 +2488,8 @@ func _toggle_diagnostics_panel() -> void:
 		_set_status_text("diagnostics")
 	else:
 		_set_status_text(str(_active_tab_data().get("load_state", LOAD_IDLE)))
+	_sync_chrome_occlusion_placeholder_visibility()
+	_sync_native_webview_window_state(true)
 
 func _refresh_diagnostics_panel() -> void:
 	if _diagnostics_text == null:
@@ -2257,6 +2691,8 @@ func _show_settings_panel() -> void:
 		_content_host.visible = false
 	_settings_panel.visible = true
 	_set_status_text("settings")
+	_sync_chrome_occlusion_placeholder_visibility()
+	_sync_native_webview_window_state(true)
 
 func _hide_settings_panel() -> void:
 	if _settings_panel:
@@ -2264,6 +2700,8 @@ func _hide_settings_panel() -> void:
 	if _content_host and (_diagnostics_panel == null or not _diagnostics_panel.visible):
 		_content_host.visible = true
 	_set_status_text(str(_active_tab_data().get("load_state", LOAD_IDLE)))
+	_sync_chrome_occlusion_placeholder_visibility()
+	_sync_native_webview_window_state(true)
 
 func _set_startup_mode_checks(mode: String) -> void:
 	if _settings_startup_new_tab:
@@ -2371,10 +2809,10 @@ func _load_settings() -> void:
 	if _startup_mode != STARTUP_MODE_NEW_TAB and _startup_mode != STARTUP_MODE_BLANK and _startup_mode != STARTUP_MODE_CUSTOM:
 		_startup_mode = STARTUP_MODE_NEW_TAB
 	_custom_home_url = _migrate_legacy_browser_url(str(cfg.get_value("browser", "custom_home_url", str(cfg.get_value("browser", "home_url", DEFAULT_URL)))))
-	_show_favorites_on_new_tab = bool(cfg.get_value("browser", "show_favorites_on_new_tab", true))
-	_restore_session_enabled = bool(cfg.get_value("browser", "restore_session", false))
-	_search_template = _migrate_legacy_search_template(str(cfg.get_value("browser", "search_template", "http://pythia.com/?q=%s")))
+	_restore_session_enabled = false  # product rule: restore last session off by default until Settings UI exposes the option
 	_confirm_close_tabs = bool(cfg.get_value("browser", "confirm_close_tabs", false))
+	_max_closed_tabs = maxi(0, int(cfg.get_value("browser", "max_closed_tabs", 30)))
+
 	_max_closed_tabs = maxi(0, int(cfg.get_value("browser", "max_closed_tabs", 30)))
 	if not _search_template.contains("%s"):
 		_search_template = "http://pythia.com/?q=%s"
@@ -2580,6 +3018,17 @@ func debug_get_state() -> Dictionary:
 		"settings_panel_visible": _settings_panel != null and _settings_panel.visible,
 		"new_tab_page_visible": _new_tab_page != null and _new_tab_page.visible,
 		"diagnostics_panel_visible": _diagnostics_panel != null and _diagnostics_panel.visible,
+		"shell_overlay_occluded": _shell_overlay_occluded,
+		"browser_content_occluded": _browser_content_occluded,
+		"chrome_popup_occluded": _browser_content_occluded,
+		"chrome_occlusion_placeholder_visible": _chrome_occlusion_placeholder != null and _chrome_occlusion_placeholder.visible,
+		"native_content_occluded": _native_content_occluded(),
+		"browser_overlay_menu": {
+			"available": _browser_overlay_portal_available(),
+			"visible": _browser_overlay_menu_visible,
+			"last_spec": _last_browser_overlay_menu_spec.duplicate(true),
+			"last_action": _last_browser_overlay_menu_action.duplicate(true)
+		},
 		"native_teardown": {
 			"started": _native_teardown_started,
 			"done": _native_teardown_done,

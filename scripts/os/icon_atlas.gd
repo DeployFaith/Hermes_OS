@@ -22,7 +22,7 @@ const ICON_PATHS: Dictionary = {
 	"command": "res://assets/icons/grid-2x2.svg",
 	"hermes_chat": "res://assets/icons/circle-help.svg",
 	"hermes": "res://assets/icons/circle-help.svg",
-	"start": "res://assets/icons/grid-2x2.svg",
+	"start": "res://assets/icons/start.svg",
 	"home": "res://assets/icons/home.svg",
 	"wifi": "res://assets/icons/wifi.svg",
 	"volume": "res://assets/icons/volume-2.svg",

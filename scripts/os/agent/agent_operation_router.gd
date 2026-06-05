@@ -120,8 +120,12 @@ func _route_operation(operation: String, args: Dictionary) -> Dictionary:
 			return _route_browser_operation(operation, args, "agent_browser_activate_link", true)
 		"browser.test_click":
 			return _route_browser_operation(operation, args, "agent_browser_test_click", true)
+		"browser.test_type_text":
+			return _route_browser_operation(operation, args, "agent_browser_test_type_text", true)
 		"browser.test_press_key":
 			return _route_browser_operation(operation, args, "agent_browser_test_press_key", true)
+		"browser.test_scroll":
+			return _route_browser_operation(operation, args, "agent_browser_test_scroll", true)
 		"notifications.create", "desktop.show_notification":
 			return _route_notifications_create(operation, args)
 		"system.get_state":

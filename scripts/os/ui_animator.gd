@@ -162,3 +162,69 @@ func pulse(node: CanvasItem, intensity: float = 0.05, duration: float = 0.6) -> 
 # ── Stop all on node ──
 func stop(node: CanvasItem) -> void:
 	_kill_existing(node)
+
+# ── New helpers for window/menu polish (new Tweens only, reuse _kill/store) ──
+# Snappy 90-180ms: open (fade + scale 0.95->1.0 + y-offset)
+func window_open(node: CanvasItem, duration: float = 0.14) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	_kill_existing(node)
+	node.modulate.a = 0.0
+	node.scale = Vector2(0.95, 0.95)
+	if node is Control:
+		var base_y = node.position.y
+		node.position.y = base_y + 12
+	var tween: Tween = node.create_tween()
+	tween.set_trans(Tween.TRANS_QUAD)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.set_parallel()
+	tween.tween_property(node, "modulate:a", 1.0, duration)
+	tween.tween_property(node, "scale", Vector2(1.0, 1.0), duration)
+	if node is Control:
+		tween.tween_property(node, "position:y", node.position.y - 12, duration)
+	_store_tween(node, tween)
+
+# Close (fade + scale 1.0->0.95)
+func window_close(node: CanvasItem, duration: float = 0.10, then_free: bool = false) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	_kill_existing(node)
+	var tween: Tween = node.create_tween()
+	tween.set_trans(Tween.TRANS_QUAD)
+	tween.set_ease(Tween.EASE_IN)
+	tween.set_parallel()
+	tween.tween_property(node, "modulate:a", 0.0, duration)
+	tween.tween_property(node, "scale", Vector2(0.95, 0.95), duration)
+	_store_tween(node, tween)
+	if then_free:
+		tween.finished.connect(func() -> void:
+			if is_instance_valid(node):
+				node.queue_free()
+		)
+
+# Hover lift for dock/icons (subtle elevation)
+func hover_lift(node: CanvasItem, lift: float = 4.0, duration: float = 0.08) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	_kill_existing(node)
+	var base_y = node.position.y if node is Control else 0.0
+	var tween: Tween = node.create_tween()
+	tween.set_trans(Tween.TRANS_QUAD)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.tween_property(node, "position:y", base_y - lift, duration)
+	_store_tween(node, tween)
+
+# Menu pop for start menu
+func menu_pop(node: CanvasItem, duration: float = 0.12) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	_kill_existing(node)
+	node.modulate.a = 0.0
+	node.scale = Vector2(0.96, 0.96)
+	var tween: Tween = node.create_tween()
+	tween.set_trans(Tween.TRANS_BACK)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.set_parallel()
+	tween.tween_property(node, "modulate:a", 1.0, duration)
+	tween.tween_property(node, "scale", Vector2(1.0, 1.0), duration)
+	_store_tween(node, tween)

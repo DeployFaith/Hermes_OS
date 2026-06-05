@@ -10,12 +10,15 @@ var _browser_app: Object = null
 var _surface: Control = null
 var _address_input: LineEdit = null
 var _address_context_menu: PopupMenu = null
+var _address_context_menu_occluding := false
 
 const ADDRESS_MENU_CUT := 1001
 const ADDRESS_MENU_COPY := 1002
 const ADDRESS_MENU_PASTE := 1003
 const ADDRESS_MENU_SELECT_ALL := 1004
 const ADDRESS_MENU_CLEAR := 1005
+
+const DesignTokens = preload("res://scripts/os/design_tokens.gd")
 
 func configure_app_context(context: Dictionary) -> void:
 	_shell = context.get("shell", null) as Node
@@ -171,18 +174,28 @@ func _setup_surface() -> void:
 			var sync_callable := Callable(self, "sync_from_surface")
 			if not _surface.is_connected("navigation_state_changed", sync_callable):
 				_surface.connect("navigation_state_changed", sync_callable)
+		if _surface.has_signal("browser_overlay_menu_action"):
+			var overlay_action_callable := Callable(self, "_on_browser_overlay_menu_action")
+			if not _surface.is_connected("browser_overlay_menu_action", overlay_action_callable):
+				_surface.connect("browser_overlay_menu_action", overlay_action_callable)
 		if _surface.has_method("set_chrome_visible"):
 			_surface.call("set_chrome_visible", false)
 
 func _setup_address_context_menu() -> void:
-	if ui == null:
+	if _address_context_menu != null and is_instance_valid(_address_context_menu):
 		return
-	if _address_input != null and is_instance_valid(_address_input):
+	if ui == null and _address_input == null:
 		return
-	var node_value: Variant = ui.by_id("browser-address")
-	if not (node_value is LineEdit):
-		return
-	_address_input = node_value as LineEdit
+	if _address_input == null or not is_instance_valid(_address_input):
+		if ui != null:
+			var node_value: Variant = ui.by_id("browser-address")
+			if not (node_value is LineEdit):
+				return
+			_address_input = node_value as LineEdit
+		else:
+			return
+	if "context_menu_enabled" in _address_input:
+		_address_input.set("context_menu_enabled", false)
 	var popup := PopupMenu.new()
 	popup.name = "BrowserAddressContextMenu"
 	popup.add_item("Cut", ADDRESS_MENU_CUT)
@@ -191,13 +204,52 @@ func _setup_address_context_menu() -> void:
 	popup.add_separator()
 	popup.add_item("Select All", ADDRESS_MENU_SELECT_ALL)
 	popup.add_item("Clear", ADDRESS_MENU_CLEAR)
+	_style_address_context_menu(popup)
 	popup.id_pressed.connect(_on_address_context_id_pressed)
+	popup.popup_hide.connect(_on_address_context_popup_hide)
 	if _address_input.get_parent() != null:
 		_address_input.get_parent().add_child(popup)
 	_address_context_menu = popup
 	var input_cb := Callable(self, "_on_address_input_gui_input")
 	if not _address_input.gui_input.is_connected(input_cb):
 		_address_input.gui_input.connect(input_cb)
+
+func _style_address_context_menu(popup: PopupMenu) -> void:
+	if popup == null:
+		return
+	var panel := StyleBoxFlat.new()
+	panel.bg_color = DesignTokens.ELEVATED_CARD
+	panel.border_color = DesignTokens.BORDER
+	panel.border_width_left = 1
+	panel.border_width_top = 1
+	panel.border_width_right = 1
+	panel.border_width_bottom = 1
+	panel.corner_radius_top_left = 8
+	panel.corner_radius_top_right = 8
+	panel.corner_radius_bottom_left = 8
+	panel.corner_radius_bottom_right = 8
+	panel.content_margin_left = 8
+	panel.content_margin_top = 6
+	panel.content_margin_right = 8
+	panel.content_margin_bottom = 6
+	popup.add_theme_stylebox_override("panel", panel)
+
+	popup.add_theme_color_override("font_color", DesignTokens.TEXT)
+	popup.add_theme_color_override("font_hover_color", DesignTokens.TEXT)
+	popup.add_theme_color_override("font_disabled_color", DesignTokens.TEXT_MUTED)
+	popup.add_theme_color_override("font_separator_color", DesignTokens.TEXT_FAINT)
+	popup.add_theme_color_override("font_accelerator_color", DesignTokens.TEXT_MUTED)
+	popup.add_theme_color_override("font_hover_accelerator_color", DesignTokens.TEXT)
+	popup.add_theme_constant_override("item_start_padding", 12)
+	popup.add_theme_constant_override("item_end_padding", 12)
+	popup.add_theme_constant_override("v_separation", 4)
+	var hover := StyleBoxFlat.new()
+	hover.bg_color = DesignTokens.alpha(DesignTokens.ACCENT, 0.2)
+	hover.corner_radius_top_left = 6
+	hover.corner_radius_top_right = 6
+	hover.corner_radius_bottom_left = 6
+	hover.corner_radius_bottom_right = 6
+	popup.add_theme_stylebox_override("hover", hover)
 
 func _on_address_input_gui_input(event: InputEvent) -> void:
 	if _address_input == null or _address_context_menu == null:
@@ -213,38 +265,153 @@ func _on_address_input_gui_input(event: InputEvent) -> void:
 				viewport.set_input_as_handled()
 
 func _show_address_context_menu(global_position: Vector2) -> void:
-	if _address_input == null or _address_context_menu == null:
-		return
+	if _address_input == null or _address_context_menu == null or not is_instance_valid(_address_context_menu):
+		_setup_address_context_menu()
+		if _address_context_menu == null:
+			return
 	var has_text: bool = _address_input.text != ""
 	var has_selection: bool = _address_input.has_selection()
 	var can_edit: bool = _address_input.editable
 	var clipboard_available: bool = _clipboard_is_available()
 	var can_paste: bool = can_edit and clipboard_available and DisplayServer.clipboard_get() != ""
-	_address_context_menu.set_item_disabled(_address_context_menu.get_item_index(ADDRESS_MENU_CUT), (not can_edit) or (not has_selection))
+	_address_context_menu.set_item_disabled(_address_context_menu.get_item_index(ADDRESS_MENU_CUT), (not can_edit) or (not clipboard_available) or (not has_selection))
 	_address_context_menu.set_item_disabled(_address_context_menu.get_item_index(ADDRESS_MENU_COPY), (not clipboard_available) or (not has_selection))
 	_address_context_menu.set_item_disabled(_address_context_menu.get_item_index(ADDRESS_MENU_PASTE), not can_paste)
 	_address_context_menu.set_item_disabled(_address_context_menu.get_item_index(ADDRESS_MENU_SELECT_ALL), not has_text)
 	_address_context_menu.set_item_disabled(_address_context_menu.get_item_index(ADDRESS_MENU_CLEAR), (not can_edit) or (not has_text))
-	_address_context_menu.position = Vector2i(int(global_position.x), int(global_position.y))
-	_address_context_menu.popup()
+	if _try_show_address_context_menu_portal(global_position, has_selection, can_paste, has_text, can_edit):
+		return
+	var pos := Vector2i(int(global_position.x), int(global_position.y))
+	_address_context_menu.position = pos
+	# Explicit Rect2 forces reliable content-based sizing and layout (fixes only-Cut menu)
+	_address_context_menu.popup(Rect2(pos, Vector2(220, 0)))
 
 func _on_address_context_id_pressed(id: int) -> void:
+	if _address_input == null:
+		_set_address_context_content_occluded(false)
+		return
+	_perform_address_context_action_id(id)
+	if _address_context_menu != null and is_instance_valid(_address_context_menu) and _address_context_menu.visible:
+		_address_context_menu.hide()
+	_set_address_context_content_occluded(false)
+
+func _perform_address_context_action_id(id: int) -> void:
 	if _address_input == null:
 		return
 	match id:
 		ADDRESS_MENU_CUT:
-			_address_input.cut_text()
+			_cut_address_selection()
 		ADDRESS_MENU_COPY:
-			_address_input.copy_text()
+			_copy_address_selection()
 		ADDRESS_MENU_PASTE:
-			if _clipboard_is_available():
-				_address_input.paste_text()
+			_paste_into_address()
 		ADDRESS_MENU_SELECT_ALL:
 			_address_input.select_all()
 		ADDRESS_MENU_CLEAR:
 			_address_input.clear()
 	if state != null:
 		state.set("address", _address_input.text)
+
+func _on_address_context_popup_hide() -> void:
+	_set_address_context_content_occluded(false)
+
+func _try_show_address_context_menu_portal(global_position: Vector2, has_selection: bool, can_paste: bool, has_text: bool, can_edit: bool) -> bool:
+	_setup_surface()
+	if _surface == null or not _surface.has_method("show_browser_overlay_menu"):
+		return false
+	if _surface.has_method("can_show_browser_overlay_menu") and not bool(_surface.call("can_show_browser_overlay_menu")):
+		return false
+	var spec := {
+		"menu_id": "address_context_menu",
+		"global_position": {"x": global_position.x, "y": global_position.y},
+		"items": [
+			{"id": "cut", "action": "cut", "label": "Cut", "enabled": can_edit and has_selection},
+			{"id": "copy", "action": "copy", "label": "Copy", "enabled": has_selection},
+			{"id": "paste", "action": "paste", "label": "Paste", "enabled": can_paste},
+			{"separator": true},
+			{"id": "select_all", "action": "select_all", "label": "Select All", "enabled": has_text},
+			{"id": "clear", "action": "clear", "label": "Clear", "enabled": can_edit and has_text}
+		]
+	}
+	return bool(_surface.call("show_browser_overlay_menu", spec))
+
+func _on_browser_overlay_menu_action(menu_id: String, action: String) -> void:
+	if menu_id != "address_context_menu":
+		return
+	var id := _address_action_id_from_string(action)
+	if id == 0:
+		return
+	_perform_address_context_action_id(id)
+
+func _address_action_id_from_string(action: String) -> int:
+	match action:
+		"cut", "Cut":
+			return ADDRESS_MENU_CUT
+		"copy", "Copy":
+			return ADDRESS_MENU_COPY
+		"paste", "Paste":
+			return ADDRESS_MENU_PASTE
+		"select_all", "Select All":
+			return ADDRESS_MENU_SELECT_ALL
+		"clear", "Clear":
+			return ADDRESS_MENU_CLEAR
+	return 0
+
+func _set_address_context_content_occluded(active: bool) -> void:
+	if _address_context_menu_occluding == active:
+		return
+	_address_context_menu_occluding = active
+	_setup_surface()
+	if _surface != null and _surface.has_method("set_browser_chrome_popup_occluded"):
+		_surface.call("set_browser_chrome_popup_occluded", active)
+	elif _surface != null and _surface.has_method("set_browser_content_occluded"):
+		_surface.call("set_browser_content_occluded", active)
+	elif _browser_app != null and _browser_app.has_method("set_browser_chrome_popup_occluded"):
+		_browser_app.call("set_browser_chrome_popup_occluded", active)
+	elif _browser_app != null and _browser_app.has_method("set_browser_content_occluded"):
+		_browser_app.call("set_browser_content_occluded", active)
+
+func _copy_address_selection() -> bool:
+	if _address_input == null or not _address_input.has_selection() or not _clipboard_is_available():
+		return false
+	DisplayServer.clipboard_set(_address_input.get_selected_text())
+	return true
+
+func _cut_address_selection() -> bool:
+	if _address_input == null or not _address_input.editable or not _address_input.has_selection():
+		return false
+	if not _copy_address_selection():
+		return false
+	_delete_address_selection()
+	return true
+
+func _paste_into_address() -> bool:
+	if _address_input == null or not _address_input.editable or not _clipboard_is_available():
+		return false
+	var clipboard_text: String = DisplayServer.clipboard_get()
+	if clipboard_text == "":
+		return false
+	if _address_input.has_selection():
+		_delete_address_selection()
+	_address_input.insert_text_at_caret(clipboard_text)
+	return true
+
+func _delete_address_selection() -> void:
+	if _address_input == null or not _address_input.has_selection():
+		return
+	var from_column: int = _address_input.get_selection_from_column()
+	var to_column: int = _address_input.get_selection_to_column()
+	if from_column > to_column:
+		var swap_column: int = from_column
+		from_column = to_column
+		to_column = swap_column
+	_address_input.delete_text(from_column, to_column)
+	_address_input.caret_column = from_column
+
+func debug_perform_address_context_action(action: String) -> void:
+	var id := _address_action_id_from_string(action)
+	if id != 0:
+		_on_address_context_id_pressed(id)
 
 func _clipboard_is_available() -> bool:
 	return DisplayServer.has_feature(DisplayServer.FEATURE_CLIPBOARD)

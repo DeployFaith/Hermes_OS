@@ -47,6 +47,8 @@ func setup(id: String, title: String, content: Control) -> void:
 	_minimum_window_size = _calculate_minimum_window_size(content)
 	custom_minimum_size = _minimum_window_size
 	size = _minimum_window_size
+	var animator := UIAnimator.new()
+	animator.window_open(self, Tokens.TIME["normal"])
 	set_active(false)
 
 func minimum_window_size() -> Vector2:
@@ -60,7 +62,7 @@ func set_active(active: bool) -> void:
 	var border: Color = Tokens.BORDER_ACTIVE if active else Tokens.BORDER
 	add_theme_stylebox_override("panel", _window_style(border, active))
 	if _title_bar:
-		_title_bar.add_theme_stylebox_override("panel", StyleFactory.title_bar(active, 16))
+				_title_bar.add_theme_stylebox_override("panel", StyleFactory.title_bar(active, 12))
 	if _title_label:
 		_title_label.add_theme_color_override("font_color", Tokens.TEXT if active else Tokens.TEXT_MUTED)
 
@@ -176,10 +178,10 @@ func _build(content: Control) -> void:
 	_resize_handle.anchor_top = 1.0
 	_resize_handle.anchor_right = 1.0
 	_resize_handle.anchor_bottom = 1.0
-	_resize_handle.offset_left = -16
-	_resize_handle.offset_top = -16
-	_resize_handle.offset_right = -6
-	_resize_handle.offset_bottom = -6
+	_resize_handle.offset_left = -12
+	_resize_handle.offset_top = -12
+	_resize_handle.offset_right = -4
+	_resize_handle.offset_bottom = -4
 	_resize_handle.mouse_default_cursor_shape = Control.CURSOR_FDIAGSIZE
 	_resize_handle.mouse_filter = Control.MOUSE_FILTER_STOP
 	_resize_handle.gui_input.connect(_on_resize_handle_gui_input)
@@ -254,9 +256,36 @@ func _on_resize_handle_gui_input(event: InputEvent) -> void:
 			clampf(target_size.y, min_size.y, max_size.y)
 		)
 
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if _should_focus_from_pointer(event.position):
+			focused.emit(self)
+
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		focused.emit(self)
+
+func _should_focus_from_pointer(viewport_position: Vector2) -> bool:
+	if not visible or not is_inside_tree():
+		return false
+	if not Rect2(global_position, size).has_point(viewport_position):
+		return false
+	var hovered := get_viewport().gui_get_hovered_control()
+	if hovered != null and hovered != self and not is_ancestor_of(hovered):
+		return false
+	var parent_control := get_parent() as Control
+	if parent_control == null:
+		return true
+	var siblings := parent_control.get_children()
+	for index in range(siblings.size() - 1, -1, -1):
+		var sibling := siblings[index]
+		if sibling == self:
+			return true
+		if sibling is OSWindow:
+			var other := sibling as OSWindow
+			if other.visible and Rect2(other.global_position, other.size).has_point(viewport_position):
+				return false
+	return true
 
 func _calculate_minimum_window_size(content: Control) -> Vector2:
 	if content.has_meta("window_min_size"):
@@ -330,8 +359,8 @@ func _snap_right(parent_size: Vector2) -> void:
 
 func _window_style(border: Color, active: bool) -> StyleBoxFlat:
 	if active:
-		return StyleFactory.window_active(16)
-	return StyleFactory.window_inactive(16)
+		return StyleFactory.window_active(12)
+	return StyleFactory.window_inactive(12)
 
 func _body_style() -> StyleBoxFlat:
 	return StyleFactory.body_panel(true, 12)
