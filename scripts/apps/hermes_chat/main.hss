@@ -12,7 +12,7 @@
 }
 
 .chat-header {
-  gap: var(--space-4);
+  gap: var(--space-3);
   align-items: center;
 }
 
@@ -39,43 +39,73 @@
 }
 
 .gateway-status {
-  min-width: 132px;
-  color: var(--text-muted);
+  min-width: 118px;
+  min-height: 30px;
+  color: #d6deef;
+  background: rgba(127, 176, 255, 0.10);
+  border-color: rgba(127, 176, 255, 0.28);
+  border-width: 1px;
+  border-radius: var(--radius-xl);
   font-size: var(--font-sm);
+  padding: 6px 10px;
 }
 
+.header-actions {
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.settings-toggle {
+  min-width: 104px;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.settings-panel {
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: rgba(127, 176, 255, 0.055);
+  border-color: rgba(127, 176, 255, 0.16);
+  border-width: 1px;
+  border-radius: var(--radius-lg);
+}
+
+.settings-row {
+  gap: var(--space-3);
+  align-items: end;
+}
+
+.settings-field,
 .model-switcher,
 .profile-switcher {
-  min-width: 210px;
+  min-width: 190px;
   gap: var(--space-1);
   align-items: stretch;
 }
 
+.settings-label,
 .model-status,
 .profile-status {
   color: #b4bfd3;
   font-size: var(--font-sm);
 }
 
+.settings-value {
+  color: var(--text);
+  font-size: var(--font-md);
+  min-height: 36px;
+  padding: 9px 0px;
+}
+
 .model-selector,
-.profile-input {
-  min-width: 210px;
+.profile-selector {
+  min-width: 190px;
   min-height: 36px;
   background: #0a0f17;
   color: var(--text);
   border-color: #34405c;
   border-width: 1px;
   border-radius: var(--radius-md);
-}
-
-.profile-row {
-  gap: var(--space-2);
-  align-items: center;
-}
-
-#profile-apply {
-  min-width: 72px;
-  min-height: 36px;
 }
 
 .message-scroll {
@@ -155,7 +185,13 @@
 }
 
 .composer-row {
-  gap: var(--space-3);
+  gap: 0px;
+  align-items: stretch;
+}
+
+.composer-input-row {
+  flex: 1;
+  gap: var(--space-2);
   align-items: center;
 }
 
@@ -171,10 +207,11 @@
 }
 
 #send-button {
-  min-width: 104px;
+  min-width: 88px;
+  max-width: 96px;
   min-height: 46px;
   color: #06101f;
-  padding: var(--space-3);
+  padding: var(--space-2);
 }
 
 #send-button:hover {

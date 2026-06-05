@@ -6,19 +6,28 @@
           <Title id="chat-title">Hermes Chat</Title>
           <Text id="chat-subtitle">Gateway-native assistant for HermesOS.</Text>
         </Column>
-        <Text id="gateway-status" class="gateway-status" label="Gateway status">{gateway_display_label}</Text>
-        <Column id="profile-switcher" class="profile-switcher" label="Gateway profile selector">
-          <Text id="profile-status" class="profile-status" label="Current profile">{profile_label}</Text>
-          <FlowRow id="profile-row" class="profile-row" label="Profile controls">
-            <TextInput id="profile-input" class="profile-input" label="Gateway profile" model="profile_draft" placeholder="Profile hint" on:submit="set_profile" />
-            <Button id="profile-apply" label="Apply profile" variant="secondary" disabled="{is_switching_profile}" on:click="set_profile">Apply</Button>
-          </FlowRow>
-        </Column>
-        <Column id="model-switcher" class="model-switcher" label="Gateway model selector">
-          <Text id="model-status" class="model-status" label="Current model">{model_label}</Text>
-          <Dropdown id="model-selector" class="model-selector" label="Gateway model" model="current_model" items="{model_options}" disabled="{is_switching_model}" on:change="set_model" />
-        </Column>
+        <FlowRow id="header-actions" class="header-actions" label="Gateway status and settings">
+          <Text id="gateway-status" class="gateway-status" label="Gateway status">{gateway_display_label}</Text>
+          <Button id="settings-toggle" class="settings-toggle" label="Toggle settings" variant="secondary" on:click="toggle_settings">⚙ Settings</Button>
+        </FlowRow>
       </AppHeader>
+
+      <Column id="settings-panel" class="settings-panel" label="Gateway settings" hidden="{!settings_open}">
+        <FlowRow id="settings-row" class="settings-row" label="Gateway profile and model controls">
+          <Column id="settings-status" class="settings-field" label="Gateway status details">
+            <Text id="settings-status-label" class="settings-label">Gateway</Text>
+            <Text id="settings-gateway-status" class="settings-value" label="Gateway status">{gateway_display_label}</Text>
+          </Column>
+          <Column id="profile-switcher" class="settings-field profile-switcher" label="Gateway profile selector">
+            <Text id="profile-status" class="settings-label profile-status" label="Current profile">Profile</Text>
+            <Dropdown id="profile-selector" class="profile-selector" label="Gateway profile" model="current_profile" items="{profile_options}" disabled="{is_switching_profile}" on:change="set_profile" />
+          </Column>
+          <Column id="model-switcher" class="settings-field model-switcher" label="Gateway model selector">
+            <Text id="model-status" class="settings-label model-status" label="Current model">Model</Text>
+            <Dropdown id="model-selector" class="model-selector" label="Gateway model" model="current_model" items="{model_options}" disabled="{is_switching_model}" on:change="set_model" />
+          </Column>
+        </FlowRow>
+      </Column>
 
       <AppBody id="chat-body" class="chat-body" label="Chat content body">
         <ScrollView id="message-scroll" class="message-scroll" label="Messages">
@@ -43,8 +52,10 @@
       </AppBody>
 
       <AppFooter id="composer-row" class="composer-row" label="Message composer">
-        <TextInput id="message-input" label="Message" model="draft" placeholder="Ask Hermes…" on:input="handle_input" on:submit="send_message" />
-        <Button id="send-button" label="Send message" variant="primary" disabled="{!can_send}" on:click="send_message">Send</Button>
+        <FlowRow id="composer-input-row" class="composer-input-row" label="Message input controls">
+          <TextInput id="message-input" label="Message" model="draft" placeholder="Ask Hermes…" on:input="handle_input" on:submit="send_message" />
+          <Button id="send-button" label="Send message" variant="primary" disabled="{!can_send}" on:click="send_message">Send</Button>
+        </FlowRow>
       </AppFooter>
     </AppShell>
   </Window>

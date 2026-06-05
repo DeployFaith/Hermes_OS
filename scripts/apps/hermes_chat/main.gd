@@ -24,12 +24,14 @@ func _app_ready() -> void:
 		"can_send": false,
 		"is_sending": false,
 		"is_streaming": false,
+		"settings_open": false,
 		"current_model": display_model,
 		"model_options": _model_options(current_model),
 		"model_label": "Model: " + display_model,
 		"is_switching_model": false,
 		"current_profile": current_profile,
 		"profile_draft": current_profile,
+		"profile_options": _profile_options(current_profile),
 		"profile_label": "Profile: " + current_profile,
 		"is_switching_profile": false,
 		"streaming_text": "",
@@ -46,8 +48,14 @@ func _app_ready() -> void:
 		"gateway_display_label": _gateway_status_state().get("label", "Gateway: Offline")
 	})
 	_configure_model_selector()
-	_configure_profile_input()
+	_configure_profile_selector()
 	state.watch("draft", Callable(self, "_on_draft_changed"))
+
+func toggle_settings(event = null) -> void:
+	last_event = event
+	if state == null:
+		return
+	state.set("settings_open", not state.get_bool("settings_open", false))
 
 func _on_draft_changed(value) -> void:
 	if state == null:
@@ -119,8 +127,6 @@ func set_profile(event = null) -> void:
 		return
 	var profile_id: String = _event_profile_id(event)
 	if profile_id == "":
-		profile_id = state.get_string("profile_draft", "").strip_edges()
-	if profile_id == "":
 		profile_id = state.get_string("current_profile", "").strip_edges()
 	if profile_id == "":
 		return
@@ -145,6 +151,7 @@ func set_profile(event = null) -> void:
 		state.set_many({
 			"current_profile": next_profile,
 			"profile_draft": next_profile,
+			"profile_options": _profile_options(next_profile),
 			"profile_label": "Profile: " + next_profile,
 			"has_action_status": true,
 			"action_status": "Profile switched",
@@ -159,7 +166,7 @@ func set_profile(event = null) -> void:
 			"profile_draft": state.get_string("current_profile", "")
 		})
 		if ui != null:
-			ui.set_value("profile-input", state.get_string("current_profile", ""))
+			ui.set_value("profile-selector", state.get_string("current_profile", ""))
 	state.set("is_switching_profile", false)
 
 func send_message(event = null) -> void:
@@ -634,11 +641,13 @@ func _set_gateway_state(value: Dictionary) -> void:
 	var profile: String = _gateway_profile_from_status(gateway_status)
 	state.set("current_profile", profile)
 	state.set("profile_draft", profile)
+	state.set("profile_options", _profile_options(profile))
 	state.set("profile_label", "Profile: " + profile)
 	if ui != null:
 		_configure_model_selector()
+		_configure_profile_selector()
 		ui.set_value("model-selector", model)
-		ui.set_value("profile-input", profile)
+		ui.set_value("profile-selector", profile)
 
 func _display_model_id(model_id: String) -> String:
 	var clean: String = model_id.strip_edges()
@@ -659,10 +668,32 @@ func _gateway_profile_from_status(status: Dictionary) -> String:
 		profile = "hermesos"
 	return profile
 
-func _configure_profile_input() -> void:
+func _profile_options(current_profile: String = "") -> Array[String]:
+	var options: Array[String] = ["hermesos", "katana", "gpt", "grok", "designer", "git"]
+	var clean: String = current_profile.strip_edges()
+	if clean != "" and not options.has(clean):
+		options.insert(0, clean)
+	return options
+
+func _configure_profile_selector() -> void:
 	if state == null or ui == null:
 		return
-	ui.set_value("profile-input", state.get_string("profile_draft", state.get_string("current_profile", "")))
+	var control: Control = ui.by_id("profile-selector")
+	if not (control is OptionButton):
+		return
+	var dropdown := control as OptionButton
+	dropdown.clear()
+	var options = state.get_value("profile_options", [])
+	if not (options is Array):
+		options = []
+	for option in options:
+		var profile_id: String = str(option).strip_edges()
+		if profile_id == "":
+			continue
+		dropdown.add_item(profile_id)
+		var idx: int = dropdown.item_count - 1
+		dropdown.set_item_metadata(idx, profile_id)
+	ui.set_value("profile-selector", state.get_string("current_profile", ""))
 
 func _configure_model_selector() -> void:
 	if state == null or ui == null:
