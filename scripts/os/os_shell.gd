@@ -1518,7 +1518,7 @@ func _build_desktop_context_menu() -> void:
 	open_terminal_button.pressed.connect(func() -> void:
 		_hide_desktop_context_menu()
 		if has_method("launch_app_with_context"):
-			launch_app_with_context("console", {"initial_cwd": _fs.home_path()})
+			launch_app_with_context("console", {"initial_cwd": _desktop_folder_path()})
 		else:
 			launch_app("console")
 	)
