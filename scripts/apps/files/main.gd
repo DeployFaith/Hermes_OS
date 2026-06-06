@@ -32,6 +32,7 @@ func _app_ready() -> void:
 	ready_called = true
 	if state == null:
 		return
+	_ensure_trash_dirs()
 	var home: String = _home_path()
 	var seeded_shortcuts: Array = _default_shortcuts(home)
 	var configured_shortcuts: Array = _sanitize_shortcuts(state.get_value("shortcuts", seeded_shortcuts), home)
@@ -1161,6 +1162,16 @@ func _move_to_trash(path: String) -> Dictionary:
 		if value is Dictionary:
 			return (value as Dictionary).duplicate(true)
 	return _delete_path(path)
+
+func _ensure_trash_dirs() -> void:
+	if not _has_file_bridge() or not os.files.has_method("join_path"):
+		return
+	var home := _home_path()
+	var trash_base: String = os.files.join_path(home, ".local/share/Trash")
+	for subdir in ["files", "info"]:
+		var dir_path: String = os.files.join_path(trash_base, subdir)
+		if not bool(os.files.is_dir(dir_path)):
+			os.files.make_dir(dir_path)
 
 func empty_trash(event = null) -> void:
 	last_event = event
