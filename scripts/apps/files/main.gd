@@ -926,14 +926,13 @@ func _open_text_file(path: String) -> void:
 
 func _default_shortcuts(home: String) -> Array:
 	return [
-		{"label": "Recents", "path": home},
-		{"label": "Home", "path": home},
+		{"label": "Desktop", "path": _join_path(home, "Desktop")},
 		{"label": "Documents", "path": _join_path(home, "Documents")},
 		{"label": "Downloads", "path": _join_path(home, "Downloads")},
 		{"label": "Music", "path": _join_path(home, "Music")},
 		{"label": "Pictures", "path": _join_path(home, "Pictures")},
 		{"label": "Videos", "path": _join_path(home, "Videos")},
-		{"label": "Create", "path": _join_path(home, "Create")},
+		{"label": "Home", "path": home},
 		{"label": "Trash", "path": home},
 		{"label": "Networks", "path": home}
 	]

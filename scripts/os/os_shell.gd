@@ -1907,6 +1907,7 @@ func _refresh_desktop_icons() -> void:
 		_update_desktop_context_actions()
 		return
 	var message := _ensure_desktop_folder()
+	_ensure_standard_home_dirs()
 	if message != "":
 		_set_desktop_context_status(message, true)
 		_update_desktop_context_actions()
@@ -2369,8 +2370,18 @@ func _ensure_desktop_folder() -> String:
 		return ""
 	return _fs.make_dir(desktop_path)
 
+func _ensure_standard_home_dirs() -> void:
+	if _fs == null or not _fs.has_method("home_path"):
+		return
+	var home := _fs.home_path()
+	for dir_name in ["Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos"]:
+		var dir_path := _fs.join_path(home, dir_name)
+		if not _fs.is_dir(dir_path):
+			_fs.make_dir(dir_path)
+
 func _create_desktop_item(is_folder: bool) -> void:
 	var message := _ensure_desktop_folder()
+	_ensure_standard_home_dirs()
 	if message != "":
 		_set_desktop_context_status(message, true)
 		return
@@ -3859,14 +3870,13 @@ func _build_files_app() -> Control:
 
 func _files_default_shortcuts(home: String) -> Array[Dictionary]:
 	return [
-		{"label": "Recents", "path": home},
-		{"label": "Home", "path": home},
+		{"label": "Desktop", "path": _fs.join_path(home, "Desktop")},
 		{"label": "Documents", "path": _fs.join_path(home, "Documents")},
 		{"label": "Downloads", "path": _fs.join_path(home, "Downloads")},
 		{"label": "Music", "path": _fs.join_path(home, "Music")},
 		{"label": "Pictures", "path": _fs.join_path(home, "Pictures")},
 		{"label": "Videos", "path": _fs.join_path(home, "Videos")},
-		{"label": "Create", "path": _fs.join_path(home, "Create")},
+		{"label": "Home", "path": home},
 		{"label": "Trash", "path": home},
 		{"label": "Networks", "path": home}
 	]
