@@ -1,10 +1,14 @@
 extends "res://scripts/ui/hermes_ui/runtime/hermes_app_controller.gd"
 
 const DEBUG_FILES_TIMING := false
+const CONTEXT_MENU_WIDTH := 220.0
+const CONTEXT_MENU_MARGIN := 8.0
 
 var ready_called: bool = false
 var last_event = null
 
+var _context_menu: Panel = null
+var _context_menu_column: VBoxContainer = null
 var _shell: Node = null
 var _open_file_callback: Callable = Callable()
 var _shortcuts_changed_callback: Callable = Callable()
@@ -61,6 +65,16 @@ func _app_ready() -> void:
 	})
 	_refresh(false, false)
 	_update_derived_state()
+	_build_context_menu()
+	_connect_context_menu_input()
+
+func app_unmounted() -> void:
+	_hide_context_menu()
+	if _context_menu != null and is_instance_valid(_context_menu):
+		_context_menu.queue_free()
+	_context_menu = null
+	_context_menu_column = null
+	super.app_unmounted()
 
 func refresh_files() -> void:
 	_refresh(true, false)
@@ -196,6 +210,7 @@ func open_in_terminal(event = null) -> void:
 		return
 	_shell.call("launch_app", "console")
 	_set_status("Opened Terminal", false)
+	_hide_context_menu()
 
 func navigate_back(event = null) -> void:
 	last_event = event
@@ -528,6 +543,178 @@ func _move_shortcut(direction: int) -> void:
 	_queue_state_save()
 	_update_derived_state()
 
+func _build_context_menu() -> void:
+	if root_control == null or not is_instance_valid(root_control):
+		return
+	if _context_menu != null and is_instance_valid(_context_menu):
+		return
+	_context_menu = Panel.new()
+	_context_menu.name = "FilesContextMenu"
+	_context_menu.visible = false
+	_context_menu.size = Vector2(CONTEXT_MENU_WIDTH, 220)
+	_context_menu.clip_contents = true
+	_context_menu.mouse_filter = Control.MOUSE_FILTER_STOP
+	_context_menu.z_index = 4096
+	_context_menu.add_theme_stylebox_override("panel", StyleFactory.context_menu(12))
+	root_control.add_child(_context_menu)
+
+	_context_menu_column = VBoxContainer.new()
+	_context_menu_column.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_context_menu_column.offset_left = 10
+	_context_menu_column.offset_right = -10
+	_context_menu_column.offset_top = 10
+	_context_menu_column.offset_bottom = -10
+	_context_menu_column.add_theme_constant_override("separation", 5)
+	_context_menu.add_child(_context_menu_column)
+
+func _connect_context_menu_input() -> void:
+	var callback := Callable(self, "_on_files_gui_input")
+	var root_callback := Callable(self, "_on_files_root_gui_input")
+	var controls: Array[Control] = []
+	if root_control != null and is_instance_valid(root_control):
+		controls.append(root_control)
+	var content_control: Control = ui.by_id("files-content") if ui != null else null
+	if content_control != null and is_instance_valid(content_control):
+		controls.append(content_control)
+	var list_control: Control = ui.by_id("files-list") if ui != null else null
+	if list_control != null and is_instance_valid(list_control):
+		controls.append(list_control)
+		_collect_controls(list_control, controls)
+	for control in controls:
+		if control == null or not is_instance_valid(control):
+			continue
+		var callable: Callable = root_callback if control == root_control else callback
+		if not control.gui_input.is_connected(callable):
+			control.gui_input.connect(callable)
+
+func _collect_controls(node: Node, output: Array[Control]) -> void:
+	for child in node.get_children():
+		if child is Control:
+			output.append(child as Control)
+		_collect_controls(child, output)
+
+func _on_files_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mouse_event := event as InputEventMouseButton
+		if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_RIGHT:
+			_show_context_menu(_global_mouse_position())
+			if root_control != null and is_instance_valid(root_control):
+				root_control.get_viewport().set_input_as_handled()
+			return
+		if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_LEFT:
+			_hide_context_menu_if_outside(_global_mouse_position())
+
+func _on_files_root_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mouse_event := event as InputEventMouseButton
+		if mouse_event.pressed:
+			_hide_context_menu_if_outside(_global_mouse_position())
+
+func _global_mouse_position() -> Vector2:
+	if root_control != null and is_instance_valid(root_control):
+		return root_control.get_global_mouse_position()
+	return Vector2.ZERO
+
+func _show_context_menu(global_pos: Vector2) -> void:
+	if _context_menu == null or not is_instance_valid(_context_menu):
+		_build_context_menu()
+	if _context_menu == null or _context_menu_column == null:
+		return
+	_rebuild_context_menu_items()
+	var local_pos: Vector2 = global_pos
+	if root_control != null and is_instance_valid(root_control):
+		local_pos = root_control.get_global_transform().affine_inverse() * global_pos
+		_context_menu.position = Vector2(
+			clampf(local_pos.x, CONTEXT_MENU_MARGIN, maxf(root_control.size.x - _context_menu.size.x - CONTEXT_MENU_MARGIN, CONTEXT_MENU_MARGIN)),
+			clampf(local_pos.y, CONTEXT_MENU_MARGIN, maxf(root_control.size.y - _context_menu.size.y - CONTEXT_MENU_MARGIN, CONTEXT_MENU_MARGIN))
+		)
+	else:
+		_context_menu.global_position = global_pos
+	_context_menu.visible = true
+	_context_menu.move_to_front()
+
+func _hide_context_menu() -> void:
+	if _context_menu != null and is_instance_valid(_context_menu):
+		_context_menu.visible = false
+
+func _hide_context_menu_if_outside(global_pos: Vector2) -> void:
+	if _context_menu == null or not is_instance_valid(_context_menu) or not _context_menu.visible:
+		return
+	var menu_rect := Rect2(_context_menu.global_position, _context_menu.size)
+	if not menu_rect.has_point(global_pos):
+		_hide_context_menu()
+
+func _rebuild_context_menu_items() -> void:
+	if _context_menu_column == null or not is_instance_valid(_context_menu_column):
+		return
+	for child in _context_menu_column.get_children():
+		child.queue_free()
+	var selected_path: String = state.get_string("selected_path", "") if state != null else ""
+	var selected_type: String = state.get_string("selected_type", "") if state != null else ""
+	var has_selection: bool = selected_path != ""
+	var has_clipboard: bool = state != null and state.get_string("clipboard_path", "") != "" and state.get_string("clipboard_mode", "") != ""
+	if not has_selection:
+		_add_context_menu_action("New file", Callable(self, "create_file"))
+		_add_context_menu_action("New folder", Callable(self, "create_folder"))
+		_add_context_menu_action("Paste", Callable(self, "paste_clipboard"), not has_clipboard)
+		_add_context_menu_action("Open in Terminal", Callable(self, "open_in_terminal"))
+		_add_context_menu_action("Refresh", Callable(self, "refresh_current"))
+	else:
+		_add_context_menu_action("Open", Callable(self, "open_selected"))
+		_add_context_menu_action("Rename", Callable(self, "rename_selected"))
+		_add_context_menu_action("Copy", Callable(self, "copy_selected"))
+		_add_context_menu_action("Cut", Callable(self, "cut_selected"))
+		_add_context_menu_action("Delete", Callable(self, "delete_selected"))
+		var terminal_action := Callable(self, "_open_selected_terminal_context") if selected_type == "dir" else Callable(self, "open_in_terminal")
+		_add_context_menu_action("Open in Terminal", terminal_action)
+	var item_count: int = _context_menu_column.get_child_count()
+	_context_menu.size = Vector2(CONTEXT_MENU_WIDTH, maxf(44.0, float(item_count * 37 + 20)))
+
+func _add_context_menu_action(text: String, action: Callable, disabled: bool = false) -> void:
+	var button := _context_menu_button(text)
+	button.disabled = disabled
+	button.pressed.connect(func() -> void:
+		_hide_context_menu()
+		if action.is_valid():
+			action.call()
+	)
+	_context_menu_column.add_child(button)
+
+func _context_menu_button(text_value: String) -> Button:
+	var button := Button.new()
+	button.text = text_value
+	button.flat = true
+	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	button.custom_minimum_size = Vector2(0, 32)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.add_theme_font_size_override("font_size", 13)
+	var normal := StyleFactory.button_normal(6)
+	normal.content_margin_left = 10
+	normal.content_margin_right = 10
+	normal.content_margin_top = 4
+	normal.content_margin_bottom = 4
+	var hover := StyleFactory.button_hover(6)
+	hover.content_margin_left = 10
+	hover.content_margin_right = 10
+	hover.content_margin_top = 4
+	hover.content_margin_bottom = 4
+	var pressed := StyleFactory.button_pressed(6)
+	pressed.content_margin_left = 10
+	pressed.content_margin_right = 10
+	pressed.content_margin_top = 4
+	pressed.content_margin_bottom = 4
+	button.add_theme_stylebox_override("normal", normal)
+	button.add_theme_stylebox_override("hover", hover)
+	button.add_theme_stylebox_override("pressed", pressed)
+	button.add_theme_stylebox_override("focus", StyleFactory.button_focus(6))
+	button.add_theme_stylebox_override("disabled", StyleFactory.button_disabled(6))
+	return button
+
+func _open_selected_terminal_context(event = null) -> void:
+	last_event = event
+	# Console launch currently has no cwd argument, so this falls back to the normal Terminal launch.
+	open_in_terminal(event)
+
 func _navigate_history(direction: int) -> void:
 	if state == null:
 		return
@@ -596,6 +783,7 @@ func _refresh(clear_status: bool, push_history: bool) -> void:
 	if push_history:
 		_push_history(target_path)
 	_update_derived_state()
+	call_deferred("_connect_context_menu_input")
 	_trace_timing("refresh " + target_path, timing_start)
 
 func _apply_selection(entry: Dictionary) -> void:
