@@ -2378,6 +2378,12 @@ func _ensure_standard_home_dirs() -> void:
 		var dir_path := _fs.join_path(home, dir_name)
 		if not _fs.is_dir(dir_path):
 			_fs.make_dir(dir_path)
+	# Ensure Trash directories exist
+	var trash_base := _fs.join_path(home, ".local/share/Trash")
+	for subdir in ["files", "info"]:
+		var trash_dir := _fs.join_path(trash_base, subdir)
+		if not _fs.is_dir(trash_dir):
+			_fs.make_dir(trash_dir)
 
 func _create_desktop_item(is_folder: bool) -> void:
 	var message := _ensure_desktop_folder()
@@ -3877,7 +3883,7 @@ func _files_default_shortcuts(home: String) -> Array[Dictionary]:
 		{"label": "Pictures", "path": _fs.join_path(home, "Pictures")},
 		{"label": "Videos", "path": _fs.join_path(home, "Videos")},
 		{"label": "Home", "path": home},
-		{"label": "Trash", "path": home},
+		{"label": "Trash", "path": _fs.join_path(home, ".local/share/Trash/files")},
 		{"label": "Networks", "path": home}
 	]
 

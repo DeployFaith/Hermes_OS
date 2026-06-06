@@ -629,6 +629,49 @@ func delete_path(path: String) -> String:
 	save()
 	return ""
 
+func trash_path(path: String) -> Dictionary:
+	var normalized := normalize_path(path)
+	if normalized == "/":
+		return {"ok": false, "error": {"message": "Cannot trash root"}}
+	if _is_protected_system_path(normalized):
+		return {"ok": false, "error": {"message": "Cannot trash protected system path"}}
+	var trash_files := join_path(join_path(join_path(join_path(home_path(), ".local"), "share"), "Trash"), "files")
+	var trash_info_dir := join_path(join_path(join_path(join_path(home_path(), ".local"), "share"), "Trash"), "info")
+	make_dir(trash_files)
+	make_dir(trash_info_dir)
+	var base_name := normalized.get_file() if normalized.get_file() != "" else normalized.get_base_dir().get_file()
+	var trashed_name := base_name + "." + str(Time.get_ticks_usec())
+	var dest_path := join_path(trash_files, trashed_name)
+	var err := move_path(normalized, dest_path)
+	if err != "":
+		return {"ok": false, "error": {"message": err}}
+	var info_path := join_path(trash_info_dir, trashed_name + ".trashinfo")
+	write_file(info_path, "[Trash Info]\nPath=" + normalized + "\n")
+	return {"ok": true, "trashed_from": normalized, "trashed_to": dest_path}
+
+func empty_trash() -> Dictionary:
+	var trash_files := join_path(join_path(join_path(join_path(home_path(), ".local"), "share"), "Trash"), "files")
+	var trash_info_dir := join_path(join_path(join_path(join_path(home_path(), ".local"), "share"), "Trash"), "info")
+	var deleted_count := 0
+	if is_dir(trash_files):
+		for entry in list_dir(trash_files):
+			var p := str(entry.get("path", ""))
+			if p != "":
+				delete_path(p)
+				deleted_count += 1
+	if is_dir(trash_info_dir):
+		for entry in list_dir(trash_info_dir):
+			var p := str(entry.get("path", ""))
+			if p != "":
+				delete_path(p)
+	return {"ok": true, "deleted_count": deleted_count}
+
+func trash_item_count() -> int:
+	var trash_files := join_path(join_path(join_path(join_path(home_path(), ".local"), "share"), "Trash"), "files")
+	if not is_dir(trash_files):
+		return 0
+	return list_dir(trash_files).size()
+
 func rename_path(path: String, new_name: String) -> String:
 	var normalized := normalize_path(path)
 	if normalized == "/":

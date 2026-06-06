@@ -61,6 +61,7 @@ func _app_ready() -> void:
 		"shortcut_editor_index": -1,
 		"shortcut_edit_label": "",
 		"shortcut_edit_path": home,
+		"show_trash_confirm": false,
 		"status": ""
 	})
 	_refresh(false, false)
@@ -319,14 +320,14 @@ func delete_selected(event = null) -> void:
 	if selected_path == "":
 		_set_status("Select an item first", true)
 		return
-	var result: Dictionary = _delete_path(selected_path)
+	var result: Dictionary = _move_to_trash(selected_path)
 	if bool(result.get("ok", false)):
 		state.set("selected_path", "")
 		state.set("selected_type", "")
-		_set_status("Deleted", false)
+		_set_status("Moved to Trash", false)
 		_refresh(false, false)
 	else:
-		_set_status(_error_message(result, "Could not delete item"), true)
+		_set_status(_error_message(result, "Could not move item to Trash"), true)
 	_update_derived_state()
 
 func copy_selected(event = null) -> void:
@@ -601,6 +602,11 @@ func _collect_controls(node: Node, output: Array[Control]) -> void:
 		_collect_controls(child, output)
 
 func _on_files_gui_input(event: InputEvent) -> void:
+	if event is InputEventKey:
+		var key_event := event as InputEventKey
+		if key_event.pressed and key_event.keycode == KEY_DELETE:
+			delete_selected()
+			return
 	if event is InputEventMouseButton:
 		var mouse_event := event as InputEventMouseButton
 		if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_RIGHT:
@@ -666,6 +672,7 @@ func _rebuild_context_menu_items() -> void:
 		_add_context_menu_action("Paste", Callable(self, "paste_clipboard"), not has_clipboard)
 		_add_context_menu_action("Open in Terminal", Callable(self, "open_in_terminal"))
 		_add_context_menu_action("Refresh", Callable(self, "refresh_current"))
+		_add_context_menu_action("Empty Trash", Callable(self, "empty_trash"))
 	else:
 		_add_context_menu_action("Open", Callable(self, "open_selected"))
 		_add_context_menu_action("Rename", Callable(self, "rename_selected"))
@@ -933,7 +940,7 @@ func _default_shortcuts(home: String) -> Array:
 		{"label": "Pictures", "path": _join_path(home, "Pictures")},
 		{"label": "Videos", "path": _join_path(home, "Videos")},
 		{"label": "Home", "path": home},
-		{"label": "Trash", "path": home},
+		{"label": "Trash", "path": _join_path(home, ".local/share/Trash/files")},
 		{"label": "Networks", "path": home}
 	]
 
@@ -1095,6 +1102,45 @@ func _delete_path(path: String) -> Dictionary:
 		if value is Dictionary:
 			return (value as Dictionary).duplicate(true)
 	return {"ok": false, "error": {"message": "Filesystem delete unavailable"}}
+
+func _move_to_trash(path: String) -> Dictionary:
+	if _has_file_bridge() and os.files.has_method("trash_path"):
+		var value: Variant = os.files.trash_path(path)
+		if value is Dictionary:
+			return (value as Dictionary).duplicate(true)
+	return _delete_path(path)
+
+func empty_trash(event = null) -> void:
+	last_event = event
+	if _has_file_bridge() and os.files.has_method("trash_item_count"):
+		var count: int = int(os.files.trash_item_count())
+		if count == 0:
+			_set_status("Trash is already empty", false)
+			return
+	if state != null:
+		state.set("show_trash_confirm", true)
+	_set_status("Confirm: Empty Trash? This cannot be undone.", false)
+
+func confirm_empty_trash(event = null) -> void:
+	last_event = event
+	if state != null:
+		state.set("show_trash_confirm", false)
+	if _has_file_bridge() and os.files.has_method("empty_trash"):
+		var result: Variant = os.files.empty_trash()
+		if result is Dictionary and bool((result as Dictionary).get("ok", false)):
+			var count: int = int((result as Dictionary).get("deleted_count", 0))
+			_set_status("Trash emptied: " + str(count) + " items permanently deleted", false)
+			_refresh(false, false)
+		else:
+			_set_status("Failed to empty trash", true)
+	else:
+		_set_status("Trash system unavailable", true)
+
+func cancel_empty_trash(event = null) -> void:
+	last_event = event
+	if state != null:
+		state.set("show_trash_confirm", false)
+	_set_status("", false)
 
 func _error_message(result: Dictionary, fallback: String) -> String:
 	var error_value: Variant = result.get("error", null)

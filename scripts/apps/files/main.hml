@@ -76,6 +76,12 @@
           <Button id="files-paste" label="Paste clipboard" variant="secondary" disabled="{!can_paste}" on:click="paste_clipboard">Paste</Button>
         </FlowRow>
 
+        <FlowRow id="files-trash-confirm" class="files-actions" label="Trash confirmation" hidden="{!show_trash_confirm}">
+          <Text id="trash-confirm-text" class="trash-confirm-text">Are you sure? This cannot be undone.</Text>
+          <Button id="trash-confirm-yes" label="Empty Trash" variant="danger" on:click="confirm_empty_trash">Empty Trash</Button>
+          <Button id="trash-confirm-no" label="Cancel" variant="secondary" on:click="cancel_empty_trash">Cancel</Button>
+        </FlowRow>
+
         <Row id="files-details-row" class="files-details-row" label="Selection details">
           <Text id="files-selected-label" class="files-selected-label" label="Selected path">{selected_label}</Text>
           <Text id="files-clipboard-label" class="files-clipboard-label" label="Clipboard status">{clipboard_label}</Text>
