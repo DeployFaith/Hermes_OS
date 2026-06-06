@@ -158,6 +158,7 @@ var _notes_open_notes: Array[String] = []
 var _terminal_sessions: Dictionary = {}
 var _terminal_instances: Dictionary = {}
 var _terminal_session_sequence := 0
+var _next_console_initial_cwd: String = ""
 var _console_outputs: Array[TextEdit] = []
 var _console_history: Array[String] = ["Type 'help' for commands. Current user: user"]
 var _state_save_timer: Timer
@@ -618,6 +619,11 @@ func launch_app(app_id: String) -> OSWindow:
 	_update_taskbar_indicators()
 	_emit_hermes_event("app.opened", {"app_id": app_id})
 	return window
+
+func launch_app_with_context(app_id: String, context: Dictionary) -> OSWindow:
+	if context.has("initial_cwd"):
+		_next_console_initial_cwd = str(context.get("initial_cwd", ""))
+	return launch_app(app_id)
 
 func close_app(app_id: String) -> void:
 	var window := _current_window_for_app(app_id)
@@ -1511,7 +1517,10 @@ func _build_desktop_context_menu() -> void:
 	var open_terminal_button := _context_menu_button("Open in Terminal")
 	open_terminal_button.pressed.connect(func() -> void:
 		_hide_desktop_context_menu()
-		launch_app("console")
+		if has_method("launch_app_with_context"):
+			launch_app_with_context("console", {"initial_cwd": _fs.home_path()})
+		else:
+			launch_app("console")
 	)
 	column.add_child(open_terminal_button)
 
@@ -3991,7 +4000,11 @@ func _build_console_app() -> Control:
 	var session_id := "terminal_%d" % _terminal_session_sequence
 	var terminal := TerminalApp.new()
 	terminal.name = "TerminalApp"
-	var state := {"cwd": _fs.home_path(), "history": [], "session_id": session_id}
+	var initial_cwd: String = _next_console_initial_cwd
+	_next_console_initial_cwd = ""
+	if initial_cwd == "" or not _fs.is_dir(initial_cwd):
+		initial_cwd = _fs.home_path()
+	var state := {"cwd": initial_cwd, "history": [], "session_id": session_id}
 	_terminal_sessions[session_id] = state
 	terminal.os_app_init({"shell": self, "filesystem": _fs, "state": state, "session_id": session_id})
 	return terminal

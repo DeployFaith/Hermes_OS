@@ -205,11 +205,18 @@ func refresh_current(event = null) -> void:
 
 func open_in_terminal(event = null) -> void:
 	last_event = event
-	if _shell == null or not _shell.has_method("launch_app"):
-		_set_status("Terminal unavailable", true)
+	if _shell == null or not _shell.has_method("launch_app_with_context"):
+		if _shell != null and _shell.has_method("launch_app"):
+			_shell.call("launch_app", "console")
+			_set_status("Opened Terminal", false)
+		else:
+			_set_status("Terminal unavailable", true)
 		return
-	_shell.call("launch_app", "console")
-	_set_status("Opened Terminal", false)
+	var cwd: String = state.get_string("current_path", "") if state != null else ""
+	if cwd == "":
+		cwd = _home_path()
+	_shell.call("launch_app_with_context", "console", {"initial_cwd": cwd})
+	_set_status("Opened Terminal in " + cwd, false)
 	_hide_context_menu()
 
 func navigate_back(event = null) -> void:
@@ -712,8 +719,19 @@ func _context_menu_button(text_value: String) -> Button:
 
 func _open_selected_terminal_context(event = null) -> void:
 	last_event = event
-	# Console launch currently has no cwd argument, so this falls back to the normal Terminal launch.
-	open_in_terminal(event)
+	var selected_path: String = state.get_string("selected_path", "") if state != null else ""
+	if selected_path == "":
+		open_in_terminal(event)
+		return
+	if _shell == null:
+		_set_status("Terminal unavailable", true)
+		return
+	if _shell.has_method("launch_app_with_context"):
+		_shell.call("launch_app_with_context", "console", {"initial_cwd": selected_path})
+		_set_status("Opened Terminal in " + selected_path, false)
+		_hide_context_menu()
+	else:
+		open_in_terminal(event)
 
 func _navigate_history(direction: int) -> void:
 	if state == null:
