@@ -706,6 +706,7 @@ func _rebuild_context_menu_items() -> void:
 		child.queue_free()
 	var selected_path: String = state.get_string("selected_path", "") if state != null else ""
 	var selected_type: String = state.get_string("selected_type", "") if state != null else ""
+	var current_path: String = state.get_string("current_path", _home_path()) if state != null else _home_path()
 	var has_selection: bool = selected_path != ""
 	var has_clipboard: bool = state != null and state.get_string("clipboard_path", "") != "" and state.get_string("clipboard_mode", "") != ""
 	if not has_selection:
@@ -715,7 +716,8 @@ func _rebuild_context_menu_items() -> void:
 		_add_context_menu_action("Paste", Callable(self, "paste_clipboard"), not has_clipboard)
 		_add_context_menu_action("Open in Terminal", Callable(self, "open_in_terminal"))
 		_add_context_menu_action("Refresh", Callable(self, "refresh_current"))
-		_add_context_menu_action("Empty Trash", Callable(self, "empty_trash"))
+		if _is_trash_files_path(current_path):
+			_add_context_menu_action("Empty Trash", Callable(self, "empty_trash"))
 	else:
 		_add_context_menu_action("Open", Callable(self, "open_selected"))
 		_add_context_menu_rename_input()
@@ -727,6 +729,11 @@ func _rebuild_context_menu_items() -> void:
 		_add_context_menu_action("Open in Terminal", terminal_action)
 	var item_count: int = _context_menu_column.get_child_count()
 	_context_menu.size = Vector2(CONTEXT_MENU_WIDTH, maxf(44.0, float(item_count * 37 + 20)))
+
+func _is_trash_files_path(path: String) -> bool:
+	var current_path: String = _normalize_path(path)
+	var trash_path: String = _normalize_path(_join_path(_home_path(), ".local/share/Trash/files"))
+	return current_path == trash_path or current_path.contains("/Trash/files")
 
 func _add_context_menu_action(text: String, action: Callable, disabled: bool = false) -> void:
 	var button := _context_menu_button(text)
@@ -898,6 +905,8 @@ func _refresh(clear_status: bool, push_history: bool) -> void:
 	}
 	if clear_status:
 		next_state["status"] = "This folder is empty." if entries.is_empty() else ""
+	elif not entries.is_empty() and state.get_string("status", "") == "This folder is empty.":
+		next_state["status"] = ""
 	state.set_many(next_state)
 	if push_history:
 		_push_history(target_path)
