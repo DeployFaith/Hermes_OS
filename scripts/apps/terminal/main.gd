@@ -56,14 +56,14 @@ func _app_ready() -> void:
 		state.set_many({
 			"prompt": "",
 			"draft": "",
-			"status": "Type 'help' for commands. Current user: " + _current_user(),
+			"status": "Type 'help' for commands.",
 			"session_id": _session_id,
 			"session_label": "session: " + _session_id,
 			"transcript_preview": "",
 			"transcript": ""
 		})
 	_buffer = TerminalBuffer.new()
-	_buffer.terminal_buffer_init({"max_lines": 800, "intro": "Type 'help' for commands. Current user: " + _current_user()})
+	_buffer.terminal_buffer_init({"max_lines": 800, "intro": "Type 'help' for commands."})
 	_backend = TerminalShellBackend.new()
 	_backend.terminal_shell_init({
 		"shell": _shell,

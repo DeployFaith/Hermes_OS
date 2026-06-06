@@ -4,7 +4,6 @@
       <Row id="terminal-header" class="terminal-header" label="Terminal header">
         <Column id="terminal-heading" class="terminal-heading">
           <Title id="terminal-title">Terminal</Title>
-          <Text id="terminal-session" label="Terminal session">{session_label}</Text>
         </Column>
         <Text id="terminal-status" class="terminal-status" label="Terminal status">{status}</Text>
       </Row>

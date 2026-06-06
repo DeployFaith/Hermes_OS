@@ -172,7 +172,7 @@ func get_prompt() -> String:
 		display_cwd = "~"
 	elif cwd.begins_with(home + "/"):
 		display_cwd = "~" + cwd.substr(home.length())
-	return current_user() + "@os:" + display_cwd + symbol
+	return current_user() + "@hermes_os:" + display_cwd + symbol
 
 func get_cwd() -> String:
 	return str(_state.get("cwd", home_path()))
