@@ -34,6 +34,12 @@ func _app_ready() -> void:
 		"gateway_display_label": _gateway_status_state().get("label", "Gateway: Offline")
 	})
 	state.watch("draft", Callable(self, "_on_draft_changed"))
+	# Fix: HermesUI TextInput does not set keep_editing_on_text_submit.
+	# Without this, the LineEdit has focus but won't accept typed input after
+	# text_submitted — same bug we fixed in Terminal.
+	var input_control = ui.by_id("message-input") if ui != null else null
+	if input_control != null and input_control is LineEdit:
+		input_control.keep_editing_on_text_submit = true
 
 func _append_message(role: String, text: String) -> void:
 	if state == null:
