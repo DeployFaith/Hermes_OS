@@ -133,6 +133,10 @@ func _on_draft_changed(value) -> void:
 	var clean: String = str(value).strip_edges()
 	state.set("can_send", clean != "" and not state.get_bool("is_sending", false) and not state.get_bool("is_streaming", false))
 
+func _refocus_input() -> void:
+	if ui != null:
+		ui.focus("message-input")
+
 func handle_input(event) -> void:
 	last_event = event
 	input_events.append(str(event.value))
@@ -230,6 +234,7 @@ func send_message(event = null) -> void:
 		})
 		_append_message("assistant", _gateway_result_text(result))
 		_set_gateway_state(_gateway_status_state())
+		_refocus_input()
 		return
 	state.set_many({
 		"is_sending": false,
@@ -244,6 +249,7 @@ func send_message(event = null) -> void:
 	})
 	_append_message("assistant", _gateway_error_text(result))
 	_set_gateway_state({"label": "Gateway: Offline", "variant": "danger"})
+	_refocus_input()
 
 func _send_to_gateway_stream(prompt: String) -> Dictionary:
 	var agent_service = _resolve_agent_service()
@@ -359,6 +365,7 @@ func _on_agent_event(event_name: StringName, payload: Dictionary) -> void:
 			if not _set_last_assistant_message(response_text):
 				_append_message("assistant", response_text)
 			_set_gateway_state(_gateway_status_state())
+			_refocus_input()
 		OSEventBus.AGENT_ERROR:
 			if _stream_handled:
 				_stream_handled = false
@@ -380,6 +387,7 @@ func _on_agent_event(event_name: StringName, payload: Dictionary) -> void:
 			if not _set_last_assistant_message(error_text):
 				_append_message("assistant", error_text)
 			_set_gateway_state({"label": "Gateway: Offline", "variant": "danger"})
+			_refocus_input()
 		OSEventBus.AGENT_STATUS_CHANGED:
 			if not state.get_bool("is_sending", false) and not state.get_bool("is_streaming", false):
 				_set_gateway_state(_gateway_status_state())
@@ -446,6 +454,7 @@ func _on_stream_completed(payload: Dictionary) -> void:
 	_stream_handled = true
 	_append_message("assistant", assistant_text)
 	_set_gateway_state(_gateway_status_state())
+	_refocus_input()
 
 func _on_stream_error(payload: Dictionary) -> void:
 	if state == null:
@@ -467,6 +476,7 @@ func _on_stream_error(payload: Dictionary) -> void:
 	_stream_handled = true
 	_append_message("assistant", error_text)
 	_set_gateway_state({"label": "Gateway: Offline", "variant": "danger"})
+	_refocus_input()
 
 func _action_intent_text(prompt: String) -> String:
 	var lower := prompt.to_lower()
