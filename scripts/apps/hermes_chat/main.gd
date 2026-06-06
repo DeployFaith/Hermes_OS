@@ -55,10 +55,8 @@ func _on_message_input_gui_input(event: InputEvent) -> void:
 	match key_event.keycode:
 		KEY_UP:
 			_history_previous()
-			key_event.accept()
 		KEY_DOWN:
 			_history_next()
-			key_event.accept()
 
 func _history_previous() -> void:
 	if _chat_history.is_empty():
