@@ -1,13 +1,6 @@
 <App id="terminal-app" label="Terminal">
   <Window id="terminal-window" class="terminal-window" label="Terminal window">
     <Column id="terminal-root" class="terminal-root" label="Terminal content">
-      <Row id="terminal-header" class="terminal-header" label="Terminal header">
-        <Column id="terminal-heading" class="terminal-heading">
-          <Title id="terminal-title">Terminal</Title>
-        </Column>
-        <Text id="terminal-status" class="terminal-status" label="Terminal status">{status}</Text>
-      </Row>
-
       <TerminalSurface
         id="terminal-surface"
         class="terminal-surface"
