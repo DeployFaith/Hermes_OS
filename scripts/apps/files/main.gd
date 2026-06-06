@@ -1119,7 +1119,11 @@ func _make_dir(path: String) -> Dictionary:
 		var value: Variant = os.files.make_dir(path)
 		if value is Dictionary:
 			return (value as Dictionary).duplicate(true)
-	return {"ok": false, "error": {"message": "Filesystem mkdir unavailable"}}
+		var message: String = str(value)
+		if message == "":
+			return {"ok": true, "path": _normalize_path(path)}
+		return {"ok": false, "error": {"message": message}, "path": _normalize_path(path)}
+	return {"ok": false, "error": {"message": "Filesystem mkdir unavailable"}, "path": _normalize_path(path)}
 
 func _write_file(path: String, content: String) -> Dictionary:
 	if _has_file_bridge() and os.files.has_method("write"):
@@ -1164,14 +1168,30 @@ func _move_to_trash(path: String) -> Dictionary:
 	return _delete_path(path)
 
 func _ensure_trash_dirs() -> void:
-	if not _has_file_bridge() or not os.files.has_method("join_path"):
+	if not _has_file_bridge() or not os.files.has_method("make_dir") or not os.files.has_method("is_dir"):
+		print("Files controller: trash dir ensure skipped; file bridge is missing required methods")
 		return
-	var home := _home_path()
-	var trash_base: String = os.files.join_path(home, ".local/share/Trash")
-	for subdir in ["files", "info"]:
-		var dir_path: String = os.files.join_path(trash_base, subdir)
-		if not bool(os.files.is_dir(dir_path)):
-			os.files.make_dir(dir_path)
+	var home: String = _home_path()
+	var local_dir: String = _join_path(home, ".local")
+	var share_dir: String = _join_path(local_dir, "share")
+	var trash_base: String = _join_path(share_dir, "Trash")
+	var trash_files: String = _join_path(trash_base, "files")
+	var trash_info: String = _join_path(trash_base, "info")
+	var dir_paths: Array = [local_dir, share_dir, trash_base, trash_files, trash_info]
+	print("Files controller: ensuring trash directory tree: " + ", ".join(dir_paths))
+	for dir_path_value in dir_paths:
+		var dir_path: String = str(dir_path_value)
+		if bool(os.files.is_dir(dir_path)):
+			print("Files controller: trash dir already exists: " + dir_path)
+			continue
+		print("Files controller: creating trash dir: " + dir_path)
+		var result: Dictionary = _make_dir(dir_path)
+		if bool(result.get("ok", false)):
+			print("Files controller: created trash dir: " + dir_path)
+			continue
+		var message: String = _error_message(result, "Could not create trash folder")
+		push_warning("Files controller: " + message + " (" + dir_path + ")")
+		return
 
 func empty_trash(event = null) -> void:
 	last_event = event
