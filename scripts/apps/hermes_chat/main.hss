@@ -11,46 +11,17 @@
   align-items: stretch;
 }
 
-.chat-header {
-  gap: var(--space-3);
-  align-items: center;
-}
-
 .chat-body {
   flex: 1;
   padding: var(--space-3);
   gap: var(--space-3);
 }
 
-.chat-heading {
-  flex: 1;
-  gap: var(--space-1);
-  align-items: stretch;
-}
-
-#chat-title {
-  font-size: 22px;
-  color: var(--text);
-}
-
-#chat-subtitle {
-  color: #b4bfd3;
-  font-size: var(--font-sm);
-}
-
-.header-actions {
-  gap: var(--space-2);
-  align-items: center;
-}
-
 .clear-history {
-  min-width: 104px;
-  min-height: 32px;
+  min-width: 64px;
+  max-width: 72px;
+  min-height: 46px;
   padding: 6px 10px;
-}
-
-.clear-history {
-  min-width: 76px;
 }
 
 .message-scroll {
@@ -68,26 +39,6 @@
   gap: var(--space-3);
   align-items: stretch;
   justify-content: end;
-}
-
-.empty-state {
-  gap: var(--space-2);
-  align-items: stretch;
-  padding: var(--space-5);
-  background: rgba(127, 176, 255, 0.055);
-  border-color: rgba(127, 176, 255, 0.18);
-  border-width: 1px;
-  border-radius: var(--radius-lg);
-}
-
-#empty-title {
-  font-size: var(--font-lg);
-  color: var(--text);
-}
-
-#empty-body {
-  color: #aab5ca;
-  font-size: var(--font-md);
 }
 
 .message-history {
@@ -109,6 +60,7 @@
   flex: 1;
   gap: var(--space-2);
   align-items: center;
+  justify-content: end;
 }
 
 #message-input {
