@@ -12,6 +12,8 @@ var _context_menu_column: VBoxContainer = null
 var _context_menu_mode: String = "files"
 var _context_shortcut_path: String = ""
 var _context_shortcut_label: String = ""
+var _trash_confirm_overlay: Control = null
+var _trash_confirm_dialog: Panel = null
 var _shell: Node = null
 var _os_event_bus = null
 var _open_file_callback: Callable = Callable()
@@ -74,15 +76,21 @@ func _app_ready() -> void:
 	_refresh(false, false)
 	_update_derived_state()
 	_build_context_menu()
+	_build_trash_confirm_dialog()
 	_connect_context_menu_input()
 
 func app_unmounted() -> void:
 	_unsubscribe_file_system_events()
 	_hide_context_menu()
+	_hide_trash_confirm_dialog()
 	if _context_menu != null and is_instance_valid(_context_menu):
 		_context_menu.queue_free()
+	if _trash_confirm_overlay != null and is_instance_valid(_trash_confirm_overlay):
+		_trash_confirm_overlay.queue_free()
 	_context_menu = null
 	_context_menu_column = null
+	_trash_confirm_overlay = null
+	_trash_confirm_dialog = null
 	super.app_unmounted()
 
 func _subscribe_file_system_events() -> void:
@@ -620,6 +628,115 @@ func _build_context_menu() -> void:
 	_context_menu_column.add_theme_constant_override("separation", 5)
 	_context_menu.add_child(_context_menu_column)
 
+func _build_trash_confirm_dialog() -> void:
+	if root_control == null or not is_instance_valid(root_control):
+		return
+	if _trash_confirm_overlay != null and is_instance_valid(_trash_confirm_overlay):
+		return
+	_trash_confirm_overlay = Control.new()
+	_trash_confirm_overlay.name = "FilesTrashConfirmOverlay"
+	_trash_confirm_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_trash_confirm_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_trash_confirm_overlay.z_index = 8192
+	_trash_confirm_overlay.visible = false
+	root_control.add_child(_trash_confirm_overlay)
+
+	var dim := ColorRect.new()
+	dim.name = "FilesTrashConfirmDim"
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.color = Color(0.0, 0.0, 0.0, 0.45)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_trash_confirm_overlay.add_child(dim)
+
+	_trash_confirm_dialog = Panel.new()
+	_trash_confirm_dialog.name = "FilesTrashConfirmDialog"
+	_trash_confirm_dialog.size = Vector2(400, 156)
+	_trash_confirm_dialog.custom_minimum_size = Vector2(400, 156)
+	_trash_confirm_dialog.mouse_filter = Control.MOUSE_FILTER_STOP
+	_trash_confirm_dialog.z_index = 8193
+	_trash_confirm_dialog.add_theme_stylebox_override("panel", StyleFactory.elevated_panel(2, 0.98, 14))
+	_trash_confirm_overlay.add_child(_trash_confirm_dialog)
+
+	var body := VBoxContainer.new()
+	body.name = "FilesTrashConfirmBody"
+	body.set_anchors_preset(Control.PRESET_FULL_RECT)
+	body.offset_left = 20
+	body.offset_right = -20
+	body.offset_top = 18
+	body.offset_bottom = -18
+	body.add_theme_constant_override("separation", 12)
+	_trash_confirm_dialog.add_child(body)
+
+	var title := Label.new()
+	title.name = "FilesTrashConfirmTitle"
+	title.text = "Empty Trash?"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 18)
+	body.add_child(title)
+
+	var warning := Label.new()
+	warning.name = "FilesTrashConfirmText"
+	warning.text = "Are you sure? This cannot be undone."
+	warning.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	warning.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	warning.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.add_child(warning)
+
+	var actions := HBoxContainer.new()
+	actions.name = "FilesTrashConfirmActions"
+	actions.alignment = BoxContainer.ALIGNMENT_CENTER
+	actions.add_theme_constant_override("separation", 10)
+	body.add_child(actions)
+
+	var confirm_button := Button.new()
+	confirm_button.name = "FilesTrashConfirmYes"
+	confirm_button.text = "Empty Trash"
+	confirm_button.custom_minimum_size = Vector2(126, 34)
+	confirm_button.pressed.connect(Callable(self, "confirm_empty_trash"))
+	actions.add_child(confirm_button)
+
+	var cancel_button := Button.new()
+	cancel_button.name = "FilesTrashConfirmNo"
+	cancel_button.text = "Cancel"
+	cancel_button.custom_minimum_size = Vector2(96, 34)
+	cancel_button.pressed.connect(Callable(self, "cancel_empty_trash"))
+	actions.add_child(cancel_button)
+
+	if not root_control.resized.is_connected(Callable(self, "_center_trash_confirm_dialog")):
+		root_control.resized.connect(Callable(self, "_center_trash_confirm_dialog"))
+	_center_trash_confirm_dialog()
+
+func _show_trash_confirm_dialog() -> void:
+	if _trash_confirm_overlay == null or not is_instance_valid(_trash_confirm_overlay):
+		_build_trash_confirm_dialog()
+	if _trash_confirm_overlay == null or not is_instance_valid(_trash_confirm_overlay):
+		return
+	_center_trash_confirm_dialog()
+	_trash_confirm_overlay.visible = true
+	_trash_confirm_overlay.move_to_front()
+	if _trash_confirm_dialog != null and is_instance_valid(_trash_confirm_dialog):
+		_trash_confirm_dialog.move_to_front()
+
+func _hide_trash_confirm_dialog() -> void:
+	if _trash_confirm_overlay != null and is_instance_valid(_trash_confirm_overlay):
+		_trash_confirm_overlay.visible = false
+
+func _center_trash_confirm_dialog() -> void:
+	if root_control == null or not is_instance_valid(root_control):
+		return
+	if _trash_confirm_overlay == null or not is_instance_valid(_trash_confirm_overlay):
+		return
+	_trash_confirm_overlay.size = root_control.size
+	if _trash_confirm_dialog == null or not is_instance_valid(_trash_confirm_dialog):
+		return
+	var dialog_size: Vector2 = _trash_confirm_dialog.size
+	if dialog_size.x <= 0.0 or dialog_size.y <= 0.0:
+		dialog_size = _trash_confirm_dialog.custom_minimum_size
+	_trash_confirm_dialog.position = Vector2(
+		maxf((root_control.size.x - dialog_size.x) * 0.5, 0.0),
+		maxf((root_control.size.y - dialog_size.y) * 0.5, 0.0)
+	)
+
 func _connect_context_menu_input() -> void:
 	var callback := Callable(self, "_on_files_gui_input")
 	var root_callback := Callable(self, "_on_files_root_gui_input")
@@ -805,7 +922,7 @@ func _rebuild_shortcut_context_menu_items() -> void:
 	_add_context_menu_action("Open", Callable(self, "_open_shortcut_context").bind(shortcut_path))
 	_add_context_menu_action("Open in Terminal", Callable(self, "_open_shortcut_terminal_context").bind(shortcut_path))
 	if _is_trash_files_path(shortcut_path):
-		_add_context_menu_action("Empty Trash", Callable(self, "empty_trash"))
+		_add_context_menu_action("Empty Trash", Callable(self, "_empty_trash_from_shortcut_context").bind(shortcut_path))
 	var item_count: int = _context_menu_column.get_child_count()
 	_context_menu.size = Vector2(CONTEXT_MENU_WIDTH, maxf(44.0, float(item_count * 37 + 20)))
 
@@ -927,6 +1044,12 @@ func _open_shortcut_context(shortcut_path: String) -> void:
 	state.set("shortcut_selected_path", target_path)
 	state.set("path_input", target_path)
 	_refresh(true, true)
+
+func _empty_trash_from_shortcut_context(shortcut_path: String) -> void:
+	var target_path: String = _normalize_path(shortcut_path)
+	if state != null:
+		state.set("shortcut_selected_path", target_path)
+	empty_trash()
 
 func _open_shortcut_terminal_context(shortcut_path: String) -> void:
 	var target_path: String = _normalize_path(shortcut_path)
@@ -1358,12 +1481,14 @@ func empty_trash(event = null) -> void:
 			return
 	if state != null:
 		state.set("show_trash_confirm", true)
+	_show_trash_confirm_dialog()
 	_set_status("Confirm: Empty Trash? This cannot be undone.", false)
 
 func confirm_empty_trash(event = null) -> void:
 	last_event = event
 	if state != null:
 		state.set("show_trash_confirm", false)
+	_hide_trash_confirm_dialog()
 	if _has_file_bridge() and os.files.has_method("empty_trash"):
 		var result: Variant = os.files.empty_trash()
 		if result is Dictionary and bool((result as Dictionary).get("ok", false)):
@@ -1379,6 +1504,7 @@ func cancel_empty_trash(event = null) -> void:
 	last_event = event
 	if state != null:
 		state.set("show_trash_confirm", false)
+	_hide_trash_confirm_dialog()
 	_set_status("", false)
 
 func _error_message(result: Dictionary, fallback: String) -> String:
