@@ -189,6 +189,14 @@ func refresh_current(event = null) -> void:
 	last_event = event
 	_refresh(true, false)
 
+func open_in_terminal(event = null) -> void:
+	last_event = event
+	if _shell == null or not _shell.has_method("launch_app"):
+		_set_status("Terminal unavailable", true)
+		return
+	_shell.call("launch_app", "console")
+	_set_status("Opened Terminal", false)
+
 func navigate_back(event = null) -> void:
 	last_event = event
 	_navigate_history(-1)

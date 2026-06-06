@@ -1472,7 +1472,7 @@ func _build_desktop_context_menu() -> void:
 	_desktop_context_menu = Panel.new()
 	_desktop_context_menu.name = "DesktopContextMenu"
 	_desktop_context_menu.visible = false
-	_desktop_context_menu.size = Vector2(272, 352)
+	_desktop_context_menu.size = Vector2(272, 393)
 	_desktop_context_menu.clip_contents = true
 	_desktop_context_menu.mouse_filter = Control.MOUSE_FILTER_STOP
 	_desktop_context_menu.add_theme_stylebox_override("panel", StyleFactory.context_menu(12))
@@ -1501,12 +1501,19 @@ func _build_desktop_context_menu() -> void:
 	)
 	column.add_child(new_folder_button)
 
-	var open_files_button := _context_menu_button("Open files")
+	var open_files_button := _context_menu_button("Open Files")
 	open_files_button.pressed.connect(func() -> void:
 		_hide_desktop_context_menu()
 		launch_app("files")
 	)
 	column.add_child(open_files_button)
+
+	var open_terminal_button := _context_menu_button("Open in Terminal")
+	open_terminal_button.pressed.connect(func() -> void:
+		_hide_desktop_context_menu()
+		launch_app("console")
+	)
+	column.add_child(open_terminal_button)
 
 	var wallpaper_button := _context_menu_button("Change wallpaper")
 	wallpaper_button.pressed.connect(func() -> void:

@@ -7,6 +7,7 @@
         <Button id="files-up" label="Up" variant="secondary" disabled="{!can_up}" on:click="navigate_up">↑</Button>
         <Button id="files-home" label="Home" variant="secondary" on:click="go_home">Home</Button>
         <Button id="files-refresh" label="Refresh" variant="secondary" on:click="refresh_current">Refresh</Button>
+        <Button id="files-open-terminal" label="Open in Terminal" variant="secondary" on:click="open_in_terminal">Open in Terminal</Button>
       </Toolbar>
 
       <Row id="files-path-row" class="files-path-row" label="Current path">
