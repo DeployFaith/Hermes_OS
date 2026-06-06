@@ -876,12 +876,22 @@ func parent_path(path: String) -> String:
 
 func join_path(base: String, child: String) -> String:
 	var clean_base := normalize_path(base)
-	var clean_child := _clean_name(child)
+	var clean_child := child.strip_edges().replace("\\", "/")
 	if clean_child == "":
 		return clean_base
-	if clean_base == "/":
-		return "/" + clean_child
-	return clean_base + "/" + clean_child
+	if clean_child.begins_with("/"):
+		return normalize_path(clean_child)
+	# Handle multi-segment child paths like ".local/share/Trash/files"
+	var result := clean_base
+	for segment in clean_child.split("/", false):
+		var clean_segment := _clean_name(segment)
+		if clean_segment == "":
+			continue
+		if result == "/":
+			result = "/" + clean_segment
+		else:
+			result = result + "/" + clean_segment
+	return result
 
 func clean_username(value: String) -> String:
 	var clean := value.strip_edges().to_lower()
