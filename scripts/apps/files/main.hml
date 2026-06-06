@@ -47,12 +47,10 @@
         <Column id="files-content" class="files-content" label="Files listing area">
           <Row id="files-table-header" class="files-table-header" label="Files table header">
             <Text id="files-header-name" class="files-header-name">Name</Text>
-            <Text id="files-header-modified" class="files-header-modified">Modified</Text>
-            <Text id="files-header-size" class="files-header-size">Size</Text>
           </Row>
 
           <FileList id="files-list" class="files-list" label="Files list">
-            <FileRow id="file-{entry.name}" class="files-row" label="{entry.name}" value="{entry.path}" selected="{entry.path == selected_path}" for="entry in entries" key="{entry.path}" on:select="select_entry" on:open="open_entry" name="{entry.name_label}" modified="{entry.modified_text}" size="{entry.size_text}" type="{entry.type}" />
+            <FileRow id="file-{entry.name}" class="files-row" label="{entry.name}" value="{entry.path}" selected="{entry.path == selected_path}" for="entry in entries" key="{entry.path}" on:select="select_entry" on:open="open_entry" name="{entry.name_label}" />
           </FileList>
 
           <Text id="files-empty-state" class="files-empty-state" hidden="{has_entries}">This folder is empty.</Text>

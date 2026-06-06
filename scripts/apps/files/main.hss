@@ -154,18 +154,6 @@
   font-size: var(--font-sm);
 }
 
-.files-header-modified {
-  min-width: 220px;
-  color: #9dadca;
-  font-size: var(--font-sm);
-}
-
-.files-header-size {
-  min-width: 120px;
-  color: #9dadca;
-  font-size: var(--font-sm);
-}
-
 .files-list {
   flex: 1;
   min-height: 190px;
