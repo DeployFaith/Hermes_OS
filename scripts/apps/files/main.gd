@@ -711,7 +711,15 @@ func _add_context_menu_name_input() -> void:
 		_hide_context_menu()
 		create_folder()
 	)
+	# Prevent context menu from hiding when clicking the input
+	input.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+			if _context_menu != null and is_instance_valid(_context_menu):
+				_context_menu.get_viewport().set_input_as_handled()
+	)
 	_context_menu_column.add_child(input)
+	# Grab focus after the menu is visible
+	input.call_deferred("grab_focus")
 
 func _add_context_menu_rename_input() -> void:
 	var input := LineEdit.new()
@@ -728,7 +736,15 @@ func _add_context_menu_rename_input() -> void:
 		_hide_context_menu()
 		rename_selected()
 	)
+	# Prevent context menu from hiding when clicking the input
+	input.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+			if _context_menu != null and is_instance_valid(_context_menu):
+				_context_menu.get_viewport().set_input_as_handled()
+	)
 	_context_menu_column.add_child(input)
+	# Grab focus after the menu is visible
+	input.call_deferred("grab_focus")
 
 func _context_menu_button(text_value: String) -> Button:
 	var button := Button.new()
