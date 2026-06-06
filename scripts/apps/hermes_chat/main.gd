@@ -10,6 +10,8 @@ var last_event = null
 var _event_bus = null
 var _agent_service = null
 var _stream_handled: bool = false
+var _chat_history: Array[String] = []
+var _history_cursor: int = -1
 
 func _app_ready() -> void:
 	ready_called = true
@@ -40,6 +42,55 @@ func _app_ready() -> void:
 	var input_control = ui.by_id("message-input") if ui != null else null
 	if input_control != null and input_control is LineEdit:
 		input_control.keep_editing_on_text_submit = true
+		var gui_input_cb := Callable(self, "_on_message_input_gui_input")
+		if not input_control.gui_input.is_connected(gui_input_cb):
+			input_control.gui_input.connect(gui_input_cb)
+
+func _on_message_input_gui_input(event: InputEvent) -> void:
+	if not (event is InputEventKey):
+		return
+	var key_event := event as InputEventKey
+	if not key_event.pressed or key_event.echo:
+		return
+	match key_event.keycode:
+		KEY_UP:
+			_history_previous()
+			key_event.accept()
+		KEY_DOWN:
+			_history_next()
+			key_event.accept()
+
+func _history_previous() -> void:
+	if _chat_history.is_empty():
+		return
+	if _history_cursor < 0:
+		_history_cursor = _chat_history.size() - 1
+	elif _history_cursor > 0:
+		_history_cursor -= 1
+	else:
+		return
+	var entry: String = _chat_history[_history_cursor]
+	if ui != null:
+		ui.set_value("message-input", entry)
+	if state != null:
+		state.set("draft", entry)
+
+func _history_next() -> void:
+	if _chat_history.is_empty() or _history_cursor < 0:
+		return
+	_history_cursor += 1
+	if _history_cursor >= _chat_history.size():
+		_history_cursor = -1
+		if ui != null:
+			ui.set_value("message-input", "")
+		if state != null:
+			state.set("draft", "")
+		return
+	var entry: String = _chat_history[_history_cursor]
+	if ui != null:
+		ui.set_value("message-input", entry)
+	if state != null:
+		state.set("draft", entry)
 
 func _append_message(role: String, text: String) -> void:
 	if state == null:
@@ -145,6 +196,7 @@ func _refocus_input() -> void:
 
 func handle_input(event) -> void:
 	last_event = event
+	_history_cursor = -1
 	input_events.append(str(event.value))
 
 func send_message(event = null) -> void:
@@ -160,6 +212,8 @@ func send_message(event = null) -> void:
 	send_invocations.append(draft)
 	_stream_handled = false
 	_append_message("user", draft)
+	_chat_history.append(draft)
+	_history_cursor = -1
 	state.set_many({
 		"is_sending": true,
 		"is_streaming": false,
