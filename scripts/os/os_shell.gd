@@ -71,6 +71,7 @@ var _desktop_actions_separator: HSeparator
 var _desktop_rename_input: LineEdit
 var _desktop_rename_button: Button
 var _desktop_delete_button: Button
+var _desktop_general_actions: Array[Control] = []
 var _desktop_selected_path: String = ""
 var _desktop_selected_paths: Dictionary = {}
 var _desktop_icon_positions: Dictionary = {}
@@ -1495,17 +1496,21 @@ func _build_desktop_context_menu() -> void:
 
 	column.add_child(_label("Desktop", 14, Tokens.TEXT))
 
+	_desktop_general_actions.clear()
+
 	var new_file_button := _context_menu_button("New file")
 	new_file_button.pressed.connect(func() -> void:
 		_create_desktop_item(false)
 	)
 	column.add_child(new_file_button)
+	_desktop_general_actions.append(new_file_button)
 
 	var new_folder_button := _context_menu_button("New folder")
 	new_folder_button.pressed.connect(func() -> void:
 		_create_desktop_item(true)
 	)
 	column.add_child(new_folder_button)
+	_desktop_general_actions.append(new_folder_button)
 
 	var open_files_button := _context_menu_button("Open Files")
 	open_files_button.pressed.connect(func() -> void:
@@ -1513,6 +1518,7 @@ func _build_desktop_context_menu() -> void:
 		launch_app("files")
 	)
 	column.add_child(open_files_button)
+	_desktop_general_actions.append(open_files_button)
 
 	var open_terminal_button := _context_menu_button("Open in Terminal")
 	open_terminal_button.pressed.connect(func() -> void:
@@ -1523,12 +1529,14 @@ func _build_desktop_context_menu() -> void:
 			launch_app("console")
 	)
 	column.add_child(open_terminal_button)
+	_desktop_general_actions.append(open_terminal_button)
 
 	var wallpaper_button := _context_menu_button("Change wallpaper")
 	wallpaper_button.pressed.connect(func() -> void:
 		_cycle_wallpaper()
 	)
 	column.add_child(wallpaper_button)
+	_desktop_general_actions.append(wallpaper_button)
 
 	var settings_button := _context_menu_button("Desktop settings")
 	settings_button.pressed.connect(func() -> void:
@@ -1536,6 +1544,7 @@ func _build_desktop_context_menu() -> void:
 		launch_app("system")
 	)
 	column.add_child(settings_button)
+	_desktop_general_actions.append(settings_button)
 
 	_desktop_actions_separator = HSeparator.new()
 	column.add_child(_desktop_actions_separator)
@@ -2219,8 +2228,12 @@ func _update_desktop_context_actions() -> void:
 	var single_selected_path := _desktop_selected_path
 	if selected_count == 1 and single_selected_path == "" and not _desktop_selected_paths.is_empty():
 		single_selected_path = str(_desktop_selected_paths.keys()[0])
+	var has_selection := selected_count > 0
+	for action in _desktop_general_actions:
+		if action != null and is_instance_valid(action):
+			action.visible = not has_selection
 	if _desktop_actions_separator:
-		_desktop_actions_separator.visible = selected_count > 0
+		_desktop_actions_separator.visible = has_selection
 	if _desktop_rename_input:
 		_desktop_rename_input.visible = selected_count == 1
 		if selected_count == 1:
@@ -2243,6 +2256,7 @@ func _update_desktop_context_actions() -> void:
 	_desktop_delete_button.visible = selected_count > 0
 	_desktop_delete_button.disabled = selected_count == 0
 	_desktop_delete_button.text = "Delete selected" if selected_count <= 1 else "Delete selected (%d)" % selected_count
+	_desktop_context_menu.size = Vector2(272, 220 if has_selection else 393)
 
 func _set_desktop_highlight_color(color: Color) -> void:
 	_desktop_highlight_color = Color(color.r, color.g, color.b, clampf(color.a, 0.14, 0.7))
