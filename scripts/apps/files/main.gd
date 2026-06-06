@@ -9,6 +9,9 @@ var last_event = null
 
 var _context_menu: Panel = null
 var _context_menu_column: VBoxContainer = null
+var _context_menu_mode: String = "files"
+var _context_shortcut_path: String = ""
+var _context_shortcut_label: String = ""
 var _shell: Node = null
 var _os_event_bus = null
 var _open_file_callback: Callable = Callable()
@@ -636,6 +639,41 @@ func _connect_context_menu_input() -> void:
 		var callable: Callable = root_callback if control == root_control else callback
 		if not control.gui_input.is_connected(callable):
 			control.gui_input.connect(callable)
+	_connect_shortcut_context_menu_input()
+
+func _connect_shortcut_context_menu_input() -> void:
+	if ui == null or state == null:
+		return
+	var shortcuts_list: Control = ui.by_id("files-shortcuts-list")
+	if shortcuts_list == null or not is_instance_valid(shortcuts_list):
+		return
+	var shortcut_buttons: Array[Control] = []
+	_collect_shortcut_buttons(shortcuts_list, shortcut_buttons)
+	var shortcuts: Array = _sanitize_shortcuts(state.get_value("shortcuts", []), _home_path())
+	var shortcut_index: int = 0
+	for shortcut_button in shortcut_buttons:
+		if shortcut_button == null or not is_instance_valid(shortcut_button):
+			continue
+		if shortcut_index >= shortcuts.size():
+			break
+		var shortcut_value: Variant = shortcuts[shortcut_index]
+		shortcut_index += 1
+		if not (shortcut_value is Dictionary):
+			continue
+		var shortcut: Dictionary = shortcut_value
+		shortcut_button.set_meta("files_shortcut_path", _normalize_path(str(shortcut.get("path", ""))))
+		shortcut_button.set_meta("files_shortcut_label", str(shortcut.get("label", "")))
+		if bool(shortcut_button.get_meta("files_shortcut_context_connected", false)):
+			continue
+		var shortcut_callback := Callable(self, "_on_shortcut_gui_input").bind(shortcut_button)
+		shortcut_button.gui_input.connect(shortcut_callback)
+		shortcut_button.set_meta("files_shortcut_context_connected", true)
+
+func _collect_shortcut_buttons(node: Node, output: Array[Control]) -> void:
+	for child in node.get_children():
+		if child is Button and str((child as Button).get_meta("hermes_tag", "")) == "ListItem":
+			output.append(child as Control)
+		_collect_shortcut_buttons(child, output)
 
 func _collect_controls(node: Node, output: Array[Control]) -> void:
 	for child in node.get_children():
@@ -652,6 +690,9 @@ func _on_files_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mouse_event := event as InputEventMouseButton
 		if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_RIGHT:
+			_context_menu_mode = "files"
+			_context_shortcut_path = ""
+			_context_shortcut_label = ""
 			_show_context_menu(_global_mouse_position())
 			if root_control != null and is_instance_valid(root_control):
 				root_control.get_viewport().set_input_as_handled()
@@ -664,6 +705,24 @@ func _on_files_root_gui_input(event: InputEvent) -> void:
 		var mouse_event := event as InputEventMouseButton
 		if mouse_event.pressed:
 			_hide_context_menu_if_outside(_global_mouse_position())
+
+func _on_shortcut_gui_input(event: InputEvent, shortcut_control: Control) -> void:
+	if not (event is InputEventMouseButton):
+		return
+	var mouse_event := event as InputEventMouseButton
+	if not mouse_event.pressed or mouse_event.button_index != MOUSE_BUTTON_RIGHT:
+		return
+	if shortcut_control == null or not is_instance_valid(shortcut_control):
+		return
+	var shortcut_path: String = _normalize_path(str(shortcut_control.get_meta("files_shortcut_path", "")))
+	if shortcut_path == "":
+		return
+	var shortcut_label: String = str(shortcut_control.get_meta("files_shortcut_label", shortcut_path))
+	if state != null:
+		state.set("shortcut_selected_path", shortcut_path)
+	_show_shortcut_context_menu(shortcut_label, shortcut_path, _global_mouse_position())
+	if root_control != null and is_instance_valid(root_control):
+		root_control.get_viewport().set_input_as_handled()
 
 func _global_mouse_position() -> Vector2:
 	if root_control != null and is_instance_valid(root_control):
@@ -688,6 +747,12 @@ func _show_context_menu(global_pos: Vector2) -> void:
 	_context_menu.visible = true
 	_context_menu.move_to_front()
 
+func _show_shortcut_context_menu(shortcut_label: String, shortcut_path: String, global_pos: Vector2) -> void:
+	_context_menu_mode = "shortcut"
+	_context_shortcut_label = shortcut_label
+	_context_shortcut_path = _normalize_path(shortcut_path)
+	_show_context_menu(global_pos)
+
 func _hide_context_menu() -> void:
 	if _context_menu != null and is_instance_valid(_context_menu):
 		_context_menu.visible = false
@@ -704,6 +769,9 @@ func _rebuild_context_menu_items() -> void:
 		return
 	for child in _context_menu_column.get_children():
 		child.queue_free()
+	if _context_menu_mode == "shortcut":
+		_rebuild_shortcut_context_menu_items()
+		return
 	var selected_path: String = state.get_string("selected_path", "") if state != null else ""
 	var selected_type: String = state.get_string("selected_type", "") if state != null else ""
 	var current_path: String = state.get_string("current_path", _home_path()) if state != null else _home_path()
@@ -727,6 +795,17 @@ func _rebuild_context_menu_items() -> void:
 		_add_context_menu_action("Delete", Callable(self, "delete_selected"))
 		var terminal_action := Callable(self, "_open_selected_terminal_context") if selected_type == "dir" else Callable(self, "open_in_terminal")
 		_add_context_menu_action("Open in Terminal", terminal_action)
+	var item_count: int = _context_menu_column.get_child_count()
+	_context_menu.size = Vector2(CONTEXT_MENU_WIDTH, maxf(44.0, float(item_count * 37 + 20)))
+
+func _rebuild_shortcut_context_menu_items() -> void:
+	var shortcut_path: String = _normalize_path(_context_shortcut_path)
+	if shortcut_path == "":
+		return
+	_add_context_menu_action("Open", Callable(self, "_open_shortcut_context").bind(shortcut_path))
+	_add_context_menu_action("Open in Terminal", Callable(self, "_open_shortcut_terminal_context").bind(shortcut_path))
+	if _is_trash_files_path(shortcut_path):
+		_add_context_menu_action("Empty Trash", Callable(self, "empty_trash"))
 	var item_count: int = _context_menu_column.get_child_count()
 	_context_menu.size = Vector2(CONTEXT_MENU_WIDTH, maxf(44.0, float(item_count * 37 + 20)))
 
@@ -840,6 +919,32 @@ func _open_selected_terminal_context(event = null) -> void:
 		_hide_context_menu()
 	else:
 		open_in_terminal(event)
+
+func _open_shortcut_context(shortcut_path: String) -> void:
+	if state == null:
+		return
+	var target_path: String = _normalize_path(shortcut_path)
+	state.set("shortcut_selected_path", target_path)
+	state.set("path_input", target_path)
+	_refresh(true, true)
+
+func _open_shortcut_terminal_context(shortcut_path: String) -> void:
+	var target_path: String = _normalize_path(shortcut_path)
+	if target_path == "":
+		target_path = _home_path()
+	if _shell == null:
+		_set_status("Terminal unavailable", true)
+		return
+	if _shell.has_method("launch_app_with_context"):
+		_shell.call("launch_app_with_context", "console", {"initial_cwd": target_path})
+		_set_status("Opened Terminal in " + target_path, false)
+		_hide_context_menu()
+	elif _shell.has_method("launch_app"):
+		_shell.call("launch_app", "console")
+		_set_status("Opened Terminal", false)
+		_hide_context_menu()
+	else:
+		_set_status("Terminal unavailable", true)
 
 func _navigate_history(direction: int) -> void:
 	if state == null:
@@ -993,6 +1098,7 @@ func _update_derived_state() -> void:
 		"can_move_shortcut_down": selected_shortcut_index >= 0 and selected_shortcut_index < shortcuts.size() - 1,
 		"can_save_shortcut": editor_label != "" and editor_path != ""
 	})
+	call_deferred("_connect_shortcut_context_menu_input")
 
 func _push_history(path: String) -> void:
 	if state == null:
