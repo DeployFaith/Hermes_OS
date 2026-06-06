@@ -133,6 +133,7 @@ func _configure_controller() -> void:
 		_instance.controller.call("configure_app_context", {
 			"shell": _shell,
 			"filesystem": _fs,
+			"event_bus": _shell.get("_event_bus") if _shell != null else null,
 			"shortcuts": _shortcuts,
 			"open_file_callback": _open_file_callback,
 			"shortcuts_changed_callback": _shortcuts_changed_callback,

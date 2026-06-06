@@ -10,12 +10,15 @@ var last_event = null
 var _context_menu: Panel = null
 var _context_menu_column: VBoxContainer = null
 var _shell: Node = null
+var _os_event_bus = null
 var _open_file_callback: Callable = Callable()
 var _shortcuts_changed_callback: Callable = Callable()
 var _state_save_callback: Callable = Callable()
 
 func configure_app_context(context: Dictionary) -> void:
 	_shell = context.get("shell", null) as Node
+	_os_event_bus = context.get("event_bus", null)
+	_subscribe_file_system_events()
 	var open_value: Variant = context.get("open_file_callback", Callable())
 	if open_value is Callable:
 		_open_file_callback = open_value as Callable
@@ -71,12 +74,50 @@ func _app_ready() -> void:
 	_connect_context_menu_input()
 
 func app_unmounted() -> void:
+	_unsubscribe_file_system_events()
 	_hide_context_menu()
 	if _context_menu != null and is_instance_valid(_context_menu):
 		_context_menu.queue_free()
 	_context_menu = null
 	_context_menu_column = null
 	super.app_unmounted()
+
+func _subscribe_file_system_events() -> void:
+	if _os_event_bus == null or not _os_event_bus.has_method("subscribe"):
+		return
+	for event_name in [&"file.created", &"file.updated", &"file.deleted", &"file.moved", &"file.copied"]:
+		_os_event_bus.subscribe(event_name, self, &"_on_file_system_event")
+
+func _unsubscribe_file_system_events() -> void:
+	if _os_event_bus == null or not _os_event_bus.has_method("unsubscribe"):
+		_os_event_bus = null
+		return
+	for event_name in [&"file.created", &"file.updated", &"file.deleted", &"file.moved", &"file.copied"]:
+		_os_event_bus.unsubscribe(event_name, self, &"_on_file_system_event")
+	_os_event_bus = null
+
+func _on_file_system_event(_event_name: StringName, payload: Dictionary) -> void:
+	if state == null:
+		return
+	var current_path: String = _normalize_path(state.get_string("current_path", _home_path()))
+	if _file_event_affects_directory(payload, current_path):
+		_refresh(false, false)
+
+func _file_event_affects_directory(payload: Dictionary, directory_path: String) -> bool:
+	var dir_path: String = _normalize_path(directory_path)
+	var affected_dirs: Array[String] = []
+	for key in ["parent", "destination_parent"]:
+		var value: String = str(payload.get(key, "")).strip_edges()
+		if value != "":
+			affected_dirs.append(_normalize_path(value))
+	for key in ["path", "source", "destination", "trash_info_path"]:
+		var path_value: String = str(payload.get(key, "")).strip_edges()
+		if path_value != "":
+			affected_dirs.append(_dirname(_normalize_path(path_value)))
+	for affected in affected_dirs:
+		if affected == dir_path:
+			return true
+	return false
 
 func refresh_files() -> void:
 	_refresh(true, false)

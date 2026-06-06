@@ -262,6 +262,8 @@ func _ready() -> void:
 	_notification_center = NotificationCenter.new()
 	_notification_center.setup(_event_bus)
 	_fs = OSFileSystem.new()
+	if _fs.has_signal("file_system_event") and not _fs.file_system_event.is_connected(_on_file_system_event):
+		_fs.file_system_event.connect(_on_file_system_event)
 	_fs.load_or_create()
 	_load_wallpaper_images()
 	_apply_theme_mode(_theme_mode, false)
@@ -2121,8 +2123,24 @@ func _delete_selected_desktop_items() -> bool:
 		_update_desktop_context_actions()
 		return false
 	var deleted := 0
+	var used_trash := false
 	for item_path in paths:
-		var message := _fs.delete_path(item_path)
+		var message := ""
+		if _fs.has_method("trash_path"):
+			var trash_result: Variant = _fs.trash_path(item_path)
+			if trash_result is Dictionary:
+				var trash_dict: Dictionary = trash_result
+				if bool(trash_dict.get("ok", false)):
+					used_trash = true
+				else:
+					var error_value: Variant = trash_dict.get("error", {})
+					message = str((error_value as Dictionary).get("message", "Could not move item to Trash")) if error_value is Dictionary else str(error_value)
+			elif bool(trash_result):
+				used_trash = true
+			else:
+				message = "Could not move item to Trash"
+		else:
+			message = _fs.delete_path(item_path)
 		if message != "":
 			_set_desktop_context_status(message, true)
 			continue
@@ -2132,7 +2150,7 @@ func _delete_selected_desktop_items() -> bool:
 		return false
 	_refresh_desktop_icons()
 	_hide_desktop_context_menu()
-	_set_desktop_context_status("Deleted %d item(s)" % deleted)
+	_set_desktop_context_status(("Moved %d item(s) to Trash" if used_trash else "Deleted %d item(s)") % deleted)
 	_queue_state_save()
 	return true
 
@@ -2393,9 +2411,10 @@ func _ensure_standard_home_dirs() -> void:
 		if not _fs.is_dir(dir_path):
 			_fs.make_dir(dir_path)
 	# Ensure Trash directories exist
-	var trash_base := _fs.join_path(home, ".local/share/Trash")
-	for subdir in ["files", "info"]:
-		var trash_dir := _fs.join_path(trash_base, subdir)
+	var local_dir := _fs.join_path(home, ".local")
+	var share_dir := _fs.join_path(local_dir, "share")
+	var trash_base := _fs.join_path(share_dir, "Trash")
+	for trash_dir in [local_dir, share_dir, trash_base, _fs.join_path(trash_base, "files"), _fs.join_path(trash_base, "info")]:
 		if not _fs.is_dir(trash_dir):
 			_fs.make_dir(trash_dir)
 
@@ -4310,6 +4329,9 @@ func _emit_hermes_event(event_name: String, payload: Dictionary = {}) -> void:
 		_event_bus.emit_event(StringName(event_name), payload)
 		return
 	hermes_event.emit(event_name, payload)
+
+func _on_file_system_event(event_name: StringName, payload: Dictionary) -> void:
+	_emit_hermes_event(str(event_name), payload)
 
 func _on_os_event_bus_event_emitted(event_name: StringName, payload: Dictionary) -> void:
 	var event_text := str(event_name)

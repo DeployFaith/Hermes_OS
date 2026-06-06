@@ -1,6 +1,8 @@
 class_name OSFileSystem
 extends RefCounted
 
+signal file_system_event(event_name: StringName, payload: Dictionary)
+
 const SAVE_PATH := "user://hermes_os_files.json"
 const ROOT_USER := "root"
 const DEFAULT_USERNAME := "user"
@@ -627,6 +629,7 @@ func delete_path(path: String) -> String:
 	children.erase(name)
 	parent["children"] = children
 	save()
+	file_system_event.emit(&"file.deleted", {"path": normalized, "parent": parent_path_text})
 	return ""
 
 func trash_path(path: String) -> Dictionary:
@@ -635,10 +638,18 @@ func trash_path(path: String) -> Dictionary:
 		return {"ok": false, "error": {"message": "Cannot trash root"}}
 	if _is_protected_system_path(normalized):
 		return {"ok": false, "error": {"message": "Cannot trash protected system path"}}
-	var trash_files := join_path(join_path(join_path(join_path(home_path(), ".local"), "share"), "Trash"), "files")
-	var trash_info_dir := join_path(join_path(join_path(join_path(home_path(), ".local"), "share"), "Trash"), "info")
-	make_dir(trash_files)
-	make_dir(trash_info_dir)
+	var home := home_path()
+	var local_dir := join_path(home, ".local")
+	var share_dir := join_path(local_dir, "share")
+	var trash_base := join_path(share_dir, "Trash")
+	var trash_files := join_path(trash_base, "files")
+	var trash_info_dir := join_path(trash_base, "info")
+	for dir_path in [local_dir, share_dir, trash_base, trash_files, trash_info_dir]:
+		if is_dir(dir_path):
+			continue
+		var dir_error := make_dir(dir_path)
+		if dir_error != "" and not dir_error.begins_with("Path already exists"):
+			return {"ok": false, "error": {"message": dir_error}}
 	var base_name := normalized.get_file() if normalized.get_file() != "" else normalized.get_base_dir().get_file()
 	var trashed_name := base_name + "." + str(Time.get_ticks_usec())
 	var dest_path := join_path(trash_files, trashed_name)
@@ -647,6 +658,15 @@ func trash_path(path: String) -> Dictionary:
 		return {"ok": false, "error": {"message": err}}
 	var info_path := join_path(trash_info_dir, trashed_name + ".trashinfo")
 	write_file(info_path, "[Trash Info]\nPath=" + normalized + "\n")
+	file_system_event.emit(&"file.moved", {
+		"path": normalized,
+		"source": normalized,
+		"destination": dest_path,
+		"parent": parent_path(normalized),
+		"destination_parent": trash_files,
+		"trash_info_path": info_path,
+		"trashed": true
+	})
 	return {"ok": true, "trashed_from": normalized, "trashed_to": dest_path}
 
 func empty_trash() -> Dictionary:

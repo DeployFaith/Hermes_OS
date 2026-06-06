@@ -89,6 +89,31 @@ func delete(path: String) -> Dictionary:
 		return {"ok": message == "", "path": normalize(path), "error": {"code": "FILES_DELETE_FAILED", "message": message, "details": {}} if message != "" else {}}
 	return _fail("FILES_DELETE_UNAVAILABLE", "HermesOS filesystem delete API is unavailable")
 
+func trash_path(path: String) -> Dictionary:
+	if _filesystem == null:
+		return _fail("FILES_UNAVAILABLE", "HermesOS filesystem service is unavailable")
+	if _filesystem.has_method("trash_path"):
+		var result: Variant = _filesystem.call("trash_path", path)
+		if result is Dictionary:
+			return (result as Dictionary).duplicate(true)
+		return {"ok": bool(result), "path": normalize(path), "error": {} if bool(result) else {"code": "FILES_TRASH_FAILED", "message": "Could not move item to Trash", "details": {}}}
+	return _fail("FILES_TRASH_UNAVAILABLE", "HermesOS filesystem trash API is unavailable")
+
+func empty_trash() -> Dictionary:
+	if _filesystem == null:
+		return _fail("FILES_UNAVAILABLE", "HermesOS filesystem service is unavailable")
+	if _filesystem.has_method("empty_trash"):
+		var result: Variant = _filesystem.call("empty_trash")
+		if result is Dictionary:
+			return (result as Dictionary).duplicate(true)
+		return {"ok": bool(result), "error": {} if bool(result) else {"code": "FILES_EMPTY_TRASH_FAILED", "message": "Could not empty Trash", "details": {}}}
+	return _fail("FILES_EMPTY_TRASH_UNAVAILABLE", "HermesOS filesystem empty trash API is unavailable")
+
+func trash_item_count() -> int:
+	if _filesystem != null and _filesystem.has_method("trash_item_count"):
+		return int(_filesystem.call("trash_item_count"))
+	return 0
+
 func exists(path: String) -> bool:
 	if _filesystem != null and _filesystem.has_method("exists"):
 		return bool(_filesystem.call("exists", path))
