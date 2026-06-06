@@ -57,35 +57,11 @@
         </Column>
       </Row>
 
-      <Column id="files-footer" class="files-footer" label="File actions and details">
-        <FlowRow id="files-actions-create" class="files-actions" label="Create actions">
-          <TextInput id="files-create-name" class="files-input" label="New name" model="create_name" placeholder="New name" on:input="handle_create_name_input" on:submit="create_folder" />
-          <Button id="files-new-folder" label="Create folder" variant="secondary" disabled="{!can_create}" on:click="create_folder">New folder</Button>
-          <Button id="files-new-file" label="Create file" variant="secondary" disabled="{!can_create}" on:click="create_file">New file</Button>
-        </FlowRow>
-
-        <FlowRow id="files-actions-selection" class="files-actions" label="Selection actions">
-          <TextInput id="files-rename-name" class="files-input" label="Rename selected" model="rename_name" placeholder="Rename selected" on:input="handle_rename_name_input" on:submit="rename_selected" />
-          <Button id="files-rename" label="Rename selected" variant="secondary" disabled="{!can_rename}" on:click="rename_selected">Rename</Button>
-          <Button id="files-open" label="Open selected" variant="primary" disabled="{!has_selection}" on:click="open_selected">Open</Button>
-          <Button id="files-delete" label="Delete selected" variant="danger" disabled="{!has_selection}" on:click="delete_selected">Delete</Button>
-          <Button id="files-copy" label="Copy selected" variant="secondary" disabled="{!has_selection}" on:click="copy_selected">Copy</Button>
-          <Button id="files-cut" label="Cut selected" variant="secondary" disabled="{!has_selection}" on:click="cut_selected">Cut</Button>
-          <Button id="files-paste" label="Paste clipboard" variant="secondary" disabled="{!can_paste}" on:click="paste_clipboard">Paste</Button>
-        </FlowRow>
-
-        <FlowRow id="files-trash-confirm" class="files-actions" label="Trash confirmation" hidden="{!show_trash_confirm}">
+      <FlowRow id="files-trash-confirm" class="files-actions" label="Trash confirmation" hidden="{!show_trash_confirm}">
           <Text id="trash-confirm-text" class="trash-confirm-text">Are you sure? This cannot be undone.</Text>
           <Button id="trash-confirm-yes" label="Empty Trash" variant="danger" on:click="confirm_empty_trash">Empty Trash</Button>
           <Button id="trash-confirm-no" label="Cancel" variant="secondary" on:click="cancel_empty_trash">Cancel</Button>
         </FlowRow>
-
-        <Row id="files-details-row" class="files-details-row" label="Selection details">
-          <Text id="files-selected-label" class="files-selected-label" label="Selected path">{selected_label}</Text>
-          <Text id="files-clipboard-label" class="files-clipboard-label" label="Clipboard status">{clipboard_label}</Text>
-        </Row>
-        <Text id="files-details-text" class="files-details-text" label="Selected metadata">{details_label}</Text>
-      </Column>
 
       <StatusBar id="files-status" label="Files status">{status}</StatusBar>
     </Column>

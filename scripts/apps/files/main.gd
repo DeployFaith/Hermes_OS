@@ -667,6 +667,7 @@ func _rebuild_context_menu_items() -> void:
 	var has_selection: bool = selected_path != ""
 	var has_clipboard: bool = state != null and state.get_string("clipboard_path", "") != "" and state.get_string("clipboard_mode", "") != ""
 	if not has_selection:
+		_add_context_menu_name_input()
 		_add_context_menu_action("New file", Callable(self, "create_file"))
 		_add_context_menu_action("New folder", Callable(self, "create_folder"))
 		_add_context_menu_action("Paste", Callable(self, "paste_clipboard"), not has_clipboard)
@@ -675,6 +676,7 @@ func _rebuild_context_menu_items() -> void:
 		_add_context_menu_action("Empty Trash", Callable(self, "empty_trash"))
 	else:
 		_add_context_menu_action("Open", Callable(self, "open_selected"))
+		_add_context_menu_rename_input()
 		_add_context_menu_action("Rename", Callable(self, "rename_selected"))
 		_add_context_menu_action("Copy", Callable(self, "copy_selected"))
 		_add_context_menu_action("Cut", Callable(self, "cut_selected"))
@@ -693,6 +695,40 @@ func _add_context_menu_action(text: String, action: Callable, disabled: bool = f
 			action.call()
 	)
 	_context_menu_column.add_child(button)
+
+func _add_context_menu_name_input() -> void:
+	var input := LineEdit.new()
+	input.name = "ContextNameInput"
+	input.placeholder_text = "New name..."
+	input.custom_minimum_size = Vector2(0, 30)
+	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	input.text = state.get_string("create_name", "") if state != null else ""
+	input.text_changed.connect(func(value: String) -> void:
+		if state != null:
+			state.set("create_name", value)
+	)
+	input.text_submitted.connect(func(_value: String) -> void:
+		_hide_context_menu()
+		create_folder()
+	)
+	_context_menu_column.add_child(input)
+
+func _add_context_menu_rename_input() -> void:
+	var input := LineEdit.new()
+	input.name = "ContextRenameInput"
+	input.placeholder_text = "New name..."
+	input.custom_minimum_size = Vector2(0, 30)
+	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	input.text = state.get_string("rename_name", "") if state != null else ""
+	input.text_changed.connect(func(value: String) -> void:
+		if state != null:
+			state.set("rename_name", value)
+	)
+	input.text_submitted.connect(func(_value: String) -> void:
+		_hide_context_menu()
+		rename_selected()
+	)
+	_context_menu_column.add_child(input)
 
 func _context_menu_button(text_value: String) -> Button:
 	var button := Button.new()
