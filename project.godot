@@ -1,24 +1,16 @@
-; Engine configuration file.
-; It's best edited using the editor UI and not directly,
-; since the parameters that go here are not all obvious.
-;
-; Format:
-;   [section] ; section goes between []
-;   param=value ; assign values to parameters
-
 config_version=5
 
 [application]
 
-config/name="HermesOS"
-run/main_scene="res://scenes/os/os_shell.tscn"
+config/name="Hermes_OS"
+run/main_scene="res://addons/hermes_os/scenes/os/os_shell.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
 [autoload]
 
-HermesOSKernel="*res://scripts/hermes/hermes_os_kernel.gd"
-McpInteractionServer="*res://scripts/hermes/mcp_interaction_server.gd"
+HermesOSKernel="*res://addons/hermes_os/scripts/hermes/hermes_os_kernel.gd"
+McpInteractionServer="*res://addons/hermes_os/scripts/hermes/mcp_interaction_server.gd"
 
 [display]
 
