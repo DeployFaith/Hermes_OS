@@ -426,6 +426,9 @@ func _handle_key_shortcut(event: InputEventKey) -> bool:
 			var delta := -1 if event.shift_pressed else 1
 			_activate_tab((_active_tab + delta + _tabs.size()) % _tabs.size(), true)
 		return true
+	if event.keycode == KEY_F12:
+		_toggle_devtools()
+		return true
 	if event.alt_pressed and event.keycode == KEY_LEFT:
 		go_back()
 		return true
@@ -565,6 +568,8 @@ func _build_toolbar() -> void:
 	_main_menu.add_item("Close other tabs", 5)
 	_main_menu.add_separator()
 	_main_menu.add_item("Settings", 6)
+	_main_menu.add_separator()
+	_main_menu.add_item("Developer Tools", 7)
 	_main_menu.id_pressed.connect(_on_main_menu_id_pressed)
 	add_child(_main_menu)
 
@@ -2587,6 +2592,15 @@ func _record_webview_signal(signal_name: String, value = null) -> void:
 	if _diagnostics_panel and _diagnostics_panel.visible:
 		_refresh_diagnostics_panel()
 
+func _toggle_devtools() -> void:
+	if _webview == null:
+		return
+	if _webview.has_method("is_devtools_open") and _webview.call("is_devtools_open"):
+		if _webview.has_method("close_devtools"):
+			_webview.call("close_devtools")
+	elif _webview.has_method("open_devtools"):
+		_webview.call("open_devtools")
+
 func _toggle_diagnostics_panel() -> void:
 	if _diagnostics_panel == null:
 		return
@@ -2703,6 +2717,8 @@ func _on_main_menu_id_pressed(id: int) -> void:
 			_close_other_tabs(_active_tab)
 		6:
 			_show_settings_menu()
+		7:
+			_toggle_devtools()
 
 func _on_tab_rmb_clicked(index: int) -> void:
 	if index < 0 or index >= _tabs.size():

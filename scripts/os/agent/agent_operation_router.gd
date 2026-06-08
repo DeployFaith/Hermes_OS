@@ -142,6 +142,18 @@ func _route_operation(operation: String, args: Dictionary) -> Dictionary:
 			return _route_notifications_create(operation, args)
 		"system.get_state":
 			return _route_system_get_state(operation, args)
+		"home.light_on":
+			return _route_home_device("ceiling_light", "on", operation)
+		"home.light_off":
+			return _route_home_device("ceiling_light", "off", operation)
+		"home.light_toggle":
+			return _route_home_device("ceiling_light", "toggle", operation)
+		"home.light_color":
+			return _route_home_color(operation, args)
+		"home.light_status":
+			return _route_home_status(operation)
+		"home.device_list":
+			return _route_home_device_list(operation)
 		_:
 			return _route_legacy_shell(operation, args)
 
@@ -404,6 +416,55 @@ func _route_legacy_shell(operation: String, args: Dictionary) -> Dictionary:
 		if legacy_result is Dictionary:
 			return legacy_result as Dictionary
 	return _make_error(operation, "UNKNOWN_OPERATION", "No registered operation: " + operation)
+
+func _route_home_device(device_id: String, command: String, operation: String) -> Dictionary:
+	var controller = _get_home_device_controller()
+	if controller == null:
+		return _make_error(operation, "HOME_DEVICE_UNAVAILABLE", "HomeDeviceController is not available")
+	var result: Dictionary = controller.call("execute_command", device_id, command)
+	if bool(result.get("ok", false)):
+		return _make_result(operation, {"message": str(result.get("message", "Done.")), "device": device_id, "command": command, "state": result.get("state", {})})
+	return _make_error(operation, "DEVICE_COMMAND_FAILED", str(result.get("message", "Command failed")))
+
+func _route_home_color(operation: String, args: Dictionary) -> Dictionary:
+	var controller = _get_home_device_controller()
+	if controller == null:
+		return _make_error(operation, "HOME_DEVICE_UNAVAILABLE", "HomeDeviceController is not available")
+	var color_name: String = str(args.get("color", "")).strip_edges().to_lower()
+	if color_name == "":
+		return _make_error(operation, "MISSING_COLOR", "Specify a color name (e.g. purple, blue, red)")
+	var result: Dictionary = controller.call("execute_command", "ceiling_light", "color", {"color": color_name})
+	if bool(result.get("ok", false)):
+		return _make_result(operation, {"message": str(result.get("message", "Done.")), "device": "ceiling_light", "color": color_name, "state": result.get("state", {})})
+	return _make_error(operation, "COLOR_FAILED", str(result.get("message", "Color change failed")))
+
+func _route_home_status(operation: String) -> Dictionary:
+	var controller = _get_home_device_controller()
+	if controller == null:
+		return _make_error(operation, "HOME_DEVICE_UNAVAILABLE", "HomeDeviceController is not available")
+	var state: Dictionary = controller.call("get_device_state", "ceiling_light")
+	var is_on: bool = bool(state.get("is_on", false))
+	return _make_result(operation, {"device": "ceiling_light", "is_on": is_on, "status": "on" if is_on else "off"})
+
+func _route_home_device_list(operation: String) -> Dictionary:
+	var controller = _get_home_device_controller()
+	if controller == null:
+		return _make_error(operation, "HOME_DEVICE_UNAVAILABLE", "HomeDeviceController is not available")
+	var devices: Dictionary = controller.call("get_all_devices")
+	return _make_result(operation, {"devices": devices})
+
+func _get_home_device_controller():
+	if _shell != null and is_instance_valid(_shell):
+		var controller = _shell.get_node_or_null("/root/HomeDeviceController")
+		if controller != null:
+			return controller
+	# Fallback: try scene tree directly
+	var tree = Engine.get_main_loop()
+	if tree != null and tree is SceneTree:
+		var controller = tree.root.get_node_or_null("HomeDeviceController")
+		if controller != null:
+			return controller
+	return null
 
 func _normalize_operation(op: String, args: Dictionary) -> Dictionary:
 	if _shell != null and _shell.has_method("_normalize_v1_operation"):

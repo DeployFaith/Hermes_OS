@@ -30,6 +30,10 @@ const AccountCenterApp = preload("res://scripts/apps/account_center/account_cent
 const AccountCenterAppManifest = preload("res://scripts/apps/account_center/account_center_app_manifest.gd")
 const CommandPaletteApp = preload("res://scripts/apps/command_palette/command_palette_app.gd")
 const CommandPaletteAppManifest = preload("res://scripts/apps/command_palette/command_palette_app_manifest.gd")
+const CalculatorApp = preload("res://scripts/apps/calculator/calculator_app.gd")
+const CalculatorAppManifest = preload("res://scripts/apps/calculator/calculator_app_manifest.gd")
+const MediaPlayerApp = preload("res://scripts/apps/media_player/media_player_app.gd")
+const MediaPlayerAppManifest = preload("res://scripts/apps/media_player/media_player_app_manifest.gd")
 const HermesProtocol = preload("res://scripts/hermes/hermes_protocol.gd")
 const HermesAgentService = preload("res://scripts/os/agent/hermes_agent_service.gd")
 const AgentOperationRouter = preload("res://scripts/os/agent/agent_operation_router.gd")
@@ -275,11 +279,28 @@ func _ready() -> void:
 	_setup_window_manager()
 	_setup_hermes_agent_service()
 	_setup_state_save_timer()
+	# Check for returning-from-3D-world BEFORE loading state so persisted windows can launch.
+	var _skip_boot := false
+	if has_node("/root/SceneBridge"):
+		var bridge = get_node("/root/SceneBridge")
+		if bridge.has_method("was_returning_from_os") and bridge.call("was_returning_from_os"):
+			bridge.call("clear_returning_flag")
+			_session_active = true
+			_skip_boot = true
+
 	_startup_boot_route_pending = true
 	_load_persisted_state()
 	_startup_boot_route_pending = false
 	_update_clock()
-	_begin_startup_boot_sequence()
+
+	if _skip_boot:
+		_boot_sequence_active = false
+		_hide_auth_screen()
+		_hide_boot_sequence()
+		_sync_shell_visibility()
+		print("[SceneBridge] Skipping boot — returning to desktop with restored windows")
+	else:
+		_begin_startup_boot_sequence("show_auth", "login")
 	if has_node("/root/HermesOSKernel"):
 		var kernel := get_node("/root/HermesOSKernel")
 		if kernel and kernel.has_method("register_shell"):
@@ -293,14 +314,13 @@ func _ready() -> void:
 
 	resized.connect(_layout)
 
-func _begin_startup_boot_sequence() -> void:
+func _begin_startup_boot_sequence(auth_mode: String = "show_auth", auth_route: String = "login") -> void:
 	if _boot_started_on_startup:
 		return
 	_boot_started_on_startup = true
 	# Startup policy: always route through login/auth after boot splash.
-	# Do not auto-enter desktop from persisted session state.
 	_session_active = false
-	_begin_boot_sequence("show_auth", "login")
+	_begin_boot_sequence(auth_mode, auth_route)
 
 func _should_skip_boot_splash() -> bool:
 	var value := OS.get_environment("HERMESOS_SKIP_BOOT").strip_edges().to_lower()
@@ -794,8 +814,20 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_hide_alt_tab(false)
 			get_viewport().set_input_as_handled()
 			return
-		_close_shell_overlays()
-		get_viewport().set_input_as_handled()
+		if _has_visible_overlay():
+			_close_shell_overlays()
+			get_viewport().set_input_as_handled()
+			return
+		# No overlays open — exit to 3D world (preserve session)
+		if has_node("/root/SceneBridge"):
+			var bridge = get_node("/root/SceneBridge")
+			var was_active: bool = _session_active
+			bridge.call("set_returning_from_os", was_active)
+			_save_persisted_state()  # Save state immediately before leaving
+			print("[SceneBridge] Esc pressed, session_active=%s, state saved" % was_active)
+			get_viewport().set_input_as_handled()
+			bridge.call("exit_to_world")
+			return
 	elif key_event.keycode == KEY_META or (key_event.ctrl_pressed and key_event.keycode == KEY_SPACE):
 		_toggle_launcher()
 		get_viewport().set_input_as_handled()
@@ -900,8 +932,77 @@ func export_state() -> Dictionary:
 			"accent_color": [_user_accent_color.r, _user_accent_color.g, _user_accent_color.b],
 			"files_shortcuts": _files_shortcuts.duplicate(true),
 			"snap_assist_enabled": _snap_assist_enabled
-		}
+		},
+		"windows": _export_window_state()
 	}
+
+func _export_window_state() -> Array:
+	var windows: Array = []
+	for app_id in _open_windows.keys():
+		var window: OSWindow = _open_windows[app_id]
+		if window == null or not is_instance_valid(window):
+			continue
+		_capture_app_instance_state(window)
+		var entry := {
+			"app_id": app_id,
+			"position": [window.position.x, window.position.y],
+			"size": [window.size.x, window.size.y],
+			"minimized": window.visible == false,
+		}
+		var instance_id := int(window.get_meta("app_instance_id", 0))
+		if instance_id > 0 and _app_instances.has(instance_id):
+			var instance: AppInstance = _app_instances[instance_id]
+			if instance != null:
+				entry["app_state"] = instance.export_state()
+		windows.append(entry)
+	return windows
+
+func _restore_window_state(windows: Array) -> void:
+	for entry in windows:
+		if not (entry is Dictionary):
+			continue
+		var app_id: String = str(entry.get("app_id", ""))
+		if app_id == "" or not _apps.has(app_id):
+			continue
+		var window := launch_app(app_id)
+		if window == null:
+			continue
+		var pos_arr = entry.get("position", [])
+		if pos_arr is Array and pos_arr.size() >= 2:
+			window.position = Vector2(float(pos_arr[0]), float(pos_arr[1]))
+		var size_arr = entry.get("size", [])
+		if size_arr is Array and size_arr.size() >= 2:
+			window.size = Vector2(float(size_arr[0]), float(size_arr[1]))
+		if bool(entry.get("minimized", false)):
+			window.visible = false
+		var saved_app_state = entry.get("app_state", {})
+		if saved_app_state is Dictionary and not saved_app_state.is_empty():
+			var instance_id := int(window.get_meta("app_instance_id", 0))
+			if instance_id > 0 and _app_instances.has(instance_id):
+				var instance: AppInstance = _app_instances[instance_id]
+				if instance != null and saved_app_state.has("state"):
+					instance.state = saved_app_state["state"].duplicate(true)
+					_reload_app_state_for_window(window)
+
+func _reload_app_state_for_window(window: OSWindow) -> void:
+	if window == null or not is_instance_valid(window):
+		return
+	var instance_id := int(window.get_meta("app_instance_id", 0))
+	if instance_id == 0 or not _app_instances.has(instance_id):
+		return
+	var instance: AppInstance = _app_instances[instance_id]
+	if instance == null:
+		return
+	_apply_app_state_to_node(window, instance.state)
+
+func _apply_app_state_to_node(root: Node, app_state: Dictionary) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	if root.has_method("os_app_set_state"):
+		root.call("os_app_set_state", app_state)
+		return
+	for child in root.get_children():
+		_apply_app_state_to_node(child, app_state)
 
 func import_state(state: Dictionary) -> String:
 	# Account/filesystem state is canonical in OSFileSystem.SAVE_PATH (user://hermes_os_files.json).
@@ -935,6 +1036,9 @@ func import_state(state: Dictionary) -> String:
 	_update_system_accent(_color_from_variant(session.get("accent_color", []), Tokens.ACCENT), false)
 	_files_shortcuts = _files_sanitize_shortcuts(session.get("files_shortcuts", []), _fs.home_path())
 	_close_all_windows()
+	var windows_state: Variant = state.get("windows", [])
+	if windows_state is Array:
+		_restore_window_state(windows_state)
 	_hide_desktop_context_menu()
 	if _launcher:
 		_launcher.visible = false
@@ -987,6 +1091,8 @@ func _register_apps() -> void:
 	_app_registry.register_app(SystemSettingsAppManifest.manifest(Callable(self, "_build_system_app")))
 	_app_registry.register_app(AccountCenterAppManifest.manifest(Callable(self, "_build_account_center_app")))
 	_app_registry.register_app(CommandPaletteAppManifest.manifest(Callable(self, "_build_command_palette_app")))
+	_app_registry.register_app(CalculatorAppManifest.manifest(Callable(self, "_build_calculator_app")))
+	_app_registry.register_app(MediaPlayerAppManifest.manifest(Callable(self, "_build_media_player_app")))
 	# TODO(redesign): remove these compatibility mirrors once launcher/taskbar/app lifecycle fully read from AppRegistry.
 	_apps = _app_registry.export_legacy_apps()
 	_app_order = _app_registry.get_app_order()
@@ -1502,6 +1608,7 @@ func _build_desktop_context_menu() -> void:
 
 	var new_file_button := _context_menu_button("New file")
 	new_file_button.pressed.connect(func() -> void:
+		_hide_desktop_context_menu()
 		_create_desktop_item(false)
 	)
 	column.add_child(new_file_button)
@@ -1509,6 +1616,7 @@ func _build_desktop_context_menu() -> void:
 
 	var new_folder_button := _context_menu_button("New folder")
 	new_folder_button.pressed.connect(func() -> void:
+		_hide_desktop_context_menu()
 		_create_desktop_item(true)
 	)
 	column.add_child(new_folder_button)
@@ -1535,6 +1643,7 @@ func _build_desktop_context_menu() -> void:
 
 	var wallpaper_button := _context_menu_button("Change wallpaper")
 	wallpaper_button.pressed.connect(func() -> void:
+		_hide_desktop_context_menu()
 		_cycle_wallpaper()
 	)
 	column.add_child(wallpaper_button)
@@ -2603,6 +2712,10 @@ func _power_action(action: String) -> void:
 		"shutdown":
 			logout_session()
 			notify({"title": "Power", "body": "System powered off (session closed)", "level": "warning", "app_id": "system"})
+			if has_node("/root/SceneBridge"):
+				var bridge = get_node("/root/SceneBridge")
+				bridge.call("set_returning_from_os", false)  # Shutdown = fresh boot next time
+				bridge.call("exit_to_world")
 		"reboot":
 			_close_all_windows()
 			_session_active = false
@@ -3439,6 +3552,19 @@ func _on_status_popover_action_pressed() -> void:
 	_apply_dock_tooltip_policy()
 	_apply_top_panel_tooltip_policy()
 
+func _has_visible_overlay() -> bool:
+	if _launcher and _launcher.visible:
+		return true
+	if _session_menu and _session_menu.visible:
+		return true
+	if _status_popover and _status_popover.visible:
+		return true
+	if _desktop_context_menu and _desktop_context_menu.visible:
+		return true
+	if _notification_history_panel and _notification_history_panel.visible:
+		return true
+	return false
+
 func _close_shell_overlays(except: String = "") -> void:
 	var keep := except.strip_edges().to_lower()
 	if keep != "desktop_context":
@@ -3997,6 +4123,18 @@ func _build_text_app() -> Control:
 	text_app.name = "TextEditorApp"
 	text_app.os_app_init({"shell": self, "filesystem": _fs})
 	return text_app
+
+func _build_calculator_app() -> Control:
+	var calc_app := CalculatorApp.new()
+	calc_app.name = "CalculatorApp"
+	calc_app.os_app_init({"shell": self, "filesystem": _fs})
+	return calc_app
+
+func _build_media_player_app() -> Control:
+	var media_app := MediaPlayerApp.new()
+	media_app.name = "MediaPlayerApp"
+	media_app.os_app_init({"shell": self, "filesystem": _fs})
+	return media_app
 
 func _text_editor_instance(window: OSWindow = null) -> TextEditorApp:
 	var target_window := window

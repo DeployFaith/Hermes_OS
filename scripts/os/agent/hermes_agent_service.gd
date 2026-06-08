@@ -148,6 +148,14 @@ func _send_message(message: String, options: Dictionary) -> Dictionary:
 		notify_error("Usage: hermes <prompt>", {"code": "MISSING_PROMPT"})
 		return {"ok": false, "terminal_result": "Usage: hermes <prompt>", "error": _last_error.duplicate(true)}
 
+	# Try local device command interception (before gateway)
+	var device_result := _try_local_device_command(prompt)
+	if device_result.get("handled", false):
+		var response_text: String = str(device_result.get("message", "Done."))
+		_last_response = {"ok": true, "terminal_result": response_text}
+		_busy = false
+		return {"ok": true, "terminal_result": response_text}
+
 	_last_context = _build_terminal_context(prompt, options)
 	_busy = true
 	_emit_status_changed()
@@ -183,6 +191,15 @@ func _send_message_stream(message: String, options: Dictionary) -> Dictionary:
 	if prompt == "":
 		notify_error("Usage: hermes <prompt>", {"code": "MISSING_PROMPT"})
 		return {"ok": false, "terminal_result": "Usage: hermes <prompt>", "error": _last_error.duplicate(true)}
+
+	# Try local device command interception (before gateway)
+	var device_result := _try_local_device_command(prompt)
+	if device_result.get("handled", false):
+		var response_text: String = str(device_result.get("message", "Done."))
+		_last_response = {"ok": true, "terminal_result": response_text}
+		_busy = false
+		_streaming_mode = false
+		return {"ok": true, "terminal_result": response_text}
 
 	_last_context = _build_terminal_context(prompt, options)
 	_busy = true
@@ -246,6 +263,19 @@ func _bridge_state() -> Dictionary:
 		"last_error": {},
 		"metrics": {}
 	}
+
+func _try_local_device_command(text: String) -> Dictionary:
+	if _shell == null or not is_instance_valid(_shell):
+		push_warning("[HomeDevice] _shell is null or invalid")
+		return {"handled": false}
+	var controller = _shell.get_node_or_null("/root/HomeDeviceController")
+	if controller == null:
+		push_warning("[HomeDevice] HomeDeviceController autoload NOT FOUND at /root/HomeDeviceController")
+		return {"handled": false}
+	if not controller.has_method("try_handle_chat_message"):
+		push_warning("[HomeDevice] Controller found but missing try_handle_chat_message method")
+		return {"handled": false}
+	return controller.call("try_handle_chat_message", text)
 
 func _home_path() -> String:
 	if _filesystem != null and _filesystem.has_method("home_path"):

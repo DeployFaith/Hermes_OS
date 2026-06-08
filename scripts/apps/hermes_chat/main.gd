@@ -1,6 +1,7 @@
 extends "res://scripts/ui/hermes_ui/runtime/hermes_app_controller.gd"
 
 const OSEventBus = preload("res://scripts/os/core/os_event_bus.gd")
+const CHAT_HISTORY_PATH := "user://hermes_chat_history.json"
 
 var ready_called: bool = false
 var input_events: Array[String] = []
@@ -45,6 +46,7 @@ func _app_ready() -> void:
 		var gui_input_cb := Callable(self, "_on_message_input_gui_input")
 		if not input_control.gui_input.is_connected(gui_input_cb):
 			input_control.gui_input.connect(gui_input_cb)
+	_load_chat_history()
 
 func _on_message_input_gui_input(event: InputEvent) -> void:
 	if not (event is InputEventKey):
@@ -109,6 +111,7 @@ func _append_message(role: String, text: String) -> void:
 	messages.append({"role": clean_role, "text": clean_text})
 	state.set("messages", messages)
 	state.set("has_messages", messages.size() > 0)
+	_save_chat_history()
 	_update_messages_text()
 
 func clear_history(event = null) -> void:
@@ -130,6 +133,7 @@ func clear_history(event = null) -> void:
 		"action_status_detail": "Message history and active streaming display were reset."
 	})
 	_set_gateway_state(_gateway_status_state())
+	_save_chat_history()
 
 func _set_last_assistant_message(text: String) -> bool:
 	if state == null:
@@ -154,6 +158,7 @@ func _set_last_assistant_message(text: String) -> bool:
 	messages[last_index] = last_message
 	state.set("messages", messages)
 	state.set("has_messages", messages.size() > 0)
+	_save_chat_history()
 	_update_messages_text()
 	return true
 
@@ -161,6 +166,52 @@ func _update_messages_text() -> void:
 	if state == null:
 		return
 	state.set("messages_text", _format_messages())
+
+func _save_chat_history() -> void:
+	if state == null:
+		return
+	var messages_value = state.get_value("messages", [])
+	if not (messages_value is Array) or messages_value.is_empty():
+		# No messages — remove file if it exists
+		if FileAccess.file_exists(CHAT_HISTORY_PATH):
+			DirAccess.remove_absolute(CHAT_HISTORY_PATH)
+		return
+	var save_data := {
+		"messages": messages_value,
+		"chat_history": _chat_history,
+	}
+	var file := FileAccess.open(CHAT_HISTORY_PATH, FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_string(JSON.stringify(save_data))
+	file.close()
+
+func _load_chat_history() -> void:
+	if state == null:
+		return
+	if not FileAccess.file_exists(CHAT_HISTORY_PATH):
+		return
+	var file := FileAccess.open(CHAT_HISTORY_PATH, FileAccess.READ)
+	if file == null:
+		return
+	var json_text := file.get_as_text()
+	file.close()
+	var json := JSON.new()
+	if json.parse(json_text) != OK:
+		return
+	var data = json.data
+	if not (data is Dictionary):
+		return
+	var messages = data.get("messages", [])
+	if messages is Array and not messages.is_empty():
+		state.set("messages", messages)
+		state.set("has_messages", true)
+		_update_messages_text()
+	var history = data.get("chat_history", [])
+	if history is Array:
+		_chat_history.clear()
+		for item in history:
+			_chat_history.append(str(item))
 
 func _format_messages() -> String:
 	if state == null:
@@ -192,6 +243,17 @@ func _refocus_input() -> void:
 	if ui != null:
 		ui.focus("message-input")
 
+func _try_local_device_command(text: String) -> Dictionary:
+	var controller = null
+	# root_control is a Control in the scene tree — use it to reach autoloads
+	if root_control != null and is_instance_valid(root_control):
+		controller = root_control.get_node_or_null("/root/HomeDeviceController")
+	if controller == null:
+		return {"handled": false}
+	if not controller.has_method("try_handle_chat_message"):
+		return {"handled": false}
+	return controller.call("try_handle_chat_message", text)
+
 func handle_input(event) -> void:
 	last_event = event
 	_history_cursor = -1
@@ -207,6 +269,33 @@ func send_message(event = null) -> void:
 		return
 	if state.get_bool("is_sending", false) or state.get_bool("is_streaming", false):
 		return
+
+	# Try local device command first (short-circuits gateway)
+	var device_result := _try_local_device_command(draft)
+	if device_result.get("handled", false):
+		_append_message("user", draft)
+		_chat_history.append(draft)
+		_history_cursor = -1
+		_append_message("assistant", str(device_result.get("message", "Done.")))
+		state.set_many({
+			"draft": "",
+			"is_sending": false,
+			"is_streaming": false,
+			"is_thinking": false,
+			"streaming_text": "",
+			"streaming_status": "",
+			"can_send": true,
+			"has_action_status": true,
+			"action_status": "Local command executed",
+			"action_status_detail": str(device_result.get("message", "Done."))
+		})
+		if ui != null:
+			ui.set_value("message-input", "")
+			ui.focus("message-input")
+		_update_messages_text()
+		_refocus_input()
+		return
+
 	send_invocations.append(draft)
 	_stream_handled = false
 	_append_message("user", draft)

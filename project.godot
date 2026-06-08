@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="HermesOS"
-run/main_scene="res://scenes/os/os_shell.tscn"
+run/main_scene="res://scenes/world_3d.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
@@ -19,6 +19,8 @@ config/icon="res://icon.svg"
 
 HermesOSKernel="*res://scripts/hermes/hermes_os_kernel.gd"
 McpInteractionServer="*res://scripts/hermes/mcp_interaction_server.gd"
+SceneBridge="*res://scripts/core/scene_bridge.gd"
+HomeDeviceController="*res://scripts/core/home_device_controller.gd"
 
 [display]
 
