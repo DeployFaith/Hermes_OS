@@ -6,14 +6,7 @@
 
 # Godot export credentials
 
-# Godot 4.1+ stores confidential export options here.
-
-# This is already covered by .godot/, but kept explicit for clarity.
-
 .godot/export_credentials.cfg
-
-# Legacy/defensive export credential ignore
-
 export_credentials.cfg
 
 # Build/export output
@@ -46,27 +39,16 @@ export_credentials.cfg
 *.env
 !*.env.example
 !*.example.env
-runtime/**/compose.env
-!runtime/**/compose.env.example
 
-# Hermes / local runtime state
-
-runtime/**/hermes-home/
-runtime/**/logs/
-runtime/**/sessions/
-runtime/**/audio_cache/
-runtime/**/image_cache/
-
-# Node runtime artifacts
+# Node artifacts
 
 node_modules/
-runtime/**/node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Python runtime artifacts, useful if bridge/gateway tooling uses Python
+# Python artifacts
 
 **pycache**/
 *.py[cod]
@@ -76,7 +58,7 @@ pnpm-debug.log*
 .venv/
 venv/
 
-# Rust/native build artifacts, useful if WRY/native bridge tooling is built locally
+# Rust/native build artifacts
 
 target/
 
@@ -105,19 +87,30 @@ desktop.ini
 .zed/
 .cursor/
 
-# Local AI/editor tool settings that may contain machine-specific paths or secrets
+# AI/editor tool settings
 
-.claude/settings.local.json
+.claude/
 
 # Nextcloud conflict artifacts
 
 *.sync-conflict-*
 *conflicted copy*
 
-# AI-generated plan docs and build reports
-/docs/plans/
-/.hermes/plans/
-/build_mode_report*.md
+# === Non-game directories (dev/infra only) ===
 
-# Temporary/dev test scripts
-/scripts/tmp_*
+/docs/
+/runtime/
+/scripts/tests/
+/scripts/dev/
+/.hermes/
+/third_party/
+
+# === Non-game files ===
+
+/AGENTS.md
+/hermes_os_spec.md
+/docker-compose*.yml
+/mcp_interaction_server.gd
+/mcp_interaction_server.gd.uid
+/build_mode_report*.md
+/README.md
