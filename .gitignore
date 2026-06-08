@@ -114,3 +114,6 @@ desktop.ini
 /mcp_interaction_server.gd.uid
 /build_mode_report*.md
 /README.md
+
+# Temporary/dev test scripts
+/scripts/tmp_*
