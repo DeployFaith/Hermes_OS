@@ -113,3 +113,6 @@ desktop.ini
 
 *.sync-conflict-*
 *conflicted copy*
+
+# AI-generated plan docs
+/docs/plans/
