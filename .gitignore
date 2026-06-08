@@ -114,5 +114,10 @@ desktop.ini
 *.sync-conflict-*
 *conflicted copy*
 
-# AI-generated plan docs
+# AI-generated plan docs and build reports
 /docs/plans/
+/.hermes/plans/
+/build_mode_report*.md
+
+# Temporary/dev test scripts
+/scripts/tmp_*
