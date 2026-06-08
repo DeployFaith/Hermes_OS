@@ -2,7 +2,7 @@
 
 An in-game operating system and interface platform built with Godot 4.6.3.
 
-HermesOS provides a fully interactive desktop environment — window manager, app launcher, taskbar, virtual filesystem, and a suite of built-in applications — all rendered inside a 3D world.
+HermesOS provides a fully interactive desktop environment — window manager, app launcher, taskbar, virtual filesystem, and a suite of built-in applications. Designed to run inside a 3D game world (see [Hermes_Live](https://github.com/DeployFaith/Hermes_Live)) or standalone.
 
 ## Features
 
@@ -25,12 +25,6 @@ HermesOS provides a fully interactive desktop environment — window manager, ap
 - **System Settings** — Appearance, accounts, and system configuration
 - **Command Palette** — Quick-action overlay (Ctrl+K)
 
-**3D World**
-- First-person room and hallway environment
-- Interactive devices (lights, monitor) with 15 color presets
-- Desktop monitor rendered as an in-world surface
-- Player movement, interaction system, and door mechanics
-
 **WorldWeb (In-Game Internet)**
 - Pythia — search engine
 - Agora Market — marketplace
@@ -43,9 +37,9 @@ HermesOS provides a fully interactive desktop environment — window manager, ap
 - Theme system with dark/light mode support
 
 **Hermes Agent Integration**
-- Natural language chat controls devices (lights, colors, status)
 - Agent can launch apps, manage files, and query system state
 - Gateway bridge for external AI model connections
+- Device control (lights, colors) when integrated with a 3D world
 
 ## Requirements
 
@@ -58,16 +52,12 @@ HermesOS provides a fully interactive desktop environment — window manager, ap
 3. Let Godot import assets on first load
 4. Press **F5** to run
 
-The default main scene is `res://scenes/world_3d.tscn` (3D world with desktop).  
-For desktop-only mode, change the main scene to `res://scenes/os/os_shell.tscn`.
+The default main scene is `res://scenes/os/os_shell.tscn` (desktop shell).
 
 ## Controls
 
 | Action | Key |
 |--------|-----|
-| Move | WASD |
-| Look | Mouse |
-| Interact | E |
 | Open Terminal | Ctrl+T |
 | Command Palette | Ctrl+K |
 | Alt-Tab | Alt+Tab |
@@ -75,18 +65,30 @@ For desktop-only mode, change the main scene to `res://scenes/os/os_shell.tscn`.
 ## Project Structure
 
 ```
-scenes/              Game scenes (3D world, OS shell, rooms)
+scenes/
+  os/                OS shell scene
+  ui/                UI showcase
 scripts/
   apps/              Built-in applications
   ui/hermes_ui/      HermesUI declarative framework
   os/                Shell, window manager, agent service
-  world_3d/          3D world controllers and builders
-  core/              Device controller, scene bridge
   hermes/            Agent integration, kernel, bridge client
-assets/              Audio, icons, wallpapers, avatars
+assets/              Icons, wallpapers, avatars, video
 addons/godot_wry/    WRY WebView plugin (pre-built)
 content/hermes_internet/  WorldWeb sites and content
 ```
+
+## 3D World Integration
+
+HermesOS is designed to run inside a 3D game world. The 3D environment (rooms, player, devices) lives in a separate project:
+
+**[Hermes_Live](https://github.com/DeployFaith/Hermes_Live)** — 3D interactive world for HermesOS
+
+When integrated, HermesOS connects to the 3D world via autoloads:
+- `SceneBridge` — manages transitions between 3D world and OS
+- `HomeDeviceController` — controls in-game devices (lights, etc.)
+
+These autoloads are provided by Hermes_Live. HermesOS gracefully degrades without them — it just won't have device control or scene transitions.
 
 ## License
 

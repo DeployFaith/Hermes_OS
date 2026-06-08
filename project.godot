@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="HermesOS"
-run/main_scene="res://scenes/world_3d.tscn"
+run/main_scene="res://scenes/os/os_shell.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
@@ -19,8 +19,6 @@ config/icon="res://icon.svg"
 
 HermesOSKernel="*res://scripts/hermes/hermes_os_kernel.gd"
 McpInteractionServer="*res://scripts/hermes/mcp_interaction_server.gd"
-SceneBridge="*res://scripts/core/scene_bridge.gd"
-HomeDeviceController="*res://scripts/core/home_device_controller.gd"
 
 [display]
 
@@ -31,10 +29,6 @@ window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 window/size/min_width=800
 window/size/min_height=450
-
-[physics]
-
-3d/physics_engine="Jolt Physics"
 
 [rendering]
 
